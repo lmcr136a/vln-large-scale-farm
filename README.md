@@ -56,7 +56,7 @@ vln-large-scale-farm/
 ### 1. Clone Repository
 ```bash
 cd ~
-git clone <repository-url> vln-large-scale-farm
+git clone https://github.com/lmcr136a/vln-large-scale-farm.git
 cd vln-large-scale-farm
 ```
 
