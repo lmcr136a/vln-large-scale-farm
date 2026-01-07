@@ -104,17 +104,6 @@ cd ~/vln-large-scale-farm
 ./scripts/start_all.sh
 ```
 
-**Tmux Controls:**
-- `Ctrl+b` then `0-4`: Switch between windows
-  - Window 0: Livox Driver
-  - Window 1: Cartographer
-  - Window 2: Janus
-  - Window 3: Map Saver
-  - Window 4: Control Server
-- `Ctrl+b` then `d`: Detach from session (keeps running in background)
-- `tmux attach -t navi_system`: Re-attach to session
-- `Ctrl+b` then `&`: Kill current window
-
 ### Manual Launch (Individual Services)
 
 #### Terminal 1: Livox Driver
@@ -172,91 +161,11 @@ Edit `cartographer_ws/config/livox_3d.lua` to tune SLAM performance:
 - `num_accumulated_range_data`: Number of scans to accumulate
 - `voxel_filter_size`: Point cloud downsampling resolution
 
-### Janus Streaming Settings
-
-Edit `/opt/janus/etc/janus/janus.plugin.streaming.jcfg`:
-```
-obsbot: {
-  type = "rtp"
-  id = 1
-  videoport = 8004
-  videopt = 100
-  videocodec = "h264"
-}
-```
-
-## Troubleshooting
-
-### LiDAR Not Connecting
-```bash
-# Check network interface
-ifconfig
-
-# Test LiDAR connectivity
-ping 192.168.1.1XX
-
-# Verify ROS2 topics
-ros2 topic list | grep livox
-```
-
-### Cartographer Not Building Map
-```bash
-# Check transform tree
-ros2 run tf2_tools view_frames
-
-# Monitor point cloud data
-ros2 topic echo /livox/lidar --no-arr
-```
-
-### Janus Streaming Issues
-```bash
-# Check Janus logs
-journalctl -u janus -f
-
-# Verify streaming config
-cat /opt/janus/etc/janus/janus.plugin.streaming.jcfg
-```
-
 ## Output Files
 
 - `cartographer_ws/output/map_latest.png`: Latest occupancy grid visualization
 - `cartographer_ws/output/map_latest.yaml`: Map metadata (resolution, origin, robot pose)
 - `cartographer_ws/output/figures/building_N.png`: Map snapshots over time
-
-## Development
-
-### Adding New Launch Files
-
-Place custom launch files in `cartographer_ws/launch/` and update scripts accordingly.
-
-### Modifying Map Saver
-
-Edit `cartographer_ws/scripts/save_map.py` to customize visualization (colors, trajectory length, save interval).
-
-### Extending Control Server
-
-Edit `janus_streaming/control_server.py` and `autonomous_driving.py` for custom navigation behaviors.
-
-## System Requirements
-
-- **RAM**: 8GB minimum (16GB recommended)
-- **Storage**: 20GB free space
-- **Network**: Gigabit Ethernet for LiDAR connection
-- **GPU**: CUDA-capable GPU for Jetson platform
-
-## Known Issues
-
-- LiDAR coordinate frame may need calibration for accurate pose estimation
-- High-speed motion can cause SLAM drift - tune Cartographer parameters
-- WebRTC streaming requires low-latency network (< 50ms RTT recommended)
-
-## License
-
-[Add your license here]
-
-## Contributors
-
-Evelyn Nahyeon - UCLA MAE Department
 
 ## References
 
