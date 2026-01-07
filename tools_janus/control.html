@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Control + Streaming</title>
+
+  <script src="./socket.io.min.js"></script>
+  <script src="./adapter.min.js"></script>
+  <script src="janus.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background: black;
+      color: white;
+      overflow: hidden;
+    }
+    #container {
+      display: flex;
+      width: 100vw;
+      height: 100vh;
+    }
+    #video-section {
+      width: 50%;
+      height: 100%;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: black;
+    }
+    #video-wrapper {
+      position: relative;
+      max-width: 100%;
+      max-height: 100%;
+      display: inline-block;
+    }
+    #map-section {
+      width: 50%;
+      height: 100%;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    video {
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      background: black;
+    }
+    #robot-status {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.7);
+      padding: 0.5rem 1rem;
+      font-size: 1.5rem;
+      border-radius: 5px;
+      color: white;
+      display: none;
+      z-index: 5;
+    }
+    #map-container {
+      position: relative;
+      max-width: 100%;
+      max-height: 100%;
+    }
+    #map-image {
+      max-width: 100%;
+      max-height: 100%;
+      cursor: crosshair;
+      background: #1a1a1a;
+      display: block;
+    }
+    #map-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+    }
+    #controls {
+      position: fixed;
+      bottom: 10px;
+      left: 0;
+      width: 100%;
+      text-align: center;
+      font-size: 1.2rem;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 0.5rem 0;
+      color: white;
+      z-index: 10;
+    }
+    #sysmon {
+      position: fixed;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.6);
+      padding: 0.4rem 1rem;
+      font-size: 1rem;
+      border-radius: 5px;
+      z-index: 10;
+    }
+    #recording-control {
+      position: fixed;
+      top: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      text-align: center;
+    }
+    #path-mode-control {
+      position: fixed;
+      top: 110px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      text-align: center;
+    }
+    #auto-mode-control {
+      position: fixed;
+      top: 160px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      text-align: center;
+      display: none;
+    }
+    button {
+      padding: 0.4rem 0.8rem;
+      font-size: 1rem;
+      background-color: rgba(50, 50, 50, 0.8);
+      color: white;
+      border: 1px solid white;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: rgba(80, 80, 80, 0.8);
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .mode-indicator {
+      display: inline-block;
+      padding: 0.3rem 0.6rem;
+      margin-left: 10px;
+      font-size: 0.9rem;
+      border-radius: 3px;
+      background-color: rgba(100, 100, 100, 0.6);
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div id="video-section">
+      <div id="video-wrapper">
+        <video id="remotevideo" autoplay playsinline muted></video>
+        <div id="robot-status"></div>
+      </div>
+    </div>
+    <div id="map-section">
+      <div id="map-container">
+        <img id="map-image" src="" alt="Map loading...">
+        <canvas id="map-canvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div id="sysmon">
+    Loading system info...
+  </div>
+
+  <div id="recording-control">
+    <input id="dirnameInput" type="text" placeholder="directory name" 
+      style="padding: 0.4rem; font-size: 1rem; width: 200px; background-color: rgba(0, 0, 0, 0.5); color: white; border: 1px solid white; border-radius: 5px;" />
+    <button onclick="startRecording()" style="margin-left: 5px;">Start</button>
+    <button onclick="stopRecording()" style="margin-left: 5px;">Stop</button>
+    <span id="recordingStatus" style="margin-left: 10px; font-size: 1.2rem;">🔴</span>
+  </div>
+
+  <div id="path-mode-control">
+    <button onclick="togglePathMode()">Stop Creating Map & Start Path Mode</button>
+    <span id="modeIndicator" class="mode-indicator">Mode: MAP</span>
+  </div>
+
+  <div id="auto-mode-control">
+    <button id="autoButton" onclick="toggleAutoMode()" style="background-color: rgba(0, 150, 0, 0.8);">Start Autonomous Driving</button>
+    <span id="autoIndicator" class="mode-indicator" style="background-color: rgba(0, 100, 0, 0.6);">AUTO: OFF</span>
+  </div>
+
+  <div id="controls">
+    <b>W/A/S/D</b>: PTZ pan/tilt &nbsp; | &nbsp;
+    <b>Z/X</b>: Zoom out/in &nbsp; | &nbsp;
+    <b>↑↓←→</b>: Move Scout &nbsp; | &nbsp;
+    <b>&lt; / &gt;</b>: Linear speed -/+ &nbsp; | &nbsp;
+    <b>[ / ]</b>: Angular speed -/+ &nbsp;
+  </div>
+
+  <script>
+    const host = window.location.hostname;
+    const socket = io(`http://${host}:5000`);
+    const keyState = {};
+    let frameInterval = null;
+    let currentMapInfo = null;
+    let isPathMode = false;
+    let isAutoMode = false;
+    let pathNodes = [];
+
+    setInterval(() => {
+        socket.emit('heartbeat');
+    }, 500);
+
+    window.addEventListener('blur', () => {
+        for (const key in keyState) {
+            if (keyState[key]) {
+                keyState[key] = false;
+                socket.emit('keyup', key);
+            }
+        }
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (document.activeElement.tagName === "INPUT") return;
+      if (isAutoMode) return;
+
+      const key = e.key;
+      if (!keyState[key]) {
+        keyState[key] = true;
+        socket.emit("keydown", key);
+      }
+    });
+
+    window.addEventListener("keyup", (e) => {
+      if (document.activeElement.tagName === "INPUT") return;
+      if (isAutoMode) return;
+
+      const key = e.key;
+      if (keyState[key]) {
+        keyState[key] = false;
+        socket.emit("keyup", key);
+      }
+    });
+
+    let janus = null;
+    let streaming = null;
+    Janus.init({
+      debug: false,
+      callback: function () {
+        janus = new Janus({
+          server: `http://${host}:8088/janus`,
+
+          success: function () {
+            janus.attach({
+              plugin: "janus.plugin.streaming",
+              success: function (pluginHandle) {
+                streaming = pluginHandle;
+
+                const body = { request: "watch", id: 1 };
+                streaming.send({ message: body });
+              },
+              onmessage: function (msg, jsep) {
+                if (jsep !== undefined && jsep !== null) {
+                  streaming.createAnswer({
+                    jsep: jsep,
+                    tracks: [
+                      { type: "video", recv: true, add: true }
+                    ],
+                    success: function (jsep) {
+                      const body = { request: "start" };
+                      streaming.send({ message: body, jsep: jsep });
+                    },
+                    error: function (error) {
+                      console.error("❌ WebRTC createAnswer error", error);
+                    }
+                  });
+                }
+              },
+              onremotetrack: function (track, mid, on) {
+                if (track.kind === "video" && on) {
+                  const stream = new MediaStream([track]);
+                  const video = document.getElementById("remotevideo");
+                  Janus.attachMediaStream(video, stream);
+                  video.play();
+                }
+              },
+              error: function (error) {
+                console.error("❌ Plugin attach error:", error);
+              }
+            });
+          },
+          error: function (error) {
+            console.error("❌ Janus init error:", error);
+          }
+        });
+      }
+    });
+
+    const sysmonDiv = document.getElementById("sysmon");
+
+    socket.on("sysmon", (data) => {
+      if (!data || typeof data !== "object") {
+        sysmonDiv.textContent = "⚠️ System info unavailable";
+        return;
+      }
+      
+      const cpu = data.cpu;
+      const mem = data.mem;
+      const used = data.used_gb;
+      const total = data.total_gb;
+      const usedTB = (used / 1024).toFixed(1);
+      const totalTB = (total / 1024).toFixed(1);
+      const pct = data.used_pct;
+      const linear_mps = data.linear_mps;
+      const linear_mph = data.linear_mph;
+      const wifi = data.wifi || "Unknown";
+
+      if (
+        typeof cpu !== "number" ||
+        typeof mem !== "number" ||
+        typeof used !== "number" ||
+        typeof total !== "number" ||
+        typeof pct !== "number"
+      ) {
+        sysmonDiv.textContent = "⚠️ Invalid system data";
+        return;
+      }
+
+      sysmonDiv.textContent =
+        `📶 Wi-Fi: ${wifi} | 🖥 CPU: ${cpu.toFixed(1)}% | 🗄 SSD: ${usedTB} / ${totalTB} TB | 🚗 Speed: ${linear_mps.toFixed(1)} m/s`;
+    });
+
+    socket.on('map_update', (data) => {
+      currentMapInfo = data.info;
+    });
+
+    socket.on('auto_mode_completed', () => {
+      if (isAutoMode) {
+        toggleAutoMode();
+      }
+    });
+
+    socket.on('robot_status', (data) => {
+      const statusDiv = document.getElementById('robot-status');
+      if (data.status) {
+        statusDiv.textContent = data.status;
+        statusDiv.style.display = 'block';
+      } else {
+        statusDiv.style.display = 'none';
+      }
+    });
+
+    socket.on('waypoint_reached', (data) => {
+      const index = data.index;
+      if (index >= 0 && index < pathNodes.length) {
+        pathNodes[index].reached = true;
+        drawPathNodes();
+      }
+    });
+function togglePathMode() {
+  isPathMode = !isPathMode;
+  const indicator = document.getElementById('modeIndicator');
+  const button = event.target;
+  const autoControl = document.getElementById('auto-mode-control');
+  
+  if (isPathMode) {
+    indicator.textContent = 'Mode: PATH';
+    indicator.style.backgroundColor = 'rgba(0, 200, 200, 0.6)';
+    button.textContent = 'Stop Path Mode & Resume Mapping';
+    autoControl.style.display = 'block';
+    pathNodes = [];
+    
+    // currentMapInfo가 있는지 확인
+    if (!currentMapInfo) {
+      console.warn('⚠️ Map info not available yet');
+      return;
+    }
+    
+    // 로봇 위치 확인
+    if (currentMapInfo.robot_x === undefined || currentMapInfo.robot_y === undefined) {
+      console.warn('⚠️ Robot position not available');
+      return;
+    }
+    
+    const robotX = currentMapInfo.robot_x;
+    const robotY = currentMapInfo.robot_y;
+    
+    const imgX = Math.round((robotX - currentMapInfo.origin_x) / currentMapInfo.resolution);
+    const imgY = Math.round((robotY - currentMapInfo.origin_y) / currentMapInfo.resolution);
+    
+    const img = document.getElementById('map-image');
+    const scaleX = img.clientWidth / currentMapInfo.width;
+    const scaleY = img.clientHeight / currentMapInfo.height;
+    
+    const displayX = imgX * scaleX;
+    const displayY = imgY * scaleY;
+    
+    pathNodes.push({
+      imgX: imgX,
+      imgY: imgY,
+      worldX: robotX,
+      worldY: robotY,
+      displayX: displayX,
+      displayY: displayY,
+      reached: false
+    });
+    
+    console.log('Initial robot position added:', pathNodes[0]);
+    
+    // Canvas 업데이트 후 그리기
+    setTimeout(() => {
+      drawPathNodes();
+    }, 50);
+    
+  } else {
+    indicator.textContent = 'Mode: MAP';
+    indicator.style.backgroundColor = 'rgba(100, 100, 100, 0.6)';
+    button.textContent = 'Stop Creating Map & Start Path Mode';
+    autoControl.style.display = 'none';
+    pathNodes = [];
+    drawPathNodes();
+  }
+}
+    function toggleAutoMode() {
+      if (!isPathMode) {
+        alert('⚠️ Please enter Path Mode first');
+        return;
+      }
+      
+      if (pathNodes.length < 2) {
+        alert('⚠️ Please create at least 2 waypoints');
+        return;
+      }
+
+      isAutoMode = !isAutoMode;
+      const indicator = document.getElementById('autoIndicator');
+      const button = document.getElementById('autoButton');
+      
+      if (isAutoMode) {
+        indicator.textContent = 'AUTO: ON';
+        indicator.style.backgroundColor = 'rgba(0, 255, 0, 0.8)';
+        button.textContent = 'Stop Autonomous Driving';
+        button.style.backgroundColor = 'rgba(200, 0, 0, 0.8)';
+        
+        const waypoints = pathNodes.map(node => ({
+          x: node.worldX,
+          y: node.worldY
+        }));
+        
+        socket.emit('start_autonomous', {
+          robot_x: currentMapInfo.robot_x,
+          robot_y: currentMapInfo.robot_y,
+          robot_yaw: currentMapInfo.robot_yaw,
+          waypoints: waypoints
+        });
+      } else {
+        indicator.textContent = 'AUTO: OFF';
+        indicator.style.backgroundColor = 'rgba(0, 100, 0, 0.6)';
+        button.textContent = 'Start Autonomous Driving';
+        button.style.backgroundColor = 'rgba(0, 150, 0, 0.8)';
+        
+        socket.emit('stop_autonomous');
+      }
+    }
+function drawPathNodes() {
+  const canvas = document.getElementById('map-canvas');
+  const img = document.getElementById('map-image');
+  
+  // 이미지가 로드되지 않았으면 대기
+  if (img.clientWidth === 0 || img.clientHeight === 0) {
+    console.warn('⚠️ Map image not loaded yet');
+    return;
+  }
+  
+  canvas.width = img.clientWidth;
+  canvas.height = img.clientHeight;
+  
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  if (pathNodes.length === 0) return;
+  
+  console.log(`Drawing ${pathNodes.length} nodes`);
+  
+  // 라인 그리기
+  if (pathNodes.length > 1) {
+    ctx.strokeStyle = 'rgb(0, 155, 155)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    
+    for (let i = 0; i < pathNodes.length; i++) {
+      const node = pathNodes[i];
+      if (i === 0) {
+        ctx.moveTo(node.displayX, node.displayY);
+      } else {
+        ctx.lineTo(node.displayX, node.displayY);
+      }
+    }
+    
+    if (pathNodes.length > 2) {
+      ctx.lineTo(pathNodes[0].displayX, pathNodes[0].displayY);
+    }
+    
+    ctx.stroke();
+  }
+  
+  // 포인트 그리기
+  for (let i = 0; i < pathNodes.length; i++) {
+    const node = pathNodes[i];
+    ctx.beginPath();
+    if (node.reached) {
+      ctx.fillStyle = 'rgb(255, 255, 0)';
+    } else if (i === 0) {
+      ctx.fillStyle = 'rgb(255, 0, 255)';  // 첫 포인트는 보라색
+    } else {
+      ctx.fillStyle = 'rgb(0, 255, 255)';
+    }
+    ctx.arc(node.displayX, node.displayY, 8, 0, 2 * Math.PI);  // 크기 증가
+    ctx.fill();
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+    document.getElementById('map-image').addEventListener('click', (e) => {
+      if (!currentMapInfo) {
+        return;
+      }
+
+      if (isAutoMode) {
+        return;
+      }
+
+      const img = e.target;
+      const rect = img.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+
+      const scaleX = currentMapInfo.width / img.clientWidth;
+      const scaleY = currentMapInfo.height / img.clientHeight;
+
+      const imgX = Math.round(clickX * scaleX);
+      const imgY = Math.round(clickY * scaleY);
+
+      const worldX = currentMapInfo.origin_x + imgX * currentMapInfo.resolution;
+      const worldY = currentMapInfo.origin_y + imgY * currentMapInfo.resolution;
+      
+      if (isPathMode) {
+        pathNodes.push({
+          imgX: imgX,
+          imgY: imgY,
+          worldX: worldX,
+          worldY: worldY,
+          displayX: clickX,
+          displayY: clickY,
+          reached: false
+        });
+        drawPathNodes();
+      }
+      
+      socket.emit('map_clicked', {
+        img_x: imgX,
+        img_y: imgY,
+        world_x: worldX,
+        world_y: worldY
+      });
+    });
+
+    function captureCurrentFrame() {
+      const video = document.getElementById("remotevideo");
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      
+      canvas.toBlob(function(blob) {
+        socket.emit('save_frame', blob);
+      }, 'image/png');
+    }
+
+    function startRecording() {
+      const dirname = document.getElementById("dirnameInput").value.trim();
+      if (!dirname) {
+        alert("⚠️ Please enter the dir name to save.");
+        return;
+      }
+      
+      setTimeout(() => {
+        socket.emit("start_recording", dirname);
+        document.getElementById("recordingStatus").textContent = "🟢";
+      }, 100);
+    }
+
+    function stopRecording() {
+      if (frameInterval) {
+        clearInterval(frameInterval);
+        frameInterval = null;
+      }
+      socket.emit("stop_recording");
+      document.getElementById("recordingStatus").textContent = "🔴";
+    }
+
+    setInterval(() => {
+      const mapImg = document.getElementById('map-image');
+      mapImg.src = `http://${host}:5000/map_latest?t=${Date.now()}`;
+    }, 1000);
+
+    document.getElementById('map-image').addEventListener('load', () => {
+      if (isPathMode && pathNodes.length > 0) {
+        drawPathNodes();
+      }
+    });
+
+  </script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+# ROS2 build artifacts
+cartographer_ws/build/
+cartographer_ws/install/
+cartographer_ws/log/
+
+# Scout control build artifacts
+tools_scout_control/ros2_ws/build/
+tools_scout_control/ros2_ws/install/
+tools_scout_control/ros2_ws/log/
+
+# Output files
+cartographer_ws/output/
+*.png
+*.yaml
+*.svo
+*.bag
+*.db3
+
+# Compiled binaries
+janus
+*.so
+*.a
+*.o
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data directories
+data/
+lidar_log/
+
+# Backup files
+*.bak
+*.backup
+
+# Temporary build files
+/tmp/
+tools_scout_control/36.4.3/
