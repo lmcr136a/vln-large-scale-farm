@@ -85,12 +85,14 @@ This script will:
 - Build Cartographer ROS2 packages
 - Install Python dependencies (numpy, Pillow, PyYAML, tf2-ros)
 
-### 4. Build Scout Control (Optional)
+### 4. Build Scout Control
 ```bash
 cd scout_control
 chmod +x install_scout_ros2.sh
 ./install_scout_ros2.sh
 ```
+
+If you use Anaconda/Miniconda, **deactivate conda before building**
 
 ## Usage
 
