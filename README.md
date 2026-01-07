@@ -1,6 +1,6 @@
 # Agricultural Robot Navigation System
 
-ROS2-based autonomous navigation system for agricultural robots using Livox LiDAR, Cartographer SLAM, and real-time video streaming via Janus WebRTC.
+ROS2-based autonomous navigation system for Scout robots.
 
 ## System Overview
 
@@ -15,7 +15,6 @@ This system integrates:
 - Ubuntu 22.04 (Jetson or x86_64)
 - ROS2 Humble
 - Python 3.10+
-- CUDA (for Jetson platform)
 
 ## Repository Structure
 ```
