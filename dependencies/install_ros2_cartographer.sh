@@ -20,11 +20,12 @@ sudo apt install -y \
     ros-humble-cartographer-ros \
     ros-humble-nav2-map-server \
     ros-humble-tf2-tools \
-    python3-colcon-common-extensions
-
-echo -e "${GREEN}Installing Python dependencies...${RESET}"
-python3 -m pip install --upgrade pip
-python3 -m pip install numpy pillow pyyaml
+    python3-colcon-common-extensions \
+    python3-catkin-pkg \
+    python3-pip \
+    python3-numpy \
+    python3-pil \
+    python3-yaml
 
 cd /tmp
 if [ ! -d "Livox-SDK2" ]; then
@@ -42,6 +43,10 @@ cd "$WORKSPACE_DIR"
 
 echo -e "${GREEN}Building ROS2 workspace...${RESET}"
 source /opt/ros/humble/setup.bash
+
+export PATH="/usr/bin:$PATH"
+export PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH"
+
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 mkdir -p "$WORKSPACE_DIR/output/figures"

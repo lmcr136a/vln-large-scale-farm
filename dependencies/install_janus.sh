@@ -112,8 +112,7 @@ if [ ! -f adapter.min.js ]; then
 fi
 
 echo -e "${GREEN}Installing janus binary to /usr/local/bin...${RESET}"
-cd /tmp/janus-gateway
-sudo cp janus /usr/local/bin/janus
+sudo cp /opt/janus/bin/janus /usr/local/bin/janus
 sudo chmod +x /usr/local/bin/janus
 
 echo -e "${GREEN}==== Janus installation completed! ====${RESET}"
