@@ -87,7 +87,7 @@ This script will:
 
 ### 4. Build Scout Control
 ```bash
-cd scout_control
+cd tools_scout_control
 chmod +x install_scout_ros2.sh
 ./install_scout_ros2.sh
 ```
