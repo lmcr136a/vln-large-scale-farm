@@ -7,7 +7,7 @@ ROS2-based autonomous navigation system for Scout robots.
 This system integrates:
 - **Livox MID-360 LiDAR** for 3D mapping and localization
 - **Cartographer SLAM** for real-time occupancy mapping
-- **Janus Gateway** for low-latency WebRTC video streaming
+- **ROS2 Image Topics** for live camera streaming
 - **Scout Robot Platform** for autonomous navigation
 
 ## Prerequisites
@@ -15,14 +15,13 @@ This system integrates:
 - Ubuntu 22.04 (Jetson or x86_64)
 - ROS2 Humble
 - Python 3.10+
+- NumPy < 2.0 (for cv_bridge compatibility)
 
 ## Repository Structure
 ```
 vln-large-scale-farm/
 ├── README.md                          # This file
-├── dependencies/                      # Installation scripts
-│   ├── install_janus.sh              # Janus WebRTC gateway setup
-│   └── install_ros2_cartographer.sh  # ROS2 workspace setup
+├── install.sh                         # Main installation script
 ├── cartographer_ws/                   # ROS2 Cartographer workspace
 │   ├── src/
 │   │   └── livox_ros_driver2/        # Livox LiDAR driver
@@ -32,23 +31,26 @@ vln-large-scale-farm/
 │   │   └── livox_3d.lua              # Cartographer configuration
 │   ├── scripts/
 │   │   └── save_map.py               # Map visualization & saving
+│   ├── install_ros2_cartographer.sh  # Cartographer setup
 │   └── output/                        # Generated maps (gitignored)
 │       └── figures/
-├── janus_streaming/                   # WebRTC streaming server
-│   ├── control.html                   # Web control interface
-│   ├── control_server.py              # Flask control server
-│   └── autonomous_driving.py          # Navigation logic
-├── scout_control/                     # Scout robot ROS2 control
-│   ├── install_scout_ros2.sh
-│   └── ros2_ws/
+├── tools_control_panel/               # Web-based control interface
+│   ├── control.html                   # Web control UI
+│   ├── control_server.py              # Flask server with ROS2 integration
+│   ├── autonomous_driving.py          # Navigation logic
+│   └── run_control_panel.sh           # Launch script
+├── tools_scout_control/               # Scout robot ROS2 control
+│   ├── install_scout_ros2.sh         # Scout driver installation
+│   ├── jetson-gs_usb-kernel-builder.sh
+│   └── ros2_ws/                       # Scout ROS2 workspace
+├── tools_zed/                         # ZED camera utilities
+│   └── data_svo_sync.py              # Data recording tools
 ├── scripts/                           # System execution scripts
 │   ├── start_livox_driver.sh
 │   ├── start_cartographer.sh
-│   ├── start_janus.sh
 │   ├── start_map_saver.sh
-│   ├── start_control_server.sh
 │   └── start_all.sh                   # Launch all services via tmux
-└── 3_zed-data-tools/                  # ZED camera utilities
+└── data/                              # Recorded data (gitignored)
 ```
 
 ## Installation
@@ -59,22 +61,18 @@ git clone https://github.com/lmcr136a/vln-large-scale-farm.git
 cd vln-large-scale-farm
 ```
 
-### 2. Install Janus Gateway
+### 2. Install System Dependencies
 ```bash
-cd dependencies
-chmod +x install_janus.sh
-./install_janus.sh
-```
+# Install NumPy 1.x (required for cv_bridge)
+pip3 install "numpy<2"
 
-This script will:
-- Install all system dependencies
-- Build libnice and Janus from source
-- Configure streaming plugin for OBSBot camera
-- Install Python dependencies (Flask, Flask-SocketIO)
+# Install other Python dependencies
+pip3 install flask flask_socketio opencv-python psutil pyyaml
+```
 
 ### 3. Build ROS2 Cartographer Workspace
 ```bash
-cd dependencies
+cd cartographer_ws
 chmod +x install_ros2_cartographer.sh
 ./install_ros2_cartographer.sh
 ```
@@ -83,26 +81,33 @@ This script will:
 - Install ROS2 Humble dependencies
 - Build Livox SDK2 and ROS2 driver
 - Build Cartographer ROS2 packages
-- Install Python dependencies (numpy, Pillow, PyYAML, tf2-ros)
+- Install Python dependencies (numpy<2, Pillow, PyYAML, tf2-ros)
 
 ### 4. Build Scout Control
 ```bash
-cd scout_control
+cd tools_scout_control
 chmod +x install_scout_ros2.sh
 ./install_scout_ros2.sh
 ```
 
-If you use Anaconda/Miniconda, **deactivate conda before building**
+**Note:** If you use Anaconda/Miniconda, deactivate conda before building.
 
 ## Usage
 
-### Quick Start (All Services)
+### Quick Start - Control Panel
 
-Launch all services in a single tmux session:
+Launch the web-based control interface:
 ```bash
-cd ~/vln-large-scale-farm
-./scripts/start_all.sh
+cd ~/vln-large-scale-farm/tools_control_panel
+./run_control_panel.sh
 ```
+
+This will start:
+- Scout robot control node
+- Flask control server with ROS2 integration
+- HTTP server for web interface
+
+Access the control panel at: `http://<robot-ip>:8000/control.html`
 
 ### Manual Launch (Individual Services)
 
@@ -116,26 +121,36 @@ cd ~/vln-large-scale-farm
 ./scripts/start_cartographer.sh
 ```
 
-#### Terminal 3: Janus WebRTC Server
-```bash
-./scripts/start_janus.sh
-```
-
-#### Terminal 4: Map Saver
+#### Terminal 3: Map Saver
 ```bash
 ./scripts/start_map_saver.sh
 ```
 
-#### Terminal 5: Control Server (Optional)
-```bash
-./scripts/start_control_server.sh
-```
-
 ### Accessing the System
 
-1. **WebRTC Video Stream**: Open browser to `http://<robot-ip>:8088/control.html`
-2. **Control Interface**: Flask server runs on `http://<robot-ip>:5000`
-3. **Generated Maps**: Check `cartographer_ws/output/map_latest.png`
+1. **Web Control Interface**: `http://<robot-ip>:8000/control.html`
+   - Live camera stream from ROS2 `/rgb` topic
+   - Real-time map visualization
+   - Manual robot control (arrow keys)
+   - Autonomous navigation with waypoint planning
+
+2. **Control Server API**: `http://<robot-ip>:5000`
+   - WebSocket for real-time communication
+   - Map updates and system monitoring
+
+3. **Generated Maps**: `cartographer_ws/output/map_latest.png`
+
+## Web Control Interface Features
+
+- **Live Video Stream**: Real-time RGB camera feed from ROS2 topics
+- **Interactive Map**: Click to set waypoints for autonomous navigation
+- **Manual Control**:
+  - Arrow keys: Move robot
+  - W/A/S/D: PTZ camera control
+  - Z/X: Zoom control
+  - </> and []: Speed adjustments
+- **Autonomous Mode**: Create navigation paths and execute autonomous driving
+- **System Monitoring**: CPU, memory, disk usage, WiFi status
 
 ## Configuration
 
@@ -161,14 +176,44 @@ Edit `cartographer_ws/config/livox_3d.lua` to tune SLAM performance:
 - `num_accumulated_range_data`: Number of scans to accumulate
 - `voxel_filter_size`: Point cloud downsampling resolution
 
+### Camera Topic Configuration
+
+Edit `tools_control_panel/control_server.py` to change the RGB topic:
+```python
+rgb_sub = node.create_subscription(Image, '/rgb', rgb_callback, 10)
+```
+
 ## Output Files
 
 - `cartographer_ws/output/map_latest.png`: Latest occupancy grid visualization
 - `cartographer_ws/output/map_latest.yaml`: Map metadata (resolution, origin, robot pose)
 - `cartographer_ws/output/figures/building_N.png`: Map snapshots over time
+- `data/`: Recorded sensor data (ZED camera, LiDAR)
+
+## Troubleshooting
+
+### NumPy Version Error
+If you see `AttributeError: _ARRAY_API not found`, downgrade NumPy:
+```bash
+pip3 install "numpy<2"
+```
+
+### Camera Stream Not Showing
+Check if the `/rgb` topic is publishing:
+```bash
+ros2 topic list | grep -i rgb
+ros2 topic echo /rgb --once
+```
+
+### Control Panel Not Starting
+Verify all dependencies are installed:
+```bash
+pip3 list | grep -E "flask|opencv|psutil"
+```
 
 ## References
 
 - [Livox SDK2](https://github.com/Livox-SDK/Livox-SDK2)
 - [Cartographer ROS2](https://github.com/ros2/cartographer_ros)
-- [Janus Gateway](https://github.com/meetecho/janus-gateway)
+- [Scout Mobile Robot](https://github.com/agilexrobotics/scout_ros2)
+- [Flask-SocketIO](https://flask-socketio.readthedocs.io/)

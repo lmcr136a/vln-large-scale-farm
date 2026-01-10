@@ -1,33 +1,36 @@
-# ROS2 build artifacts
-cartographer_ws/build/
-cartographer_ws/install/
-cartographer_ws/log/
-
-# Scout control build artifacts
-tools_scout_control/ros2_ws/build/
-tools_scout_control/ros2_ws/install/
-tools_scout_control/ros2_ws/log/
-
-# Output files
-cartographer_ws/output/
-*.png
-*.yaml
-*.svo
-*.bag
-*.db3
-
-# Compiled binaries
-janus
-*.so
-*.a
-*.o
+# ROS2 Build artifacts
+build/
+install/
+log/
+*.egg-info/
 
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-.pytest_cache/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg
+
+# Data and outputs
+data/
+output/
+*.bag
+*.db3
+*.svo
+*.png
+*.pgm
+*.yaml
+
+# Kernel modules and binaries
+*.ko
+*.o
+*.mod
+*.mod.c
+*.symvers
+*.order
 
 # IDE
 .vscode/
@@ -36,14 +39,27 @@ __pycache__/
 *.swo
 *~
 
-# Data directories
-data/
-lidar_log/
+# OS
+.DS_Store
+Thumbs.db
 
-# Backup files
+# Logs
+*.log
+
+# Temporary files
+*.tmp
 *.bak
-*.backup
+*.orig
 
-# Temporary build files
-/tmp/
+# ZED SDK
+*.svo
+
+# Cartographer outputs
+cartographer_ws/output/
+cartographer_ws/config/install/
+cartographer_ws/config/log/
+cartographer_ws/config/build/
+
+# Specific files
+tools_scout_control/gs_usb.ko
 tools_scout_control/36.4.3/

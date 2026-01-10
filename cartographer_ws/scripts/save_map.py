@@ -40,11 +40,14 @@ class MapSaver(Node):
         self.prev_map_info = None
         
     def get_robot_pose_from_tf(self):
-        transform = self.tf_buffer.lookup_transform(
-            'map',
-            'livox_frame',
-            rclpy.time.Time())
-        
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                'map',
+                'base_link',
+                rclpy.time.Time())
+        except:
+            return None
+            
         x = transform.transform.translation.x
         y = transform.transform.translation.y
         
@@ -91,7 +94,8 @@ class MapSaver(Node):
         im = Image.fromarray(img).convert('RGB')
         draw = ImageDraw.Draw(im)
         
-        small_font = ImageFont.load_default()
+        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+    
         
         grid_spacing_world = 5.0
         grid_spacing_cells = int(grid_spacing_world / resolution)

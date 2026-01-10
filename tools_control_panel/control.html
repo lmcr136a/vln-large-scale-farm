@@ -162,7 +162,7 @@
   <div id="container">
     <div id="video-section">
       <div id="video-wrapper">
-        <video id="remotevideo" autoplay playsinline muted></video>
+        <img id="rgb-image" style="display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; background: black;" />
         <div id="robot-status"></div>
       </div>
     </div>
@@ -249,58 +249,9 @@
       }
     });
 
-    let janus = null;
-    let streaming = null;
-    Janus.init({
-      debug: false,
-      callback: function () {
-        janus = new Janus({
-          server: `http://${host}:8088/janus`,
-
-          success: function () {
-            janus.attach({
-              plugin: "janus.plugin.streaming",
-              success: function (pluginHandle) {
-                streaming = pluginHandle;
-
-                const body = { request: "watch", id: 1 };
-                streaming.send({ message: body });
-              },
-              onmessage: function (msg, jsep) {
-                if (jsep !== undefined && jsep !== null) {
-                  streaming.createAnswer({
-                    jsep: jsep,
-                    tracks: [
-                      { type: "video", recv: true, add: true }
-                    ],
-                    success: function (jsep) {
-                      const body = { request: "start" };
-                      streaming.send({ message: body, jsep: jsep });
-                    },
-                    error: function (error) {
-                      console.error("❌ WebRTC createAnswer error", error);
-                    }
-                  });
-                }
-              },
-              onremotetrack: function (track, mid, on) {
-                if (track.kind === "video" && on) {
-                  const stream = new MediaStream([track]);
-                  const video = document.getElementById("remotevideo");
-                  Janus.attachMediaStream(video, stream);
-                  video.play();
-                }
-              },
-              error: function (error) {
-                console.error("❌ Plugin attach error:", error);
-              }
-            });
-          },
-          error: function (error) {
-            console.error("❌ Janus init error:", error);
-          }
-        });
-      }
+    socket.on('rgb_frame', (data) => {
+      const img = document.getElementById('rgb-image');
+      img.src = 'data:image/jpeg;base64,' + data.image;
     });
 
     const sysmonDiv = document.getElementById("sysmon");

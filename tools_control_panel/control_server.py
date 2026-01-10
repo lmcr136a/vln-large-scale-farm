@@ -2,12 +2,14 @@ import os
 import sys
 import time
 import threading
+import numpy as np
 from flask import Flask, send_file
 from flask_socketio import SocketIO
 
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from sensor_msgs.msg import Image
 
 import psutil
 import shutil
@@ -28,8 +30,35 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
 rclpy.init()
+latest_rgb_image = None
 node = rclpy.create_node('web_control_node')
 pub = node.create_publisher(Twist, '/cmd_vel', 10)
+
+def rgb_callback(msg):
+    global latest_rgb_image
+    try:
+        print("🎥 RGB callback triggered!")
+        height = msg.height
+        width = msg.width
+        channels = 3
+        
+        img_array = np.frombuffer(msg.data, dtype=np.uint8).reshape(height, width, channels)
+        
+        if msg.encoding == 'rgb8':
+            img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        
+        _, buffer = cv2.imencode('.jpg', img_array, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        latest_rgb_image = base64.b64encode(buffer).decode('utf-8')
+        
+        print(f"✅ Image encoded: {len(latest_rgb_image)} bytes")
+    except Exception as e:
+        print(f"❌ RGB callback error: {e}")
+        import traceback
+        traceback.print_exc()
+
+rgb_sub = node.create_subscription(Image, '/rgb', rgb_callback, 10)
+print("\n\n\n\n\n\n RRRRRRRRRR")
+
 
 app = Flask(__name__)
 socketio = SocketIO(
@@ -107,7 +136,7 @@ def update_ptz():
 
 @app.route('/map_latest')
 def serve_map():
-    map_path = os.path.expanduser('~/navi/cartographer/map_latest.png')
+    map_path = os.path.expanduser('~/box/vln-large-scale-farm/cartographer_ws/output/map_latest.png')
     if os.path.exists(map_path):
         return send_file(map_path, mimetype='image/png')
     else:
@@ -189,7 +218,7 @@ def autonomous_control_loop(robot_x, robot_y, robot_yaw, waypoints):
     print(f"Waypoints: {waypoints}")
     
     def get_robot_pose():
-        map_yaml = os.path.expanduser('~/navi/cartographer/map_latest.yaml')
+        map_yaml = os.path.expanduser('~/box/vln-large-scale-farm/cartographer_ws/output/map_latest.yaml')
         if os.path.exists(map_yaml):
             with open(map_yaml, 'r') as f:
                 yaml_data = yaml.safe_load(f)
@@ -361,8 +390,8 @@ def get_wifi_name():
         return "Unavailable"
 
 def send_map_update():
-    map_png = os.path.expanduser('~/navi/cartographer/map_latest.png')  # ✅ 추가
-    map_yaml = os.path.expanduser('~/navi/cartographer/map_latest.yaml')
+    map_png = os.path.expanduser('~/box/vln-large-scale-farm/cartographer_ws/output/map_latest.png')  
+    map_yaml = os.path.expanduser('~/box/vln-large-scale-farm/cartographer_ws/output/map_latest.yaml')
     
     if not os.path.exists(map_png):
         return
@@ -410,7 +439,7 @@ def send_map_update():
 def system_monitor():
     map_update_counter = 0
     while True:
-        data_dir = os.path.expanduser("~/navi/AgriChrono/data")
+        data_dir = os.path.expanduser("~/box/vln-large-scale-farm/data")
         os.makedirs(data_dir, exist_ok=True)
         total, used, free = shutil.disk_usage(data_dir)
         cpu = psutil.cpu_percent(interval=None)
@@ -428,6 +457,9 @@ def system_monitor():
             'wifi': wifi,
         })
         
+        if latest_rgb_image:
+            socketio.emit('rgb_frame', {'image': latest_rgb_image})
+
         map_update_counter += 1
         if map_update_counter >= 5:
             send_map_update()
@@ -462,7 +494,7 @@ def do_start_recording(filename):
     global record_process, current_frame_data, recording_active, recording_rgbd_path
     
     print(f"📥 Start recording: {filename}")
-    base_path = os.path.expanduser(f"~/navi/AgriChrono/data/fargo/{filename}")
+    base_path = os.path.expanduser(f"~/box/vln-large-scale-farm/data/{filename}")
     timestamp_dir = datetime.now().strftime("%Y%m%d_%H%M")
     full_path = os.path.join(base_path, timestamp_dir)
     rgbd_path = os.path.join(full_path, "RGB-D")
@@ -486,14 +518,14 @@ def do_start_recording(filename):
         f.write(str(sync_time))
     print(f"[SYNC] sync_time.txt written: {sync_time}")
 
-    zed_cmd = f"python3 ~/navi/AgriChrono/3_zed-data-tools/data_svo_sync.py --output '{rgbd_path}' --sync_time {sync_time}"
-    config_path = os.path.expanduser("~/navi/AgriChrono/4_livox-data-tools/config/mid360_config.json")
-    livox_cmd = f"~/navi/AgriChrono/4_livox-data-tools/Livox-SDK2/record_lidar_sync/build/recorder_sync '{config_path}' '{lidar_path}'"
+    zed_cmd = f"python3 ~/box/vln-large-scale-farm/tools_zed/data_svo_sync.py --output '{rgbd_path}' --sync_time {sync_time}"
+    config_path = os.path.expanduser("~/box/vln-large-scale-farm/cartographer_ws/src/livox_ros_driver2/config/mid360_config.json")
+    # livox_cmd = f"cartographer_ws/src/livox_ros_driver2/~!/Livox-SDK2/record_lidar_sync/build/recorder_sync '{config_path}' '{lidar_path}'"
 
     zed_process = Popen(["bash", "-c", zed_cmd], stdout=PIPE, stderr=PIPE)
-    livox_process = Popen(["bash", "-c", livox_cmd], stdout=PIPE, stderr=PIPE)
+    # livox_process = Popen(["bash", "-c", livox_cmd], stdout=PIPE, stderr=PIPE)
 
-    record_process = (zed_process, livox_process)
+    # record_process = (zed_process, livox_process)
 
 
 @socketio.on('start_recording')
@@ -504,7 +536,7 @@ def handle_start_recording(filename):
         return
 
     print(f"📥 Start recording: {filename}")
-    base_path = os.path.expanduser(f"~/navi/AgriChrono/data/fargo/{filename}")
+    base_path = os.path.expanduser(f"~/box/vln-large-scale-farm/data/{filename}")
     timestamp_dir = datetime.now().strftime("%Y%m%d_%H%M")
     full_path = os.path.join(base_path, timestamp_dir)
     rgbd_path = os.path.join(full_path, "RGB-D")
@@ -517,20 +549,20 @@ def handle_start_recording(filename):
     with open(os.path.join(full_path, "sync_time.txt"), "w") as f:
         f.write(str(sync_time))
 
-    zed_cmd = f"python3 ~/navi/AgriChrono/3_zed-data-tools/data_svo_sync.py --output '{rgbd_path}' --sync_time {sync_time}"
-    config_path = os.path.expanduser("~/navi/AgriChrono/4_livox-data-tools/config/mid360_config.json")
-    livox_cmd = f"~/navi/AgriChrono/4_livox-data-tools/Livox-SDK2/record_lidar_sync/build/recorder_sync '{config_path}' '{lidar_path}'"
+    zed_cmd = f"python3 ~/box/vln-large-scale-farm/tools_zed/data_svo_sync.py --output '{rgbd_path}' --sync_time {sync_time}"
+    config_path = os.path.expanduser("~/box/vln-large-scale-farm/cartographer_ws/src/livox_ros_driver2/config/mid360_config.json")
+    # livox_cmd = f"cartographer_ws/src/livox_ros_driver2/~!/Livox-SDK2/record_lidar_sync/build/recorder_sync '{config_path}' '{lidar_path}'"
+
     zed_process = Popen(["bash", "-c", zed_cmd], stdout=PIPE, stderr=PIPE)
-    print(f"[DEBUG] ZED process started, PID: {zed_process.pid}")
-    livox_process = Popen(["bash", "-c", livox_cmd], stdout=PIPE, stderr=PIPE)
-    
+    # livox_process = Popen(["bash", "-c", livox_cmd], stdout=PIPE, stderr=PIPE)
+
     time.sleep(2)
     if zed_process.poll() is not None:
         stdout, stderr = zed_process.communicate()
         print(f"[ERROR] ZED process died!")
         print(f"[STDERR] {stderr.decode('utf-8', errors='replace')}")
 
-    record_process = (zed_process, livox_process)
+    # record_process = (zed_process, livox_process)
 
 @socketio.on('stop_recording')
 def handle_stop_recording():
@@ -561,6 +593,6 @@ threading.Thread(target=ros_spin, daemon=True).start()
 threading.Thread(target=update_loop, daemon=True).start()
 
 if __name__ == '__main__':
-    os.makedirs(os.path.expanduser("~/navi/AgriChrono/data"), exist_ok=True)
+    os.makedirs(os.path.expanduser("~/box/vln-large-scale-farm/data"), exist_ok=True)
     print("✅ WebSocket control server running on port 5000...")
     socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True, use_reloader=False)

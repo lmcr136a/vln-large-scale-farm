@@ -46,7 +46,7 @@ echo -e "${GREEN}Installing libasio-dev...${RESET}"
 sudo apt install -y libasio-dev
 
 # 6. Use existing workspace from AgriChrono path
-WORKSPACE=~/navi/AgriChrono/2_scout-ros2-control/ros2_ws
+WORKSPACE=~/box/vln-large-scale-farm/tools_scout_control/ros2_ws
 echo -e "${GREEN}Using existing workspace at $WORKSPACE ...${RESET}"
 
 # 7. Build workspace
@@ -56,20 +56,20 @@ source /opt/ros/humble/setup.bash
 colcon build
 
 # 8. Add workspace sourcing to bashrc
-if grep -q "source ~/navi/AgriChrono/2_scout-ros2-control/ros2_ws/install/setup.bash" ~/.bashrc; then
+if grep -q "source ~/box/vln-large-scale-farm/tools_scout_control/ros2_ws/install/setup.bash" ~/.bashrc; then
     echo -e "${YELLOW}Workspace sourcing already in .bashrc. Skipping.${RESET}"
 else
     echo -e "${GREEN}Adding workspace sourcing to .bashrc...${RESET}"
-    echo "source ~/navi/AgriChrono/2_scout-ros2-control/ros2_ws/install/setup.bash" >> ~/.bashrc
+    echo "source ~/box/vln-large-scale-farm/tools_scout_control/ros2_ws/install/setup.bash" >> ~/.bashrc
 fi
 
 # Immediately source it
 echo -e "${GREEN}Sourcing workspace for current shell...${RESET}"
-source ~/navi/AgriChrono/2_scout-ros2-control/ros2_ws/install/setup.bash
+source ~/box/vln-large-scale-farm/tools_scout_control/ros2_ws/install/setup.bash
 
 # 9. Install gs_usb kernel module using jetson-gs_usb-kernel-builder
 echo -e "${GREEN}Installing gs_usb kernel module for current kernel...${RESET}"
-cd ~/navi/AgriChrono/2_scout-ros2-control/
+cd ~/box/vln-large-scale-farm/tools_scout_control
 # Check if jetson-gs_usb-kernel-builder.sh exists
 if [ ! -f "jetson-gs_usb-kernel-builder.sh" ]; then
     echo -e "${GREEN}Downloading jetson-gs_usb-kernel-builder.sh ...${RESET}"
