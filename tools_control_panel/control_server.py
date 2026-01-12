@@ -37,7 +37,6 @@ pub = node.create_publisher(Twist, '/cmd_vel', 10)
 def rgb_callback(msg):
     global latest_rgb_image
     try:
-        print("🎥 RGB callback triggered!")
         height = msg.height
         width = msg.width
         channels = 3
@@ -50,7 +49,6 @@ def rgb_callback(msg):
         _, buffer = cv2.imencode('.jpg', img_array, [cv2.IMWRITE_JPEG_QUALITY, 80])
         latest_rgb_image = base64.b64encode(buffer).decode('utf-8')
         
-        print(f"✅ Image encoded: {len(latest_rgb_image)} bytes")
     except Exception as e:
         print(f"❌ RGB callback error: {e}")
         import traceback

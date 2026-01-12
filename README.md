@@ -190,26 +190,6 @@ rgb_sub = node.create_subscription(Image, '/rgb', rgb_callback, 10)
 - `cartographer_ws/output/figures/building_N.png`: Map snapshots over time
 - `data/`: Recorded sensor data (ZED camera, LiDAR)
 
-## Troubleshooting
-
-### NumPy Version Error
-If you see `AttributeError: _ARRAY_API not found`, downgrade NumPy:
-```bash
-pip3 install "numpy<2"
-```
-
-### Camera Stream Not Showing
-Check if the `/rgb` topic is publishing:
-```bash
-ros2 topic list | grep -i rgb
-ros2 topic echo /rgb --once
-```
-
-### Control Panel Not Starting
-Verify all dependencies are installed:
-```bash
-pip3 list | grep -E "flask|opencv|psutil"
-```
 
 ## References
 
