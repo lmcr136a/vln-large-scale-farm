@@ -96,6 +96,7 @@ class MapSaver(Node):
         data = np.array(msg.data, dtype=np.int8).reshape((height, width))
         
         img = np.zeros((height, width), dtype=np.uint8)
+        img2 = np.zeros((height, width), dtype=np.uint8)
         
         unknown_mask = (data == -1)
         free_mask = (data >= 0) & (data < 50)
@@ -105,10 +106,17 @@ class MapSaver(Node):
         img[free_mask] = 255 - (data[free_mask] * 5.1).astype(np.uint8)
         img[occupied_mask] = (255 - (data[occupied_mask] * 2.55)).astype(np.uint8)
         
+        img2[unknown_mask] = 128
+        img2[free_mask] = 255 
+        img2[occupied_mask] = 0
+        
         img = np.flipud(img)
+        img2 = np.flipud(img2)
         
         im = Image.fromarray(img, mode='L')
-        im = im.filter(ImageFilter.GaussianBlur(radius=0.5))
+        im2 = Image.fromarray(img2, mode='L')
+        im2.save(str(self.figures_dir / f'occup2_{self.save_count}.png'))
+        # im = im.filter(ImageFilter.GaussianBlur(radius=0.5))
         
         im = im.convert('RGB')
         draw = ImageDraw.Draw(im, 'RGBA')
@@ -191,9 +199,9 @@ class MapSaver(Node):
                               fill=(0, 0, 0, 180))
                 draw.text((15, 15), info_text, fill=ROBOT_INFO_TEXT_COL, font=small_font)
         
-        self.save_count += 1
-        im.save(str(self.figures_dir / f'building_{self.save_count}.png'))
+        im.save(str(self.figures_dir / f'occup1_{self.save_count}.png'))
         im.save(str(self.output_dir / 'map_latest.png'))
+        self.save_count += 1
         
         map_yaml = {
             'image': 'map_latest.png',
