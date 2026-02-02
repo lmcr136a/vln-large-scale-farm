@@ -6,7 +6,6 @@ options = {
   trajectory_builder = TRAJECTORY_BUILDER,
   map_frame = "map",
   
-  -- 🔴 실제 로봇: livox_frame 필수!
   tracking_frame = "livox_frame",
   published_frame = "livox_frame",
   

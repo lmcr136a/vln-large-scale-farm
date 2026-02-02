@@ -201,7 +201,7 @@ class MapSaver(Node):
         im.save(str(self.output_dir / 'map_latest.png'), optimize=False, quality=95)
         
         # Save lightweight version for figures (compressed)
-        im_small = im.resize((width // 2, height // 2), Image.Resampling.LANCZOS)
+        im_small = im.resize((int(round(width // 2)), int(round(height // 2))))
         im_small.save(
             str(self.figures_dir / f'map_{self.save_count:04d}.png'),
             optimize=True,

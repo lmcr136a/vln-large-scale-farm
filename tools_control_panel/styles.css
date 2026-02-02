@@ -1,0 +1,165 @@
+body {
+  margin: 0;
+  font-family: sans-serif;
+  background: black;
+  color: white;
+  overflow: hidden;
+}
+
+#container {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+}
+
+#video-section {
+  width: 50%;
+  height: 100%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: black;
+}
+
+#video-wrapper {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  display: inline-block;
+}
+
+#map-section {
+  width: 50%;
+  height: 100%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+video {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  background: black;
+}
+
+#robot-status {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.7);
+  padding: 0.5rem 1rem;
+  font-size: 1.5rem;
+  border-radius: 5px;
+  color: white;
+  display: none;
+  z-index: 5;
+}
+
+#map-container {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+#map-image {
+  max-width: 100%;
+  max-height: 100%;
+  cursor: crosshair;
+  background: #1a1a1a;
+  display: block;
+}
+
+#map-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+#controls {
+  position: fixed;
+  bottom: 10px;
+  left: 0;
+  width: 100%;
+  text-align: center;
+  font-size: 1.2rem;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 0.5rem 0;
+  color: white;
+  z-index: 10;
+}
+
+#sysmon {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.6);
+  padding: 0.4rem 1rem;
+  font-size: 1rem;
+  border-radius: 5px;
+  z-index: 10;
+}
+
+#recording-control {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  text-align: center;
+}
+
+#path-mode-control {
+  position: fixed;
+  top: 110px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  text-align: center;
+}
+
+#auto-mode-control {
+  position: fixed;
+  top: 160px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  text-align: center;
+  display: none;
+}
+
+button {
+  padding: 0.4rem 0.8rem;
+  font-size: 1rem;
+  background-color: rgba(50, 50, 50, 0.8);
+  color: white;
+  border: 1px solid white;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: rgba(80, 80, 80, 0.8);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mode-indicator {
+  display: inline-block;
+  padding: 0.3rem 0.6rem;
+  margin-left: 10px;
+  font-size: 0.9rem;
+  border-radius: 3px;
+  background-color: rgba(100, 100, 100, 0.6);
+}
