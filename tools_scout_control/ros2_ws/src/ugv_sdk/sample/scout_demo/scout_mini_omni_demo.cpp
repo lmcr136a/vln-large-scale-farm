@@ -25,7 +25,7 @@ int main(int argc, char **argv) {
     std::cout << "Selected interface " << device_name << std::endl;
   } else {
     std::cout << "Usage: demo_scout_mini_omni_robot <interface>" << std::endl
-              << "Example 1: ./demo_scout_mini_omni_robot can0" << std::endl;
+              << "Example 1: ./demo_scout_mini_omni_robot can2" << std::endl;
     return -1;
   }
 

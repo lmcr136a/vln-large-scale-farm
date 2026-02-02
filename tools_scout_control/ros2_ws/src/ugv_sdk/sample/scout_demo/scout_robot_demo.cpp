@@ -33,7 +33,7 @@ int main(int argc, char **argv) {
   } else {
     std::cout << "Usage: demo_scout_robot [<robot-subtype>] <interface>"
               << std::endl
-              << "Example 1: ./demo_scout_robot can0" << std::endl
+              << "Example 1: ./demo_scout_robot can2" << std::endl
               << "\t <robot-subtype>: mini" << std::endl;
     return -1;
   }

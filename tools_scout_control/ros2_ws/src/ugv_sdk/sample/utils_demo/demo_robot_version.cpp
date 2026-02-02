@@ -25,7 +25,7 @@ int main(int argc, char **argv) {
               << std::endl;
   } else {
     std::cout << "Usage: " << argv[0] << " <interface>" << std::endl
-              << "Example 1: ./demo_robot_version can0" << std::endl;
+              << "Example 1: ./demo_robot_version can2" << std::endl;
     return -1;
   }
 

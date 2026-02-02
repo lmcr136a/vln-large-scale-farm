@@ -30,7 +30,7 @@ class AsyncCAN : public std::enable_shared_from_this<AsyncCAN> {
   using ReceiveCallback = std::function<void(can_frame *rx_frame)>;
 
  public:
-  AsyncCAN(std::string can_port = "can0");
+  AsyncCAN(std::string can_port = "can2");
   ~AsyncCAN();
 
   // do not allow copy

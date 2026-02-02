@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
   } else {
     std::cout << "Usage: app_bunker_demo <protocol-version> <interface>"
               << std::endl
-              << "Example 1: ./app_bunker_demo v1 can0" << std::endl;
+              << "Example 1: ./app_bunker_demo v1 can2" << std::endl;
     return -1;
   }
 

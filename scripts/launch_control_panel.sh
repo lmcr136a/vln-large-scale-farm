@@ -25,8 +25,8 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 echo "🚗 Setting up CAN interface..."
-sudo ip link set can0 down 2>/dev/null
-sudo ip link set can0 up type can bitrate 500000
+sudo ip link set can2 down 2>/dev/null
+sudo ip link set can2 up type can bitrate 500000
 
 echo "🦾 Launching Scout Base Node..."
 source /opt/ros/humble/setup.bash

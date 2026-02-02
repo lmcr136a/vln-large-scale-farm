@@ -40,7 +40,7 @@ int main(int argc, char *argv[]) {
   } else {
     std::cout << "Usage: app_ranger_demo <interface> <ranger_model>"
               << std::endl
-              << "Example 1: ./app_ranger_demo can0 <mini_v1, mini_v2, mini_v3>"
+              << "Example 1: ./app_ranger_demo can2 <mini_v1, mini_v2, mini_v3>"
               << std::endl;
     return -1;
   }
