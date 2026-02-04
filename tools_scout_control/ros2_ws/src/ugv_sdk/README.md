@@ -70,7 +70,7 @@ $ catkin_make
     ```
 2. Bringup can device
    ```
-   $ sudo ip link set can2 up type can bitrate 500000
+   $ sudo ip link set can0 up type can bitrate 500000
    ```
 3. If no error occured during the previous steps, you should be able to see the can device now by using command
    ```
@@ -82,14 +82,14 @@ $ catkin_make
     ```
 5. Testing command
     ```
-    # receiving data from can2
-    $ candump can2
-    # send data to can2
-    $ cansend can2 001#1122334455667788
+    # receiving data from can0
+    $ candump can0
+    # send data to can0
+    $ cansend can0 001#1122334455667788
     ```
 
-Two scripts inside the "./scripts" folder are provided for easy setup. You can run "./setup_can2usb.bash" for the
-first-time setup and run "./bringup_can2usb.bash" to bring up the device each time you unplug and re-plug the adapter.
+Two scripts inside the "./scripts" folder are provided for easy setup. You can run "./setup_can0usb.bash" for the
+first-time setup and run "./bringup_can0usb.bash" to bring up the device each time you unplug and re-plug the adapter.
 
 ## Log CAN Data
 
@@ -97,10 +97,10 @@ In the case that you get an issue with the robot base, you can log the CAN data 
 so, run
 
 ```bash
-$ candump -l can2
+$ candump -l can0
 ```
 
-If you're using a different CAN interface, replace "can2" with the name of your interface.
+If you're using a different CAN interface, replace "can0" with the name of your interface.
 
 The log file can be replayed using the following command
 
@@ -113,7 +113,7 @@ $ canplayer -I <candump-log-file-name>.log
 You can find sample code for each robot in "sample" folder. For example, you can run the demo for Scout robot
 
 ```
-$ ./bin/demo_scout_robot can2
+$ ./bin/demo_scout_robot can0
 ```
 
 **Important note:**

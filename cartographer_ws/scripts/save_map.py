@@ -197,18 +197,25 @@ class MapSaver(Node):
                 draw.rectangle([(10, 10), (10 + text_width + 10, 10 + text_height + 10)], fill=(0, 0, 0))
                 draw.text((15, 15), info_text, fill=YELLOW)
         
-        # Save high-quality map for latest
-        im.save(str(self.output_dir / 'map_latest.png'), optimize=False, quality=95)
+        
+        if im.size[0] > 0 and im.size[1] > 0:
+            im.save(str(self.output_dir / 'map_latest.png'), optimize=False, quality=95)
+        else:
+            print(f"Warning: Invalid map size {im.size}, skipping save")
         
         # Save lightweight version for figures (compressed)
         im_small = im.resize((int(round(width // 2)), int(round(height // 2))))
-        im_small.save(
-            str(self.figures_dir / f'map_{self.save_count:04d}.png'),
-            optimize=True,
-            quality=60
-        )
-        self.save_count += 1
-        
+        try:
+            im_small.save(
+                str(self.figures_dir / f'map_{self.save_count:04d}.png'),
+                optimize=True,
+                quality=60
+            )
+            self.save_count += 1
+        except:
+            print("Map save failed")
+            
+                
         # Save metadata
         map_yaml = {
             'image': 'map_latest.png',

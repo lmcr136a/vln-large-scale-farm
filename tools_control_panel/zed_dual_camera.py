@@ -133,7 +133,7 @@ class ZEDCameraRecorder(threading.Thread):
                         rgb_path = os.path.join(self.rgb_dir, f"{timestamp:016d}.png")
                         depth_path = os.path.join(self.depth_dir, f"{timestamp:016d}.npy")
                         
-                        cv2.imwrite(rgb_path, cv2.cvtColor(rgb_np, cv2.COLOR_RGBA2BGR))
+                        cv2.imwrite(rgb_path, cv2.cvtColor(rgb_np, cv2.COLOR_RGBA2RGB))
                         np.save(depth_path, depth_np)
                         
                         frame_count += 1

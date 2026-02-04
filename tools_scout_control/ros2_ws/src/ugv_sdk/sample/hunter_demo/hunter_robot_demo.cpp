@@ -25,7 +25,7 @@ int main(int argc, char **argv) {
     std::cout << "Selected interface " << device_name << std::endl;
   } else {
     std::cout << "Usage: app_hunter_demo <interface>" << std::endl
-              << "Example 1: ./app_hunter_demo can2" << std::endl;
+              << "Example 1: ./app_hunter_demo can0" << std::endl;
     return -1;
   }
 

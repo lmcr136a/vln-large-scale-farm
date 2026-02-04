@@ -55,7 +55,7 @@ class ServerToPanel:
             return
         
         map_info = {
-            'resolution': self.config['map']['default_resolution'],
+            'resolution': 0.05,
             'origin_x': 0.0,
             'origin_y': 0.0,
             'robot_x': 0.0,

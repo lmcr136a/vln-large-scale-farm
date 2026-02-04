@@ -25,8 +25,8 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 echo "🚗 Setting up CAN interface..."
-sudo ip link set can2 down 2>/dev/null
-sudo ip link set can2 up type can bitrate 500000
+sudo ip link set can0 down 2>/dev/null
+sudo ip link set can0 up type can bitrate 500000
 
 echo "🦾 Launching Scout Base Node..."
 source /opt/ros/humble/setup.bash
@@ -41,11 +41,11 @@ cd "$TOOLS_DIR"
 python3 -u control_server.py &
 CTRL_PID=$!
 
-sleep 2
+# sleep 2
 
-echo "🌐 Starting HTTP server..."
-python3 -m http.server 8000 &
-HTTP_PID=$!
+# echo "🌐 Starting HTTP server..."
+# python3 -m http.server 8000 &
+# HTTP_PID=$!
 
 sleep 1
 

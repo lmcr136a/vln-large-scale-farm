@@ -112,9 +112,26 @@ class ControlServer:
         self.shutdown_flag.set()
         self.cleanup()
         sys.exit(0)
-    
+        
+        
     def register_routes(self):
         """Register Flask routes"""
+        
+        # Add these new routes at the beginning:
+        @self.app.route('/')
+        @self.app.route('/control.html')
+        def serve_control():
+            return send_file('control.html')
+        
+        @self.app.route('/control.js')
+        def serve_js():
+            return send_file('control.js', mimetype='application/javascript')
+        
+        @self.app.route('/styles.css')
+        def serve_css():
+            return send_file('styles.css', mimetype='text/css')
+        
+        # Keep existing routes:
         @self.app.route('/map_latest')
         def serve_map():
             map_dir = os.path.expanduser(self.config['paths']['map_dir'])
@@ -123,7 +140,7 @@ class ControlServer:
                 return send_file(map_path, mimetype='image/png')
             else:
                 return "Map not available", 404
-
+                
         @self.app.route('/front_rgb')
         def serve_front_rgb():
             frame = self.zed_front.get_latest_frame()
@@ -132,7 +149,7 @@ class ControlServer:
                 return send_file(BytesIO(frame), mimetype='image/jpeg')
             else:
                 return "No frame", 404
-        
+
         @self.app.route('/back_rgb')
         def serve_back_rgb():
             frame = self.zed_back.get_latest_frame()
@@ -141,7 +158,6 @@ class ControlServer:
                 return send_file(BytesIO(frame), mimetype='image/jpeg')
             else:
                 return "No frame", 404
-            
             
     def register_socketio_events(self):
         """Register SocketIO event handlers"""

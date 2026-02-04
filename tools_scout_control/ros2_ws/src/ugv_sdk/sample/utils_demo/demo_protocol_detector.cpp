@@ -16,7 +16,7 @@ using namespace westonrobot;
 
 int main(int argc, char **argv) {
   ProtocolDetector detector;
-  if (detector.Connect("can2")) {
+  if (detector.Connect("can0")) {
     auto proto = detector.DetectProtocolVersion(5);
 
     if (proto == ProtocolVersion::AGX_V1) {

@@ -1,6 +1,6 @@
 const host = window.location.hostname;
-console.log('Connecting to:', `http://${host}:5000`);
-const socket = io(`http://${host}:5000`);
+console.log('Connecting to:', `http://${host}:8000`);
+const socket = io(`http://${host}:8000`);
 const keyState = {};
 let frameInterval = null;
 let currentMapInfo = null;
@@ -377,17 +377,17 @@ function stopRecording() {
 // Map image auto-refresh
 setInterval(() => {
   const mapImg = document.getElementById('map-image');
-  mapImg.src = `http://${host}:5000/map_latest?t=${Date.now()}`;
+  mapImg.src = `http://${host}:8000/map_latest?t=${Date.now()}`;
 }, 1000);
 
 // RGB frame auto-refresh (front)
 setInterval(() => {
   const img = document.getElementById('rgb-image');
-  img.src = `http://${host}:5000/front_rgb?t=${Date.now()}`;
+  img.src = `http://${host}:8000/front_rgb?t=${Date.now()}`;
 }, 100);  // 100ms = 10 FPS
 
 // RGB frame auto-refresh (back)
 setInterval(() => {
   const img = document.getElementById('back-rgb-image');
-  img.src = `http://${host}:5000/back_rgb?t=${Date.now()}`;
+  img.src = `http://${host}:8000/back_rgb?t=${Date.now()}`;
 }, 100);

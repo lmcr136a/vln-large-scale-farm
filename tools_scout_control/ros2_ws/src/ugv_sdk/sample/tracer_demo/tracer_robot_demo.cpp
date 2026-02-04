@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
   } else {
     std::cout << "Usage: app_tracer_demo <interface>"
               << std::endl
-              << "Example 1: ./app_tracer_demo can2" << std::endl;
+              << "Example 1: ./app_tracer_demo can0" << std::endl;
     return -1;
   }
 

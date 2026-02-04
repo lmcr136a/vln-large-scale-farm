@@ -169,8 +169,11 @@ class MapCreationController:
             try:
                 if rclpy.ok():
                     self.pub.publish(twist)
+                else:
+                    exit()
             except Exception as e:
                 print(f"Failed to publish in update_loop: {e}")
+                exit()
                 break 
         
             time.sleep(0.1)
