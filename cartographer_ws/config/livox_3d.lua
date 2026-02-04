@@ -47,7 +47,7 @@ TRAJECTORY_BUILDER_2D.min_z = -0.4
 TRAJECTORY_BUILDER_2D.max_z = 0.4
 
 TRAJECTORY_BUILDER_2D.submaps.num_range_data = 60
-TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.1
+TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.5
 
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
 TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 5.0

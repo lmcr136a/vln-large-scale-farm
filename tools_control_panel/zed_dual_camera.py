@@ -34,6 +34,7 @@ class ZEDCameraRecorder(threading.Thread):
         self.latest_frame = None 
         self.frame_lock = threading.Lock()
         self.pairing_threshold_ms = pairing_threshold_ms
+        self.ros2_pub_data = False
         
         # Timestamp tracking for pairing
         self.zed_timestamps = []  # [(sec, nanosec, rgb_path, depth_path), ...]
@@ -200,10 +201,10 @@ class ZEDCameraRecorder(threading.Thread):
             nanosec = msg.header.stamp.nanosec
             timestamp_str = f"{sec}_{nanosec:09d}"
             
-            # Convert PointCloud2 to numpy array (x, y, z, intensity)
+            # FIX: Properly convert structured array to simple float32 array
             points_list = []
-            for point in point_cloud2.read_points(msg, field_names=("x", "y", "z", "intensity"), skip_nans=True):
-                points_list.append(point)
+            for data in point_cloud2.read_points(msg, field_names=("x", "y", "z", "intensity"), skip_nans=True):
+                points_list.append([data[0], data[1], data[2], data[3]])
             
             if len(points_list) > 0:
                 points_np = np.array(points_list, dtype=np.float32)
@@ -276,13 +277,19 @@ class ZEDCameraRecorder(threading.Thread):
         if not os.path.exists(csv_path):
             return
         
-        df = pd.DataFrame(pairs)
+        # FIX: Read the CSV file
+        df = pd.read_csv(csv_path)
+        
+        if len(df) == 0:
+            print(f"[{self.name}] No pairs to analyze")
+            return
+        
         dt_ms = df['dt_ms'].values
         
         stats = {
             'metric': ['mean_ms', 'median_ms', 'std_ms', 'p95_ms', 'max_ms', 'min_ms',
-                      'total_pairs', 'total_zed_frames', 'total_lidar_scans', 'unpaired_zed',
-                      'unpaired_lidar', 'pairing_rate', 'threshold_ms'],
+                    'total_pairs', 'total_zed_frames', 'total_lidar_scans', 'unpaired_zed',
+                    'unpaired_lidar', 'pairing_rate', 'threshold_ms'],
             'value': [
                 np.mean(dt_ms),
                 np.median(dt_ms),
@@ -305,6 +312,7 @@ class ZEDCameraRecorder(threading.Thread):
         stats_df.to_csv(stats_path, index=False)
         
         print(f"[{self.name}] Pairing stats saved: Δt_mean={np.mean(dt_ms):.1f}ms, Δt_p95={np.percentile(dt_ms, 95):.1f}ms")
+
         
     def get_latest_frame(self):
         """Get latest frame for web streaming"""
@@ -325,7 +333,7 @@ class ZEDCameraRecorder(threading.Thread):
                     # Get ZED hardware timestamp
                     zed_timestamp = self.cam.get_timestamp(sl.TIME_REFERENCE.IMAGE)
                     sec = int(zed_timestamp.get_seconds())
-                    nanosec = int(zed_timestamp.get_nanoseconds())
+                    nanosec = int(str(zed_timestamp.get_nanoseconds())[10:])
                     timestamp_str = f"{sec}_{nanosec:09d}"
                     
                     # Retrieve images
@@ -366,28 +374,32 @@ class ZEDCameraRecorder(threading.Thread):
                         if frame_count % 30 == 0:
                             print(f"[{self.name}] Saved {frame_count} frames")
                         
-                        # Publish to ROS2
-                        try:
-                            ros_stamp = self.ros_node.get_clock().now().to_msg()
-                            ros_stamp.sec = sec
-                            ros_stamp.nanosec = nanosec
-                            
-                            rgb_msg = self.bridge.cv2_to_imgmsg(
-                                cv2.cvtColor(rgb_np, cv2.COLOR_RGBA2RGB), 
-                                encoding="rgb8"
-                            )
-                            rgb_msg.header.stamp = ros_stamp
-                            rgb_msg.header.frame_id = f'zed_{self.name}_camera'
-                            self.rgb_pub.publish(rgb_msg)
-                            
-                            depth_msg = self.bridge.cv2_to_imgmsg(depth_np, encoding="32FC1")
-                            depth_msg.header.stamp = ros_stamp
-                            depth_msg.header.frame_id = f'zed_{self.name}_camera'
-                            self.depth_pub.publish(depth_msg)
-                            
-                        except Exception as e:
-                            print(f"[{self.name}] ROS2 publish error: {e}")
-                    
+                        # Publish to ROS2 - FIX: Ensure nanosec is within uint32 range
+                        if self.ros2_pub_data:
+                            try:
+                                ros_stamp = self.ros_node.get_clock().now().to_msg()
+                                ros_stamp.sec = int(sec)
+                                ros_stamp.nanosec = int(nanosec) % 1000000000  # Clamp to valid range
+                                
+                                # RGB
+                                rgb_msg = self.bridge.cv2_to_imgmsg(
+                                    cv2.cvtColor(rgb_np, cv2.COLOR_RGBA2RGB), 
+                                    encoding="rgb8"
+                                )
+                                rgb_msg.header.stamp = ros_stamp
+                                rgb_msg.header.frame_id = f'zed_{self.name}_camera'
+                                self.rgb_pub.publish(rgb_msg)
+                                
+                                # Depth
+                                depth_msg = self.bridge.cv2_to_imgmsg(depth_np, encoding="32FC1")
+                                depth_msg.header.stamp = ros_stamp
+                                depth_msg.header.frame_id = f'zed_{self.name}_camera'
+                                self.depth_pub.publish(depth_msg)
+                                
+                            except Exception as e:
+                                print(f"[{self.name}] ROS2 publish error: {e}")
+
+
                     last_process_time = current_time
             else:
                 time.sleep(0.001)

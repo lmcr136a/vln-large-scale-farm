@@ -1,4 +1,6 @@
 #!/bin/bash
+sudo pkill -9 -f cartographer
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
 

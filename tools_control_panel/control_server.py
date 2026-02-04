@@ -65,7 +65,7 @@ class ControlServer:
             name="front",
             ros_node=self.node,
             socketio=self.socketio,
-            interval=1.0,
+            interval=0.1,
             always_stream=True
         )
         self.zed_back = ZEDCameraRecorder(
@@ -73,7 +73,7 @@ class ControlServer:
             name="back",
             ros_node=self.node,
             socketio=self.socketio,
-            interval=1.0,
+            interval=0.1,
             always_stream=True
         )
         

@@ -1,4 +1,5 @@
 #!/bin/bash
+sudo pkill -9 -f control_server
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
@@ -52,7 +53,7 @@ sleep 1
 echo ""
 echo "✅ All services started!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📱 Control Panel: http://$(hostname -I | awk '{print $1}'):8000/control.html"
+echo "📱 Control Panel: http://100.78.219.75:8000/control.html"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "Press Ctrl+C to stop all services"

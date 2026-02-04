@@ -173,7 +173,7 @@ class MapSaver(Node):
                 arrow_length = robot_size * 2.1
                 
                 draw.ellipse([img_x-robot_size, img_y-robot_size, 
-                             img_x+robot_size, img_y+robot_size], 
+                            img_x+robot_size, img_y+robot_size], 
                             fill=BLUE1, outline=RED1, width=2)
                 
                 end_x = img_x + arrow_length * math.cos(yaw)
@@ -189,14 +189,14 @@ class MapSaver(Node):
                 right_y = end_y + head_length * math.sin(yaw + arrow_angle)
                 draw.polygon([(end_x, end_y), (left_x, left_y), (right_x, right_y)], fill=RED1)
                 
-                # Info text
+                # Info text - FIX: Use fixed size instead of textbbox
                 info_text = f"Robot: ({x:.2f}, {y:.2f}, {math.degrees(yaw):.0f}deg)"
-                bbox = draw.textbbox((0, 0), info_text)
-                text_width = bbox[2] - bbox[0]
-                text_height = bbox[3] - bbox[1]
+                text_width = len(info_text) * 7  # Approximate width
+                text_height = 15  # Fixed height
                 draw.rectangle([(10, 10), (10 + text_width + 10, 10 + text_height + 10)], fill=(0, 0, 0))
                 draw.text((15, 15), info_text, fill=YELLOW)
-        
+        else:
+            x, y, yaw = 0.0, 0.0, 0.0 
         
         if im.size[0] > 0 and im.size[1] > 0:
             im.save(str(self.output_dir / 'map_latest.png'), optimize=False, quality=95)
@@ -216,10 +216,6 @@ class MapSaver(Node):
             print("Map save failed")
             
                 
-        if robot_pose:
-            x, y, yaw = robot_pose
-        else:
-            x, y, yaw = 0.0, 0.0, 0.0
         # Save metadata
         map_yaml = {
             'image': 'map_latest.png',
