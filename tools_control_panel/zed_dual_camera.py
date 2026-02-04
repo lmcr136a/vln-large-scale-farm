@@ -346,7 +346,7 @@ class ZEDCameraRecorder(threading.Thread):
                     # Web streaming
                     if self.always_stream and self.socketio:
                         try:
-                            rgb_display = cv2.cvtColor(rgb_np, cv2.COLOR_RGBA2RGB)
+                            rgb_display = cv2.cvtColor(rgb_np.copy(), cv2.COLOR_RGBA2RGB)
                             H, W, _ = rgb_display.shape
                             scale = 0.2
                             rgb_display = cv2.resize(rgb_display, (int(round(W*scale)), int(round(H*scale)))) 
@@ -362,8 +362,9 @@ class ZEDCameraRecorder(threading.Thread):
                     if self.recording and self.current_output_dir:
                         rgb_path = os.path.join(self.rgb_dir, f"{timestamp_str}.png")
                         depth_path = os.path.join(self.depth_dir, f"{timestamp_str}.npy")
-                        
-                        cv2.imwrite(rgb_path, cv2.cvtColor(rgb_np, cv2.COLOR_RGBA2RGB))
+                        rgb_img = cv2.cvtColor(rgb_np, cv2.COLOR_RGBA2RGB)
+
+                        cv2.imwrite(rgb_path, rgb_img)
                         np.save(depth_path, depth_np)
                         
                         # Track timestamp for pairing
@@ -383,7 +384,7 @@ class ZEDCameraRecorder(threading.Thread):
                                 
                                 # RGB
                                 rgb_msg = self.bridge.cv2_to_imgmsg(
-                                    cv2.cvtColor(rgb_np, cv2.COLOR_RGBA2RGB), 
+                                    rgb_img, 
                                     encoding="rgb8"
                                 )
                                 rgb_msg.header.stamp = ros_stamp

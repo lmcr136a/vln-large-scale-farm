@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Control Server - Main Entry Point
-Main server connecting web panel and robot
 """
 import os
 import sys
@@ -27,7 +26,6 @@ from zed_dual_camera import ZEDCameraRecorder
 
 class ControlServer:
     def __init__(self, config_path='control_config.yaml'):
-        # Shutdown flag
         self.shutdown_flag = threading.Event()
         
         # Load configuration
@@ -58,23 +56,27 @@ class ControlServer:
         )
         print("Flask & SocketIO initialized")
         
-        # Initialize ZED cameras (after socketio is created)
+        # Initialize ZED cameras
         print("Initializing ZED cameras...")
+        zed_interval = 1.0 / self.config['recording']['zed_hz']
+        
         self.zed_front = ZEDCameraRecorder(
             serial_number=48335070,
             name="front",
             ros_node=self.node,
             socketio=self.socketio,
-            interval=0.1,
-            always_stream=True
+            interval=zed_interval,
+            always_stream=True,
+            pairing_threshold_ms=self.config['recording']['pairing_threshold_ms']
         )
         self.zed_back = ZEDCameraRecorder(
             serial_number=49537850,
             name="back",
             ros_node=self.node,
             socketio=self.socketio,
-            interval=0.1,
-            always_stream=True
+            interval=zed_interval,
+            always_stream=True,
+            pairing_threshold_ms=self.config['recording']['pairing_threshold_ms']
         )
         
         # Start ZED camera threads
@@ -100,11 +102,9 @@ class ControlServer:
         # Setup signal handlers
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
-        signal.signal(signal.SIGHUP, self.signal_handler)
         
         # Cleanup on exit
         atexit.register(self.cleanup)
-        
     
     def signal_handler(self, sig, frame):
         """Handle shutdown signals"""
@@ -113,11 +113,9 @@ class ControlServer:
         self.cleanup()
         sys.exit(0)
         
-        
     def register_routes(self):
         """Register Flask routes"""
         
-        # Add these new routes at the beginning:
         @self.app.route('/')
         @self.app.route('/control.html')
         def serve_control():
@@ -131,7 +129,6 @@ class ControlServer:
         def serve_css():
             return send_file('styles.css', mimetype='text/css')
         
-        # Keep existing routes:
         @self.app.route('/map_latest')
         def serve_map():
             map_dir = os.path.expanduser(self.config['paths']['map_dir'])
@@ -164,13 +161,13 @@ class ControlServer:
         
         @self.socketio.on('connect')
         def handle_connect():
-            print(f"Client connected: {request.sid}")
+            print(f"✅ Client connected: {request.sid}")
             self.map_controller.should_update_twist = True
             self.server_to_panel.send_map_update()
         
         @self.socketio.on('disconnect')
-        def handle_disconnect(sid):  # sid 파라미터 추가
-            print(f"Client disconnected: {sid}")
+        def handle_disconnect():
+            print(f"❌ Client disconnected: {request.sid}")
             try:
                 self.map_controller.clear_keys_and_stop()
             except Exception as e:
@@ -178,7 +175,7 @@ class ControlServer:
         
         @self.socketio.on('heartbeat')
         def handle_heartbeat():
-            pass  # Just acknowledge
+            pass
         
         @self.socketio.on('keydown')
         def handle_keydown(data):
@@ -210,34 +207,33 @@ class ControlServer:
         @self.socketio.on('start_recording')
         def handle_start_recording(dirname):
             """Start ZED camera recording"""
+            print(f"🔴 Received start_recording: {dirname}")
+            
             if not dirname:
-                print("Invalid directory name for recording")
+                print("❌ Invalid directory name for recording")
                 return
             
-            # Build full output path
             from datetime import datetime
             base_path = os.path.expanduser(self.config['paths']['data_dir'])
             timestamp_dir = datetime.now().strftime("%Y%m%d_%H%M")
             full_path = os.path.join(base_path, dirname, timestamp_dir)
             
-            print(f"Starting ZED recording to: {full_path}")
+            print(f"📁 Starting recording to: {full_path}")
             
-            # Call ZED camera methods directly
             self.zed_front.start_recording(full_path)
             self.zed_back.start_recording(full_path)
             
-            print("ZED recording started")
+            print("✅ Recording started")
         
         @self.socketio.on('stop_recording')
         def handle_stop_recording():
             """Stop ZED camera recording"""
-            print("Stopping ZED recording")
+            print("⏹️ Stopping recording...")
             
-            # Call ZED camera methods directly
             self.zed_front.stop_recording()
             self.zed_back.stop_recording()
             
-            print("ZED recording stopped")
+            print("✅ Recording stopped")
     
     def ros_spin(self):
         """ROS2 spin loop"""
@@ -247,9 +243,9 @@ class ControlServer:
     def cleanup(self):
         """Cleanup on exit"""
         if self.shutdown_flag.is_set():
-            return  # Already cleaning up
+            return
         
-        print("\nCleaning up...")
+        print("\n🧹 Cleaning up...")
         self.shutdown_flag.set()
         
         # Stop robot movement
@@ -283,7 +279,7 @@ class ControlServer:
         except Exception as e:
             print(f"Error during ROS2 shutdown: {e}")
         
-        print("Cleanup complete")
+        print("✅ Cleanup complete")
     
     def run(self):
         """Run server"""
@@ -310,7 +306,11 @@ class ControlServer:
         os.makedirs(data_dir, exist_ok=True)
         
         # Run server
-        print(f"Control server running on port {self.config['server']['port']}...")
+        print(f"🚀 Control server running on port {self.config['server']['port']}...")
+        print(f"📊 Recording: ZED={self.config['recording']['zed_hz']}Hz, "
+              f"LiDAR={self.config['recording']['lidar_hz']}Hz, "
+              f"IMU={self.config['recording']['imu_hz']}Hz")
+        
         try:
             self.socketio.run(
                 self.app,
@@ -320,13 +320,12 @@ class ControlServer:
                 use_reloader=False
             )
         except KeyboardInterrupt:
-            print("\nKeyboard interrupt received")
+            print("\n⚠️ Keyboard interrupt received")
         finally:
             self.cleanup()
 
 
 if __name__ == '__main__':
-    # Set UTF-8 encoding
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
     
