@@ -22,7 +22,6 @@ output/
 *.svo
 *.png
 *.pgm
-*.yaml
 
 # Kernel modules and binaries
 *.ko
