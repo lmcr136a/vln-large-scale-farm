@@ -28,6 +28,8 @@ class ZEDCameraRecorder(threading.Thread):
         self.always_stream = always_stream
         self.recording = False
         self.current_output_dir = None
+        self.latest_frame = None 
+        self.frame_lock = threading.Lock() 
         
         # Initialize camera
         self.cam = sl.Camera()
@@ -81,7 +83,13 @@ class ZEDCameraRecorder(threading.Thread):
         self.recording = False
         self.current_output_dir = None
         print(f"[{self.name}] Recording stopped")
-
+        
+    def get_latest_frame(self):
+        """Get latest frame"""
+        with self.frame_lock:
+            return self.latest_frame
+        
+        
     def run(self):
         frame_count = 0
         last_process_time = time.time()
@@ -104,20 +112,21 @@ class ZEDCameraRecorder(threading.Thread):
                     
                     timestamp = int(current_time * 1000)
                     
-                    # Stream to web
                     if self.always_stream and self.socketio:
                         try:
-                            # Convert RGBA to BGR for JPEG encoding
-                            rgb_bgr = cv2.cvtColor(rgb_np, cv2.COLOR_RGBA2BGR)
-                            _, buffer = cv2.imencode('.jpg', rgb_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                            rgb_base64 = base64.b64encode(buffer).decode('utf-8')
+                            rgb_np = cv2.cvtColor(rgb_np, cv2.COLOR_RGBA2RGB)
                             
-                            # Send to web panel with different event names
-                            event_name = 'rgb_frame' if self.name == 'front' else 'back_rgb_frame'
-                            self.socketio.emit(event_name, {'image': rgb_base64})
+                            H, W, _ = rgb_np.shape
+                            scale = 0.2
+                            rgb_np = cv2.resize(rgb_np, (int(round(H*scale)), int(round(W*scale)))) 
+                            _, buffer = cv2.imencode('.jpg', rgb_np, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                            
+                            with self.frame_lock:
+                                self.latest_frame = buffer.tobytes()
+                                
                         except Exception as e:
                             print(f"[{self.name}] Web streaming error: {e}")
-                    
+                            
                     # Save to disk and publish to ROS2 if recording
                     if self.recording and self.current_output_dir:
                         # Save files

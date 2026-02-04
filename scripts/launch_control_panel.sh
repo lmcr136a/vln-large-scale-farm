@@ -30,6 +30,7 @@ sudo ip link set can2 up type can bitrate 500000
 
 echo "🦾 Launching Scout Base Node..."
 source /opt/ros/humble/setup.bash
+source "$WORKSPACE_DIR/tools_scout_control/ros2_ws/install/setup.bash"
 ros2 launch scout_base scout_base.launch.py &
 ROS_PID=$!
 

@@ -61,19 +61,8 @@ window.addEventListener("keyup", (e) => {
 });
 
 // Socket event listeners
-socket.on('rgb_frame', (data) => {
-  const img = document.getElementById('rgb-image');
-  if (data && data.image) {
-    img.src = 'data:image/jpeg;base64,' + data.image;
-  }
-});
-
-socket.on('back_rgb_frame', (data) => {
-  const img = document.getElementById('back-rgb-image');
-  if (data && data.image) {
-    img.src = 'data:image/jpeg;base64,' + data.image;
-  }
-});
+let frontFrameCount = 0;
+let backFrameCount = 0;
 
 const sysmonDiv = document.getElementById("sysmon");
 
@@ -390,3 +379,15 @@ setInterval(() => {
   const mapImg = document.getElementById('map-image');
   mapImg.src = `http://${host}:5000/map_latest?t=${Date.now()}`;
 }, 1000);
+
+// RGB frame auto-refresh (front)
+setInterval(() => {
+  const img = document.getElementById('rgb-image');
+  img.src = `http://${host}:5000/front_rgb?t=${Date.now()}`;
+}, 100);  // 100ms = 10 FPS
+
+// RGB frame auto-refresh (back)
+setInterval(() => {
+  const img = document.getElementById('back-rgb-image');
+  img.src = `http://${host}:5000/back_rgb?t=${Date.now()}`;
+}, 100);

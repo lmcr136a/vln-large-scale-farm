@@ -48,7 +48,7 @@ def generate_launch_description():
                 'simulated_robot': launch.substitutions.LaunchConfiguration('simulated_robot'),
                 'control_rate': launch.substitutions.LaunchConfiguration('control_rate'),
         }])
-
+    
     return LaunchDescription([
         use_sim_time_arg,
         port_name_arg,        

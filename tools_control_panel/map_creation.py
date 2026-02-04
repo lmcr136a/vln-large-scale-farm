@@ -4,6 +4,7 @@ Map creation mode: keyboard input handling and robot control
 """
 import os
 import time
+import rclpy
 import threading
 from geometry_msgs.msg import Twist
 
@@ -77,13 +78,17 @@ class MapCreationController:
         self.down_keys.discard(key)
         twist = Twist()
         self.pub.publish(twist)
-    
+
     def clear_keys_and_stop(self):
         """Clear all keys and stop robot"""
         self.down_keys.clear()
         self.should_update_twist = False
         twist = Twist()
-        self.pub.publish(twist)
+        try:
+            if rclpy.ok():  # ROS2 context 확인
+                self.pub.publish(twist)
+        except Exception as e:
+            print(f"Failed to publish stop command on disconnect: {e}")
     
     def update_ptz(self):
         """Update PTZ camera"""
@@ -160,6 +165,13 @@ class MapCreationController:
                 twist.angular.z += self.angular_speed
             if 'ArrowRight' in self.down_keys:
                 twist.angular.z -= self.angular_speed
-            
-            self.pub.publish(twist)
+        
+            try:
+                if rclpy.ok():
+                    self.pub.publish(twist)
+            except Exception as e:
+                print(f"Failed to publish in update_loop: {e}")
+                break 
+        
             time.sleep(0.1)
+            
