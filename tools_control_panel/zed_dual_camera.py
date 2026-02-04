@@ -118,7 +118,7 @@ class ZEDCameraRecorder(threading.Thread):
                             
                             H, W, _ = rgb_np.shape
                             scale = 0.2
-                            rgb_np = cv2.resize(rgb_np, (int(round(H*scale)), int(round(W*scale)))) 
+                            rgb_np = cv2.resize(rgb_np, (int(round(W*scale)), int(round(H*scale)))) 
                             _, buffer = cv2.imencode('.jpg', rgb_np, [cv2.IMWRITE_JPEG_QUALITY, 70])
                             
                             with self.frame_lock:

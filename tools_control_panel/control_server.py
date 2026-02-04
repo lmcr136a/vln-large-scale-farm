@@ -129,7 +129,6 @@ class ControlServer:
             frame = self.zed_front.get_latest_frame()
             if frame:
                 from io import BytesIO
-                print("Sending... front... rgb")
                 return send_file(BytesIO(frame), mimetype='image/jpeg')
             else:
                 return "No frame", 404
