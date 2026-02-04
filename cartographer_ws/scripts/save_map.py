@@ -216,6 +216,10 @@ class MapSaver(Node):
             print("Map save failed")
             
                 
+        if robot_pose:
+            x, y, yaw = robot_pose
+        else:
+            x, y, yaw = 0.0, 0.0, 0.0
         # Save metadata
         map_yaml = {
             'image': 'map_latest.png',
