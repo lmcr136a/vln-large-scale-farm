@@ -14,11 +14,12 @@ robot:
 
 # Recording Settings
 recording:
-  zed_hz: 10  # ZED RGB/Depth recording frequency
+  zed_hz: 30  # ZED RGB/Depth recording frequency
   lidar_hz: 10  # LiDAR records at sensor rate (~10Hz)
   imu_hz: 100  # IMU records at sensor rate (~100Hz)
   pairing_threshold_ms: 50  # Timestamp pairing threshold
   web_stream_hz: 10  # Web streaming frequency
+  sample_interval_sec: 300
 
 # Server Settings
 server:

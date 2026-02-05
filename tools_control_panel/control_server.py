@@ -21,7 +21,7 @@ from server_to_panel import ServerToPanel
 from map_creation import MapCreationController
 from get_path import PathPlanner
 from autonomous_mode import AutonomousController
-from zed_dual_camera import ZEDCameraRecorder
+from recorder import MultiSensorRecorder
 
 
 class ControlServer:
@@ -56,33 +56,30 @@ class ControlServer:
         )
         print("Flask & SocketIO initialized")
         
-        # Initialize ZED cameras
-        print("Initializing ZED cameras...")
-        zed_interval = 1.0 / self.config['recording']['zed_hz']
+        # Initialize MultiSensorRecorder
+        print("Initializing MultiSensorRecorder...")
+        base_data_dir = os.path.expanduser(self.config['paths']['data_dir'])
+        self.recorder = MultiSensorRecorder(self.node, output_base_dir=base_data_dir)
+        # Add ZED cameras to recorder
+        sample_interval = self.config['recording'].get('sample_interval_sec', 300)  # Default 5 minutes
         
-        self.zed_front = ZEDCameraRecorder(
+        self.zed_front = self.recorder.add_zed_camera(
             serial_number=48335070,
             name="front",
-            ros_node=self.node,
             socketio=self.socketio,
-            interval=zed_interval,
-            always_stream=True,
-            pairing_threshold_ms=self.config['recording']['pairing_threshold_ms']
-        )
-        self.zed_back = ZEDCameraRecorder(
-            serial_number=49537850,
-            name="back",
-            ros_node=self.node,
-            socketio=self.socketio,
-            interval=zed_interval,
-            always_stream=True,
-            pairing_threshold_ms=self.config['recording']['pairing_threshold_ms']
+            sample_interval_sec=sample_interval,
+            always_stream=True
         )
         
-        # Start ZED camera threads
-        self.zed_front.start()
-        self.zed_back.start()
-        print("ZED cameras started")
+        self.zed_back = self.recorder.add_zed_camera(
+            serial_number=49537850,
+            name="back",
+            socketio=self.socketio,
+            sample_interval_sec=sample_interval,
+            always_stream=True
+        )
+        
+        print("ZED cameras initialized and streaming")
         
         # Initialize modules
         self.server_to_panel = ServerToPanel(self.socketio, self.config)
@@ -94,6 +91,10 @@ class ControlServer:
             self.config
         )
         print("All modules initialized")
+        
+        # Recording state
+        self.is_recording = False
+        self.current_session_dir = None
         
         # Register routes and event handlers
         self.register_routes()
@@ -206,39 +207,77 @@ class ControlServer:
         
         @self.socketio.on('start_recording')
         def handle_start_recording(dirname):
-            """Start ZED camera recording"""
+            """Start multi-sensor recording (ZED SVO2 + LiDAR)"""
             print(f"🔴 Received start_recording: {dirname}")
+            
+            if self.is_recording:
+                print("⚠️ Already recording, stopping previous session first")
+                self.recorder.stop_recording()
+                self.is_recording = False
             
             if not dirname:
                 print("❌ Invalid directory name for recording")
                 return
             
             from datetime import datetime
-            base_path = os.path.expanduser(self.config['paths']['data_dir'])
-            timestamp_dir = datetime.now().strftime("%Y%m%d_%H%M")
-            full_path = os.path.join(base_path, dirname, timestamp_dir)
             
-            print(f"📁 Starting recording to: {full_path}")
+            # Create session with custom name
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            session_name = f"{dirname}/{timestamp}"
             
-            self.zed_front.start_recording(full_path)
-            self.zed_back.start_recording(full_path)
-            
-            print("✅ Recording started")
+            try:
+                self.current_session_dir = self.recorder.create_session(session_name)
+                self.recorder.start_recording()
+                self.is_recording = True
+                
+                print(f"✅ Recording started to: {self.current_session_dir}")
+                print(f"   - Front ZED: rgbd_front.svo2")
+                print(f"   - Back ZED: rgbd_back.svo2")
+                print(f"   - LiDAR: lidar_pointcloud.bin")
+                print(f"   - LiDAR IMU: lidar_imu.bin")
+                print(f"   - Samples: Every {self.config['recording'].get('sample_interval_sec', 300)}s")
+                
+            except Exception as e:
+                print(f"❌ Failed to start recording: {e}")
+                self.is_recording = False
         
         @self.socketio.on('stop_recording')
         def handle_stop_recording():
-            """Stop ZED camera recording"""
+            """Stop multi-sensor recording"""
             print("⏹️ Stopping recording...")
             
-            self.zed_front.stop_recording()
-            self.zed_back.stop_recording()
+            if not self.is_recording:
+                print("⚠️ No active recording session")
+                return
             
-            print("✅ Recording stopped")
+            try:
+                self.recorder.stop_recording()
+                self.is_recording = False
+                
+                print("✅ Recording stopped")
+                if self.current_session_dir:
+                    print(f"📁 Data saved to: {self.current_session_dir}")
+                    print("\n📊 Dataset structure:")
+                    print("   20YYMMDD_HHMM/")
+                    print("   ├── rgbd_front.svo2")
+                    print("   ├── rgbd_back.svo2")
+                    print("   ├── lidar_pointcloud.bin")
+                    print("   ├── lidar_imu.bin")
+                    print("   └── samples/")
+                    print("       ├── MMDD_HHMM_front.jpg")
+                    print("       ├── MMDD_HHMM_front_depth.png")
+                    print("       ├── MMDD_HHMM_back.jpg")
+                    print("       └── MMDD_HHMM_back_depth.png")
+                    
+                self.current_session_dir = None
+                
+            except Exception as e:
+                print(f"❌ Error stopping recording: {e}")
     
     def ros_spin(self):
         """ROS2 spin loop"""
         while rclpy.ok() and not self.shutdown_flag.is_set():
-            rclpy.spin_once(self.node, timeout_sec=0.1)
+            rclpy.spin_once(self.recorder.ros_node, timeout_sec=0.1)
     
     def cleanup(self):
         """Cleanup on exit"""
@@ -261,23 +300,22 @@ class ControlServer:
         except Exception as e:
             print(f"Error stopping autonomous mode: {e}")
         
-        # Stop ZED cameras
+        # Stop recording if active
         try:
-            print("Stopping ZED cameras...")
-            self.zed_front.stop()
-            self.zed_back.stop()
-            print("ZED cameras stopped")
+            if self.is_recording:
+                print("Stopping active recording session...")
+                self.recorder.stop_recording()
+                self.is_recording = False
         except Exception as e:
-            print(f"Error stopping ZED cameras: {e}")
+            print(f"Error stopping recording: {e}")
         
-        # Shutdown ROS2
+        # Shutdown recorder
         try:
-            if rclpy.ok():
-                self.node.destroy_node()
-                rclpy.shutdown()
-                print("ROS2 shutdown complete")
+            print("Shutting down MultiSensorRecorder...")
+            self.recorder.shutdown()
+            print("Recorder shutdown complete")
         except Exception as e:
-            print(f"Error during ROS2 shutdown: {e}")
+            print(f"Error during recorder shutdown: {e}")
         
         print("✅ Cleanup complete")
     
@@ -307,9 +345,11 @@ class ControlServer:
         
         # Run server
         print(f"🚀 Control server running on port {self.config['server']['port']}...")
-        print(f"📊 Recording: ZED={self.config['recording']['zed_hz']}Hz, "
-              f"LiDAR={self.config['recording']['lidar_hz']}Hz, "
-              f"IMU={self.config['recording']['imu_hz']}Hz")
+        print(f"📊 Recording Format: SVO2 (H.265 compressed)")
+        print(f"   - ZED Cameras: 30 FPS (compressed in SVO2)")
+        print(f"   - LiDAR: ~{self.config['recording']['lidar_hz']}Hz")
+        print(f"   - IMU: ~{self.config['recording']['imu_hz']}Hz")
+        print(f"   - Samples: Every {self.config['recording'].get('sample_interval_sec', 300)}s")
         
         try:
             self.socketio.run(
