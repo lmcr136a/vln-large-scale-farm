@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -13,6 +13,7 @@ def launch_setup(context, *args, **kwargs):
     
     # Get mode value at runtime
     mode = LaunchConfiguration('mode').perform(context)
+    load_map = LaunchConfiguration('load_map').perform(context)
     
     # Select config file based on mode
     if mode == 'sim':
@@ -25,6 +26,27 @@ def launch_setup(context, *args, **kwargs):
     print(f"[Cartographer] Mode: {mode}")
     print(f"[Cartographer] Config: {config_file}")
     print(f"[Cartographer] Use sim time: {use_sim_time}")
+    print(f"[Cartographer] Load map: {load_map}")
+    
+    # GPS Publisher (standalone script)
+    gps_publisher_process = ExecuteProcess(
+        cmd=['python3', '/home/nahyeon/box/vln-large-scale-farm/cartographer_ws/launch/gps_publisher.py'],
+        output='screen'
+    )
+    
+    # Cartographer node arguments
+    cartographer_args = [
+        '-configuration_directory', config_dir,
+        '-configuration_basename', config_file
+    ]
+    
+    # Add load_state_filename if map file is specified
+    if load_map and load_map != '' and load_map != 'none':
+        cartographer_args.extend([
+            '-load_state_filename', load_map,
+            '-start_trajectory_with_default_topics', 'true'
+        ])
+        print(f"[Cartographer] Loading saved map: {load_map}")
     
     # Cartographer node
     cartographer_node = Node(
@@ -33,13 +55,11 @@ def launch_setup(context, *args, **kwargs):
         name='cartographer_node',
         output='screen',
         parameters=[{'use_sim_time': use_sim_time}],
-        arguments=[
-            '-configuration_directory', config_dir,
-            '-configuration_basename', config_file
-        ],
+        arguments=cartographer_args,
         remappings=[
             ('points2', '/lidar3d'),
-            ('imu', '/imu')
+            ('imu', '/imu'),
+            ('fix', '/gps/fix')
         ]
     )
     
@@ -54,20 +74,25 @@ def launch_setup(context, *args, **kwargs):
         }]
     )
     
-    return [cartographer_node, occupancy_grid_node]
+    return [gps_publisher_process, cartographer_node, occupancy_grid_node]
 
 def generate_launch_description():
-    # Declare arguments
     mode_arg = DeclareLaunchArgument(
         'mode',
         default_value='real',
         description='Mode: real or sim'
     )
     
-    # Use OpaqueFunction to evaluate LaunchConfiguration at runtime
+    load_map_arg = DeclareLaunchArgument(
+        'load_map',
+        default_value='',
+        description='Path to saved pbstream map file (empty or none to start fresh)'
+    )
+    
     opaque_function = OpaqueFunction(function=launch_setup)
     
     return LaunchDescription([
         mode_arg,
+        load_map_arg,
         opaque_function
     ])

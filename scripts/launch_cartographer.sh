@@ -11,6 +11,7 @@ echo "[start_cartographer.sh] Mode: $MODE"
 # Start cartographer in background
 source "$WORKSPACE_DIR/cartographer_ws/install/setup.bash"
 ros2 launch "$WORKSPACE_DIR/cartographer_ws/launch/cartographer.launch.py" mode:=$MODE &
+# ros2 launch "$WORKSPACE_DIR/cartographer_ws/launch/cartographer.launch.py" mode:=$MODE load_map:=/home/nahyeon/maps/farm_map.pbstream &
 
 # Wait for cartographer to initialize
 sleep 5
