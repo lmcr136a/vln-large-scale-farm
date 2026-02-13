@@ -43,8 +43,8 @@ TRAJECTORY_BUILDER_2D.missing_data_ray_length = 5.0
 TRAJECTORY_BUILDER_2D.voxel_filter_size = 0.1
 
 -- real lidar sensor's height
-TRAJECTORY_BUILDER_2D.min_z = -0.4 
-TRAJECTORY_BUILDER_2D.max_z = 0.4
+TRAJECTORY_BUILDER_2D.min_z = -0.5
+TRAJECTORY_BUILDER_2D.max_z = 1
 
 TRAJECTORY_BUILDER_2D.submaps.num_range_data = 60
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.5
@@ -87,4 +87,9 @@ POSE_GRAPH.constraint_builder.ceres_scan_matcher.translation_weight = 15.
 POSE_GRAPH.constraint_builder.ceres_scan_matcher.rotation_weight = 5.
 POSE_GRAPH.constraint_builder.ceres_scan_matcher.ceres_solver_options.max_num_iterations = 20
 
+POSE_GRAPH.optimization_problem.fixed_frame_pose_translation_weight = 1e1
+POSE_GRAPH.optimization_problem.fixed_frame_pose_rotation_weight = 1e1
+POSE_GRAPH.optimization_problem.fixed_frame_pose_use_tolerant_loss = false
+POSE_GRAPH.optimization_problem.fixed_frame_pose_tolerant_loss_param_a = 1
+POSE_GRAPH.optimization_problem.fixed_frame_pose_tolerant_loss_param_b = 1
 return options

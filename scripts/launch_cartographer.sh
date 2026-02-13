@@ -1,5 +1,5 @@
 #!/bin/bash
-sudo pkill -9 -f cartographer
+# sudo pkill -9 -f cartographer
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
@@ -11,6 +11,7 @@ echo "[start_cartographer.sh] Mode: $MODE"
 # Start cartographer in background
 source "$WORKSPACE_DIR/cartographer_ws/install/setup.bash"
 ros2 launch "$WORKSPACE_DIR/cartographer_ws/launch/cartographer.launch.py" mode:=$MODE &
+# ros2 launch "$WORKSPACE_DIR/cartographer_ws/launch/cartographer.launch.py" mode:=$MODE load_map:=/home/nahyeon/maps/farm_map.pbstream &
 
 # Wait for cartographer to initialize
 sleep 5

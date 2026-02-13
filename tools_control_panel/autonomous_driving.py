@@ -8,11 +8,13 @@ import time
 import sys
 import threading
 
-def run(waypoints, get_robot_pose):
+def run(waypoints, get_robot_pose, position_tolerance=0.3, orientation_tolerance=10):
     vt = 0.2
     vr = 0.3
     
-    for i, (target_x, target_y) in enumerate(waypoints):
+    for i, waypoint in enumerate(waypoints):
+        target_x = waypoint['x']
+        target_y = waypoint['y']
         
         while True:
             robot_x, robot_y, robot_yaw = get_robot_pose()
@@ -21,7 +23,7 @@ def run(waypoints, get_robot_pose):
             dy = target_y - robot_y
             distance = math.sqrt(dx*dx + dy*dy)
             
-            if distance < 0.3:
+            if distance < position_tolerance:
                 yield {'vt': 0.0, 'vr': 0.0, 'tt': 0.0, 'tr': 0.0, 'completed': False, 'waypoint_reached': i}
                 break
             
@@ -33,7 +35,7 @@ def run(waypoints, get_robot_pose):
             while angle_diff < -math.pi:
                 angle_diff += 2 * math.pi
             
-            if abs(angle_diff) > math.radians(10):       
+            if abs(angle_diff) > math.radians(orientation_tolerance):       
                 angle_ref1, angle_ref2, angle_ref3 = 15, 60, 120         
                 if angle_diff > 0:
                     print("Turning Left")

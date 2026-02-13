@@ -12,6 +12,7 @@ from pathlib import Path
 from datetime import datetime
 from tf2_ros import Buffer, TransformListener
 from rclpy.parameter import Parameter
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 
 RED1 = (200, 60, 40)
@@ -43,12 +44,18 @@ class MapSaver(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         
         # Map subscription
+        
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
         self.map_subscription = self.create_subscription(
-            OccupancyGrid, '/map', self.map_callback, 10)
+            OccupancyGrid, '/lio_sam/map2d', self.map_callback, qos_profile)
         
         # Trajectory: use MarkerArray if available (sim), else self-track (real)
         self.trajectory_subscription = self.create_subscription(
-            MarkerArray, '/trajectory_node_list', self.trajectory_callback, 10)
+            MarkerArray, '/lio_sam/mapping/trajectory', self.trajectory_callback, 10)
         
         self.last_save_time = 0
         self.save_interval = 1
@@ -92,7 +99,7 @@ class MapSaver(Node):
         current_time = time.time()
         if current_time - self.last_save_time < self.save_interval:
             return  
-        
+        print(msg)
         resolution = msg.info.resolution
         origin_x = msg.info.origin.position.x
         origin_y = msg.info.origin.position.y
@@ -108,7 +115,7 @@ class MapSaver(Node):
             if len(self.trajectory) > 200:
                 self.trajectory.pop(0)
         
-        # Convert occupancy grid to image (NO FLIP - keep original orientation)
+        # Convert occupancy grid to image
         data = np.array(msg.data, dtype=np.int8).reshape((height, width))
         
         img = np.zeros((height, width), dtype=np.uint8)
@@ -116,8 +123,7 @@ class MapSaver(Node):
         img[data == 0] = 255   # Free
         img[data > 0] = 0      # Occupied
         
-        # REMOVED: img = np.flipud(img)  # Don't flip - handle via coordinate transform
-        
+        img = np.flipud(img)
         im = Image.fromarray(img).convert('RGB')
         draw = ImageDraw.Draw(im)
         
@@ -128,9 +134,9 @@ class MapSaver(Node):
         for j in range(0, height, grid_spacing):
             draw.line([(0, j), (width-1, j)], fill=(100, 100, 100), width=1)
         
-        # Draw origin - FIXED coordinate transform
+        # Draw origin
         origin_img_x = int((0 - origin_x) / resolution)
-        origin_img_y = int((0 - origin_y) / resolution)  # CHANGED: removed height - 1 -
+        origin_img_y = height - 1 - int((0 - origin_y) / resolution)
         if 0 <= origin_img_x < width and 0 <= origin_img_y < height:
             cross_size = 20
             draw.line([(origin_img_x - cross_size, origin_img_y), 
@@ -144,30 +150,30 @@ class MapSaver(Node):
         trajectory_to_draw = self.trajectory_nodes if self.trajectory_nodes else self.trajectory
         
         if self.is_simulation:
-            # Simulation: draw nodes as dots - FIXED coordinate transform
+            # Simulation: draw nodes as dots
             for x, y in trajectory_to_draw:
                 img_x = int((x - origin_x) / resolution)
-                img_y = int((y - origin_y) / resolution)  # CHANGED: removed height - 1 -
+                img_y = height - 1 - int((y - origin_y) / resolution)
                 if 0 <= img_x < width and 0 <= img_y < height:
                     draw.ellipse([img_x-1, img_y-1, img_x+1, img_y+1], fill=BLUE2)
         else:
-            # Real: draw trajectory as line - FIXED coordinate transform
+            # Real: draw trajectory as line
             for i in range(len(trajectory_to_draw) - 1):
                 x1, y1 = trajectory_to_draw[i]
                 x2, y2 = trajectory_to_draw[i + 1]
                 img_x1 = int((x1 - origin_x) / resolution)
-                img_y1 = int((y1 - origin_y) / resolution)  # CHANGED: removed height - 1 -
+                img_y1 = height - 1 - int((y1 - origin_y) / resolution)
                 img_x2 = int((x2 - origin_x) / resolution)
-                img_y2 = int((y2 - origin_y) / resolution)  # CHANGED: removed height - 1 -
+                img_y2 = height - 1 - int((y2 - origin_y) / resolution)
                 if (0 <= img_x1 < width and 0 <= img_y1 < height and 
                     0 <= img_x2 < width and 0 <= img_y2 < height):
                     draw.line([(img_x1, img_y1), (img_x2, img_y2)], fill=(0, 255, 0), width=3)
         
-        # Draw robot - FIXED coordinate transform
+        # Draw robot
         if robot_pose:
             x, y, yaw = robot_pose
             img_x = int((x - origin_x) / resolution)
-            img_y = int((y - origin_y) / resolution)  # CHANGED: removed height - 1 -
+            img_y = height - 1 - int((y - origin_y) / resolution)
             
             if 0 <= img_x < width and 0 <= img_y < height:
                 robot_size = 10
@@ -177,21 +183,20 @@ class MapSaver(Node):
                             img_x+robot_size, img_y+robot_size], 
                             fill=BLUE1, outline=RED1, width=2)
                 
-                # Arrow direction - FIXED: y direction flipped for image coordinates
                 end_x = img_x + arrow_length * math.cos(yaw)
-                end_y = img_y + arrow_length * math.sin(yaw)  # CHANGED: removed minus sign
+                end_y = img_y - arrow_length * math.sin(yaw)
                 draw.line([(img_x, img_y), (end_x, end_y)], fill=RED1, width=2)
                 
-                # Arrow head - FIXED: y direction flipped
+                # Arrow head
                 arrow_angle = 30 * math.pi / 180
                 head_length = robot_size * 0.75
                 left_x = end_x - head_length * math.cos(yaw - arrow_angle)
-                left_y = end_y - head_length * math.sin(yaw - arrow_angle)  # CHANGED: removed plus sign
+                left_y = end_y + head_length * math.sin(yaw - arrow_angle)
                 right_x = end_x - head_length * math.cos(yaw + arrow_angle)
-                right_y = end_y - head_length * math.sin(yaw + arrow_angle)  # CHANGED: removed plus sign
+                right_y = end_y + head_length * math.sin(yaw + arrow_angle)
                 draw.polygon([(end_x, end_y), (left_x, left_y), (right_x, right_y)], fill=RED1)
-
-                # Info text
+                
+                # Info text - FIX: Use fixed size instead of textbbox
                 info_text = f"Robot: ({x:.2f}, {y:.2f}, {math.degrees(yaw):.0f}deg)"
                 text_width = len(info_text) * 7  # Approximate width
                 text_height = 15  # Fixed height
