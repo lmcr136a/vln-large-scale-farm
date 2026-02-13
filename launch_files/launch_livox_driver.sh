@@ -12,6 +12,6 @@ if [ "$MODE" = "sim" ]; then
     exit 0
 else
     echo "Starting Real Robot mode - Livox LiDAR..."
-    source "$WORKSPACE_DIR/cartographer_ws/install/setup.bash"
+    source "$WORKSPACE_DIR/livox_driver2_ws/install/setup.bash"
     ros2 launch livox_ros_driver2 msg_MID360_launch.py
 fi

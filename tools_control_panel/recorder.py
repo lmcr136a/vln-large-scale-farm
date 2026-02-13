@@ -243,15 +243,15 @@ class LiDARRecorder:
             sec = msg.header.stamp.sec
             nanosec = msg.header.stamp.nanosec
             
-            # Pack IMU data: timestamp + accel + gyro + quat
-            imu_data = np.array([
-                sec, nanosec,
+            timestamp = np.array([sec, nanosec], dtype=np.int32)
+            self.imu_file.write(timestamp.tobytes())
+
+            sensor_data = np.array([
                 msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
                 msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z,
                 msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w
             ], dtype=np.float32)
-            
-            self.imu_file.write(imu_data.tobytes())
+            self.imu_file.write(sensor_data.tobytes())
             
         except Exception as e:
             print(f"[LiDAR] IMU save error: {e}")

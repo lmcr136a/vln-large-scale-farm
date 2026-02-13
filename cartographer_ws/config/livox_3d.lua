@@ -38,16 +38,16 @@ TRAJECTORY_BUILDER_2D.use_imu_data = true
 TRAJECTORY_BUILDER_2D.imu_gravity_time_constant = 1.0
 
 TRAJECTORY_BUILDER_2D.min_range = 0.5
-TRAJECTORY_BUILDER_2D.max_range = 50.0
+TRAJECTORY_BUILDER_2D.max_range = 30.0
 TRAJECTORY_BUILDER_2D.missing_data_ray_length = 5.0
 TRAJECTORY_BUILDER_2D.voxel_filter_size = 0.1
 
 -- real lidar sensor's height
 TRAJECTORY_BUILDER_2D.min_z = -0.5
-TRAJECTORY_BUILDER_2D.max_z = 1
+TRAJECTORY_BUILDER_2D.max_z = 0.5
 
 TRAJECTORY_BUILDER_2D.submaps.num_range_data = 60
-TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.5
+TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.2
 
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
 TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 5.0

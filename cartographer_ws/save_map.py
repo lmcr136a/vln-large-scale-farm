@@ -29,7 +29,7 @@ class MapSaver(Node):
             Parameter('use_sim_time', Parameter.Type.BOOL, use_sim_time)
         ])
         self.is_simulation = use_sim_time
-        self.workspace_dir = Path(__file__).resolve().parent.parent
+        self.workspace_dir = Path(__file__).resolve().parent
         self.output_dir = self.workspace_dir / 'output'
         
         # Create timestamped figures directory
@@ -64,11 +64,11 @@ class MapSaver(Node):
         self.trajectory_nodes = []
         for marker in msg.markers:
             for point in marker.points:
-                self.trajectory_nodes.append((point.x, point.y))
+                self.trajectory_nodes.append((point.x, point.y, None))
         
     def get_robot_pose_from_tf(self):
         try:
-            transform = self.tf_buffer.lookup_transform('map', 'base_link', rclpy.time.Time())
+            transform = self.tf_buffer.lookup_transform('map', 'livox_frame', rclpy.time.Time())
         except:
             return None
             
@@ -153,8 +153,8 @@ class MapSaver(Node):
         else:
             # Real: draw trajectory as line - FIXED coordinate transform
             for i in range(len(trajectory_to_draw) - 1):
-                x1, y1 = trajectory_to_draw[i]
-                x2, y2 = trajectory_to_draw[i + 1]
+                x1, y1, yaw1 = trajectory_to_draw[i]
+                x2, y2, yaw2 = trajectory_to_draw[i + 1]
                 img_x1 = int((x1 - origin_x) / resolution)
                 img_y1 = int((y1 - origin_y) / resolution)  # CHANGED: removed height - 1 -
                 img_x2 = int((x2 - origin_x) / resolution)
@@ -166,6 +166,7 @@ class MapSaver(Node):
         # Draw robot - FIXED coordinate transform
         if robot_pose:
             x, y, yaw = robot_pose
+            
             img_x = int((x - origin_x) / resolution)
             img_y = int((y - origin_y) / resolution)  # CHANGED: removed height - 1 -
             
@@ -179,16 +180,16 @@ class MapSaver(Node):
                 
                 # Arrow direction - FIXED: y direction flipped for image coordinates
                 end_x = img_x + arrow_length * math.cos(yaw)
-                end_y = img_y + arrow_length * math.sin(yaw)  # CHANGED: removed minus sign
+                end_y = img_y - arrow_length * math.sin(yaw)  # CHANGED: removed minus sign
                 draw.line([(img_x, img_y), (end_x, end_y)], fill=RED1, width=2)
                 
                 # Arrow head - FIXED: y direction flipped
                 arrow_angle = 30 * math.pi / 180
                 head_length = robot_size * 0.75
                 left_x = end_x - head_length * math.cos(yaw - arrow_angle)
-                left_y = end_y - head_length * math.sin(yaw - arrow_angle)  # CHANGED: removed plus sign
+                left_y = end_y + head_length * math.sin(yaw - arrow_angle)  # CHANGED: removed plus sign
                 right_x = end_x - head_length * math.cos(yaw + arrow_angle)
-                right_y = end_y - head_length * math.sin(yaw + arrow_angle)  # CHANGED: removed plus sign
+                right_y = end_y + head_length * math.sin(yaw + arrow_angle)  # CHANGED: removed plus sign
                 draw.polygon([(end_x, end_y), (left_x, left_y), (right_x, right_y)], fill=RED1)
 
                 # Info text
