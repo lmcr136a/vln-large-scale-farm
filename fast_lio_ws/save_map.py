@@ -7,6 +7,7 @@ from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
 from sensor_msgs_py import point_cloud2
 import numpy as np
+import yaml 
 import os
 from datetime import datetime
 from scipy.interpolate import RBFInterpolator
@@ -57,17 +58,18 @@ def get_projection_basis(path_positions):
     
     return centroid, x_axis, y_axis
 
+
 def save_high_res_map(occupancy_grid, metadata, path_2d, projected_yaw, output_dir):
     """
-    Saves a high-resolution map based on the projected plane coordinates.
+    Saves the map as map_latest.png and metadata as map_latest.yaml.
     """
     try:
         # 1. Base map image (Background: g=40)
         img_array = np.zeros((*occupancy_grid.shape, 3), dtype=np.uint8)
         g = 40
-        img_array[occupancy_grid == 0] = [g, g, g] # Unknown
-        img_array[occupancy_grid == 1] = [0, 0, 0]       # Free
-        img_array[occupancy_grid == 2] = [255, 255, 255] # Occupied
+        img_array[occupancy_grid == 0] = [g, g, g] 
+        img_array[occupancy_grid == 1] = [0, 0, 0]       
+        img_array[occupancy_grid == 2] = [255, 255, 255] 
 
         original_img = Image.fromarray(np.flipud(img_array), mode='RGB')
         new_size = (original_img.width * IMAGE_RES_MULTIPLIER, original_img.height * IMAGE_RES_MULTIPLIER)
@@ -79,7 +81,7 @@ def save_high_res_map(occupancy_grid, metadata, path_2d, projected_yaw, output_d
             pv = (metadata['grid_height'] - 1 - (v - metadata['v_min']) / metadata['grid_size']) * IMAGE_RES_MULTIPLIER
             return pu, pv
 
-        line_width = max(int(0.2*ROBOT_CIRCLE_SIZE), 1)
+        line_width = max(int(0.2 * ROBOT_CIRCLE_SIZE), 1)
 
         # 2. Draw Trajectory
         if len(path_2d) > 1:
@@ -87,11 +89,12 @@ def save_high_res_map(occupancy_grid, metadata, path_2d, projected_yaw, output_d
             draw.line(px_path, fill=COLOR_TRAJECTORY, width=line_width)
 
         # 3. Draw Robot Position & Heading
+        curr_u, curr_v = 0.0, 0.0
         if len(path_2d) > 0:
             curr_u, curr_v = path_2d[-1]
             cx, cy = to_px(curr_u, curr_v)
 
-            # Heading Arrow (Using projected yaw)
+            # Heading Arrow
             arrow_len = int(ROBOT_CIRCLE_SIZE * 1.5)
             ax = cx + arrow_len * np.cos(projected_yaw)
             ay = cy - arrow_len * np.sin(projected_yaw)
@@ -99,13 +102,33 @@ def save_high_res_map(occupancy_grid, metadata, path_2d, projected_yaw, output_d
             draw.line([(cx, cy), (ax, ay)], fill=COLOR_ARROW, width=line_width)
             draw.regular_polygon((ax, ay, ROBOT_CIRCLE_SIZE), 3, rotation=np.degrees(projected_yaw)-90, fill=COLOR_ARROW)
 
-            # Position Circle (Drawn over the arrow)
+            # Position Circle
             r = ROBOT_CIRCLE_SIZE
             draw.ellipse([cx-r, cy-r, cx+r, cy+r], fill=COLOR_ROBOT_CIRCLE, outline=COLOR_ARROW, width=line_width)
 
-        img.save(os.path.join(output_dir, 'occupancy_map.png'))
+        # Save Image as map_latest.png
+        img.save(os.path.join(output_dir, 'map_latest.png'))
+
+        # 4. Save Metadata as map_latest.yaml
+        yaml_path = os.path.join(output_dir, 'map_latest.yaml')
+        yaml_data = {
+            'image': 'map_latest.png',
+            'resolution': float(metadata['grid_size']),
+            'origin': [float(metadata['u_min']), float(metadata['v_min']), 0.0],
+            'grid_width': int(metadata['grid_width']),
+            'grid_height': int(metadata['grid_height']),
+            'robot_x': float(curr_u),
+            'robot_y': float(curr_v),
+            'robot_yaw': float(projected_yaw),
+            'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        with open(yaml_path, 'w') as f:
+            yaml.dump(yaml_data, f, default_flow_style=False)
+
     except Exception as e:
-        print(f'[ERROR] High-res map saving failed: {e}')
+        print(f'[ERROR] map_latest saving failed: {e}')
+
 
 class ContinuousPointCloudMapper(Node):
     def __init__(self):

@@ -1,6 +1,6 @@
 # File Paths
 paths:
-  map_dir: '~/box/vln-large-scale-farm/cartographer_ws/output'
+  map_dir: '~/box/vln-large-scale-farm/fast_lio/output'
   data_dir: '~/box/vln-large-scale-farm/data'
 
 # Robot Control Configuration
