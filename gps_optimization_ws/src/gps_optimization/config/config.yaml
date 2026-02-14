@@ -1,0 +1,30 @@
+/**:
+  ros__parameters:
+    # Input topics
+    odom_topic: "/Odometry"
+    gps_topic: "/ublox_driver/receiver_lla"
+    cloud_registered_topic: "/cloud_registered"
+    
+    # Output topics
+    laser_map_gps_fused_topic: "/Laser_map_gps_fused"
+    path_gps_fused_topic: "/path_gps_fused"
+    
+    # Frame IDs
+    map_frame: "map"
+    camera_init_frame: "camera_init"
+    
+    # Map reconstruction settings
+    map_update_interval: 10.0  # seconds between map reconstructions
+    max_scan_history: 1000  # maximum number of scans to keep in memory
+    
+    # GPS noise model (standard deviation in meters)gps_noise_x: 5.0
+    gps_noise_y: 5000.0
+    gps_noise_z: 100000.0
+
+    # Odometry를 매우 강력하게 신뢰 (부드러운 주행 유지)
+    odom_noise_x: 0.00005
+    odom_noise_y: 0.00005
+    odom_noise_z: 0.00005
+    odom_noise_roll: 0.00005
+    odom_noise_pitch: 0.00005
+    odom_noise_yaw: 0.00005

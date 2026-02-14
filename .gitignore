@@ -4,6 +4,8 @@ install/
 log/
 *.egg-info/
 
+fast_lio_sam_ws/ 
+
 # Python
 __pycache__/
 *.py[cod]

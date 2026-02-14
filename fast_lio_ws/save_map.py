@@ -34,6 +34,7 @@ COLOR_ARROW = (100, 100, 255)
 
 os.makedirs(output_dir, exist_ok=True)
 
+
 def get_projection_basis(path_positions):
     """
     Calculates the average slope of the ground and creates basis vectors 
