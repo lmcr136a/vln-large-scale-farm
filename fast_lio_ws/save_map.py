@@ -4,7 +4,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from sensor_msgs.msg import PointCloud2
 from nav_msgs.msg import Path
 from visualization_msgs.msg import Marker
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, PoseStamped, TransformStamped
 from sensor_msgs_py import point_cloud2
 import numpy as np
 import yaml 
@@ -12,20 +12,27 @@ import os
 from datetime import datetime
 from scipy.interpolate import RBFInterpolator
 from PIL import Image, ImageDraw
+import tf2_ros
+from tf2_ros import TransformException
+from rclpy.duration import Duration
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
 
 # ===== Configuration =====
 PUBLISH_GROUND = True
 min_z = 0.15
 max_z = 1.7
-sensor_height = 0.6
-output_dir = './output/'
-pixel_grid_size = 0.5    # Physics/Logic grid size
+sensor_height = 0.9
+output_dir = os.path.join(current_dir, 'output')
+pixel_grid_size = 0.1    # Physics/Logic grid size
 MIN_POINTS_PER_CELL = 5  # Density filter threshold
 IMAGE_RES_MULTIPLIER = 4 # Visual resolution multiplier
 update_rate = 1.0
+TARGET_FRAME = 'map'     # Target frame for all transformations
 
 # Dynamic sizing for robot visualization based on grid resolution
-ROBOT_CIRCLE_SIZE = max(2, int(1/pixel_grid_size/2*IMAGE_RES_MULTIPLIER))
+ROBOT_ACTUAL_SIZE = 1.2
+ROBOT_CIRCLE_SIZE = max(2, int(ROBOT_ACTUAL_SIZE/pixel_grid_size/4*IMAGE_RES_MULTIPLIER))
 
 # Colors (RGB)
 COLOR_TRAJECTORY = (100, 255, 170)      
@@ -93,7 +100,12 @@ def save_high_res_map(occupancy_grid, metadata, path_2d, projected_yaw, output_d
         curr_u, curr_v = 0.0, 0.0
         if len(path_2d) > 0:
             curr_u, curr_v = path_2d[-1]
-            cx, cy = to_px(curr_u, curr_v)
+            rx, ry = to_px(curr_u, curr_v)
+            
+            # circle center from robot xy
+            circle_offset = int(ROBOT_CIRCLE_SIZE * 0.8)
+            cx = rx - circle_offset * np.cos(projected_yaw)
+            cy = ry + circle_offset * np.sin(projected_yaw)
 
             # Heading Arrow
             arrow_len = int(ROBOT_CIRCLE_SIZE * 1.5)
@@ -131,13 +143,145 @@ def save_high_res_map(occupancy_grid, metadata, path_2d, projected_yaw, output_d
         print(f'[ERROR] map_latest saving failed: {e}')
 
 
+def transform_pointcloud2_to_map(pc_msg, tf_buffer, target_frame, logger):
+    """
+    Transform PointCloud2 message to target frame (map).
+    Returns transformed points as numpy array or None if transform fails.
+    """
+    try:
+        # Get transform from source frame to target frame
+        transform = tf_buffer.lookup_transform(
+            target_frame,
+            pc_msg.header.frame_id,
+            pc_msg.header.stamp,
+            timeout=Duration(seconds=0.5)
+        )
+        
+        # Read points from PointCloud2
+        gen = point_cloud2.read_points(pc_msg, field_names=("x", "y", "z"), skip_nans=True)
+        pts = np.array([(p[0], p[1], p[2]) for p in gen])
+        
+        if pts.size == 0:
+            return None
+        
+        # Extract translation and rotation from transform
+        trans = transform.transform.translation
+        rot = transform.transform.rotation
+        
+        # Convert quaternion to rotation matrix
+        x, y, z, w = rot.x, rot.y, rot.z, rot.w
+        R = np.array([
+            [1-2*(y**2+z**2), 2*(x*y-w*z), 2*(x*z+w*y)],
+            [2*(x*y+w*z), 1-2*(x**2+z**2), 2*(y*z-w*x)],
+            [2*(x*z-w*y), 2*(y*z+w*x), 1-2*(x**2+y**2)]
+        ])
+        
+        # Apply transformation: pts_transformed = R * pts + translation
+        pts_transformed = (R @ pts.T).T + np.array([trans.x, trans.y, trans.z])
+        
+        logger.info(f'Transformed {len(pts_transformed)} points from {pc_msg.header.frame_id} to {target_frame}')
+        return pts_transformed
+        
+    except TransformException as ex:
+        logger.warn(f'Could not transform pointcloud: {ex}')
+        return None
+
+
+def transform_path_to_map(path_msg, tf_buffer, target_frame, logger):
+    """
+    Transform Path message to target frame (map).
+    Returns transformed path positions as numpy array or None if transform fails.
+    """
+    try:
+        if not path_msg.poses:
+            return None
+            
+        # Get transform from source frame to target frame
+        transform = tf_buffer.lookup_transform(
+            target_frame,
+            path_msg.header.frame_id,
+            path_msg.header.stamp,
+            timeout=Duration(seconds=0.5)
+        )
+        
+        # Extract translation and rotation from transform
+        trans = transform.transform.translation
+        rot = transform.transform.rotation
+        
+        # Convert quaternion to rotation matrix
+        x, y, z, w = rot.x, rot.y, rot.z, rot.w
+        R = np.array([
+            [1-2*(y**2+z**2), 2*(x*y-w*z), 2*(x*z+w*y)],
+            [2*(x*y+w*z), 1-2*(x**2+z**2), 2*(y*z-w*x)],
+            [2*(x*z-w*y), 2*(y*z+w*x), 1-2*(x**2+y**2)]
+        ])
+        
+        # Transform all poses
+        path_positions = np.array([
+            [p.pose.position.x, p.pose.position.y, p.pose.position.z] 
+            for p in path_msg.poses
+        ])
+        
+        # Apply transformation
+        path_transformed = (R @ path_positions.T).T + np.array([trans.x, trans.y, trans.z])
+        
+        logger.info(f'Transformed path with {len(path_transformed)} poses from {path_msg.header.frame_id} to {target_frame}')
+        return path_transformed
+        
+    except TransformException as ex:
+        logger.warn(f'Could not transform path: {ex}')
+        return None
+
+
+def transform_pose_orientation_to_map(pose, source_frame, tf_buffer, target_frame):
+    """
+    Transform pose orientation to target frame and return the transformed orientation.
+    """
+    try:
+        transform = tf_buffer.lookup_transform(
+            target_frame,
+            source_frame,
+            rclpy.time.Time(),
+            timeout=Duration(seconds=0.5)
+        )
+        
+        # Get rotation from transform
+        rot_tf = transform.transform.rotation
+        x_tf, y_tf, z_tf, w_tf = rot_tf.x, rot_tf.y, rot_tf.z, rot_tf.w
+        
+        # Get rotation from pose
+        q = pose.orientation
+        x_p, y_p, z_p, w_p = q.x, q.y, q.z, q.w
+        
+        # Quaternion multiplication: q_result = q_transform * q_pose
+        w_out = w_tf * w_p - x_tf * x_p - y_tf * y_p - z_tf * z_p
+        x_out = w_tf * x_p + x_tf * w_p + y_tf * z_p - z_tf * y_p
+        y_out = w_tf * y_p - x_tf * z_p + y_tf * w_p + z_tf * x_p
+        z_out = w_tf * z_p + x_tf * y_p - y_tf * x_p + z_tf * w_p
+        
+        # Create transformed orientation
+        class Orientation:
+            def __init__(self, x, y, z, w):
+                self.x, self.y, self.z, self.w = x, y, z, w
+        
+        return Orientation(x_out, y_out, z_out, w_out)
+        
+    except TransformException:
+        return pose.orientation
+
+
 class ContinuousPointCloudMapper(Node):
     def __init__(self):
         super().__init__('continuous_mapper_high_res')
         self.path_positions = []
         self.latest_pose = None
+        self.latest_pose_frame = None
         self.last_save_time = None
         self.save_count = 0
+        
+        # TF2 Setup
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         
         qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE,
                          history=HistoryPolicy.KEEP_LAST, depth=10)
@@ -146,7 +290,7 @@ class ContinuousPointCloudMapper(Node):
         self.path_sub = self.create_subscription(Path, '/path', self.path_callback, qos)
         self.ground_pub = self.create_publisher(PointCloud2, '/ground_from_map', 10)
 
-        print('[INFO] High-resolution Ground Projection Mapper Ready.')
+        print(f'[INFO] High-resolution Ground Projection Mapper Ready (Target Frame: {TARGET_FRAME})')
 
     def generate_smooth_ground(self, x_range, y_range):
         """Generates a smooth ground surface using RBF interpolation."""
@@ -168,26 +312,47 @@ class ContinuousPointCloudMapper(Node):
         except: return None, None, None
 
     def path_callback(self, msg):
-        """Updates robot path and the latest pose."""
-        if not msg.poses: return
-        self.path_positions = np.array([[p.pose.position.x, p.pose.position.y, p.pose.position.z] for p in msg.poses])
-        self.latest_pose = msg.poses[-1].pose
+        """Updates robot path and the latest pose (transformed to map frame)."""
+        if not msg.poses: 
+            return
+        
+        # Transform path to map frame
+        path_transformed = transform_path_to_map(msg, self.tf_buffer, TARGET_FRAME, self.get_logger())
+        
+        if path_transformed is not None:
+            self.path_positions = path_transformed
+            self.latest_pose = msg.poses[-1].pose
+            self.latest_pose_frame = msg.header.frame_id
+        else:
+            # Fallback: use original data if transform fails
+            self.get_logger().warn(f'Using original path data (frame: {msg.header.frame_id})')
+            self.path_positions = np.array([[p.pose.position.x, p.pose.position.y, p.pose.position.z] for p in msg.poses])
+            self.latest_pose = msg.poses[-1].pose
+            self.latest_pose_frame = msg.header.frame_id
 
     def pc_callback(self, msg):
         """Main callback for processing PointCloud and updating the map."""
         current_time = self.get_clock().now()
         if self.last_save_time is not None:
-            if (current_time - self.last_save_time).nanoseconds / 1e9 < update_rate: return
+            if (current_time - self.last_save_time).nanoseconds / 1e9 < update_rate: 
+                return
 
-        gen = point_cloud2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
-        pts = np.array([(p[0], p[1], p[2]) for p in gen])
-        if pts.size == 0 or len(self.path_positions) < 15 or self.latest_pose is None: return
+        # Transform pointcloud to map frame
+        pts = transform_pointcloud2_to_map(msg, self.tf_buffer, TARGET_FRAME, self.get_logger())
+        
+        if pts is None or pts.size == 0:
+            self.get_logger().warn('PointCloud transformation failed or empty')
+            return
+            
+        if len(self.path_positions) < 15 or self.latest_pose is None: 
+            return
 
         # 1. Accurate surface estimation using RBF (for obstacle detection)
         x_min, x_max = pts[:, 0].min(), pts[:, 0].max()
         y_min, y_max = pts[:, 1].min(), pts[:, 1].max()
         surface, gx, gy = self.generate_smooth_ground((x_min, x_max), (y_min, y_max))
-        if surface is None: return
+        if surface is None: 
+            return
 
         # 2. Calculate projection basis (for visualization and angle calculation)
         centroid, basis_x, basis_y = get_projection_basis(self.path_positions)
@@ -202,9 +367,19 @@ class ContinuousPointCloudMapper(Node):
         path_v = np.dot(path_rel, basis_y)
         path_2d = np.column_stack([path_u, path_v])
 
-        # 4. Project robot heading
-        q = self.latest_pose.orientation
-        f_world = np.array([1-2*(q.y**2+q.z**2), 2*(q.x*q.y+q.w*q.z), 2*(q.x*q.z-q.w*q.y)])
+        # 4. Project robot heading (transform orientation to map frame)
+        q_transformed = transform_pose_orientation_to_map(
+            self.latest_pose, 
+            self.latest_pose_frame, 
+            self.tf_buffer, 
+            TARGET_FRAME
+        )
+        
+        f_world = np.array([
+            1-2*(q_transformed.y**2+q_transformed.z**2), 
+            2*(q_transformed.x*q_transformed.y+q_transformed.w*q_transformed.z), 
+            2*(q_transformed.x*q_transformed.z-q_transformed.w*q_transformed.y)
+        ])
         p_yaw = np.arctan2(np.dot(f_world, basis_y), np.dot(f_world, basis_x))
 
         # 5. Create Grid (Based on projected u, v coordinates)
@@ -240,19 +415,29 @@ class ContinuousPointCloudMapper(Node):
         save_high_res_map(grid, meta, path_2d, p_yaw, output_dir)
 
         if PUBLISH_GROUND:
+            # Create header for ground pointcloud in map frame
+            from std_msgs.msg import Header
+            ground_header = Header()
+            ground_header.stamp = msg.header.stamp
+            ground_header.frame_id = TARGET_FRAME
+            
             g_pts = np.vstack([gx.ravel(), gy.ravel(), surface.ravel()]).T
-            g_msg = point_cloud2.create_cloud_xyz32(msg.header, g_pts)
+            g_msg = point_cloud2.create_cloud_xyz32(ground_header, g_pts)
             self.ground_pub.publish(g_msg)
             
         self.last_save_time = current_time
-        print(f'[UPDATE #{self.save_count}] Map saved using ground projection.')
+        print(f'[UPDATE #{self.save_count}] Map saved using ground projection (frame: {TARGET_FRAME})')
 
 def main():
     rclpy.init()
     mapper = ContinuousPointCloudMapper()
-    try: rclpy.spin(mapper)
-    except KeyboardInterrupt: pass
-    finally: mapper.destroy_node(); rclpy.shutdown()
+    try: 
+        rclpy.spin(mapper)
+    except KeyboardInterrupt: 
+        pass
+    finally: 
+        mapper.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
