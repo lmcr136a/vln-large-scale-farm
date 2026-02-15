@@ -57,8 +57,8 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{'use_sim_time': use_sim_time}],
         arguments=cartographer_args,
         remappings=[
-            ('points2', '/lidar3d'),
-            ('imu', '/imu'),
+            ('points2', '/livox/lidar'),
+            ('imu', '/livox/imu'),
             ('fix', '/gps/fix')
         ]
     )

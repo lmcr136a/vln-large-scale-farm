@@ -23,17 +23,17 @@ if [ "$MODE" = "sim" ]; then
     tmux send-keys -t $SESSION:0 "echo '⚠️  Start Isaac Sim manually, then run:'" C-m
     tmux send-keys -t $SESSION:0 "echo 'ros2 launch isaac_cartographer_launch isaac_cartographer.launch.py use_sim_time:=true'" C-m
 else
-    tmux send-keys -t $SESSION:0 "source $WORKSPACE_DIR/cartographer_ws/install/setup.bash" C-m
+    tmux send-keys -t $SESSION:0 "source $WORKSPACE_DIR/livox_driver2_ws/install/setup.bash" C-m
     tmux send-keys -t $SESSION:0 "ros2 launch livox_ros_driver2 msg_MID360_launch.py" C-m
 fi
 
-sleep 3
+sleep 1
 
 # Window 1: Cartographer + Map Saver 
-tmux new-window -t $SESSION:1 -n "carto"
-tmux send-keys -t $SESSION:1 "bash $SCRIPT_DIR/launch_cartographer.sh $MODE" C-m
+tmux new-window -t $SESSION:1 -n "slam"
+tmux send-keys -t $SESSION:1 "bash $SCRIPT_DIR/launch_slam.sh $MODE" C-m
 
-sleep 3
+sleep 1
 
 # Window 2: Control Panel
 tmux new-window -t $SESSION:2 -n "control"

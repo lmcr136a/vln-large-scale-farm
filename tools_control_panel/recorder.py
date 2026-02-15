@@ -185,10 +185,10 @@ class LiDARRecorder:
         
         # Create ROS2 subscribers
         self.lidar_sub = self.ros_node.create_subscription(
-            PointCloud2, '/lidar3d', self.lidar_callback, 10
+            PointCloud2, '/livox/lidar', self.lidar_callback, 10
         )
         self.imu_sub = self.ros_node.create_subscription(
-            Imu, '/imu', self.imu_callback, 100
+            Imu, '/livox/imu', self.imu_callback, 100
         )
         
         self.recording = True

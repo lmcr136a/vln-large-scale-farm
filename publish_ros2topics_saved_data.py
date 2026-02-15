@@ -53,7 +53,7 @@ class DataPublisher(Node):
     def __init__(self, dataset_dir):
         super().__init__("data_publisher")
 
-        self.declare_parameter("lidar_topic", "/lidar3d")
+        self.declare_parameter("lidar_topic", "/livox/lidar")
         self.declare_parameter("imu_topic", "/imu")
         self.declare_parameter("frame_id", "livox_frame")
         self.declare_parameter("publish_hz", 1000.0)
