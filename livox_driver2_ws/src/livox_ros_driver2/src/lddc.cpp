@@ -321,7 +321,7 @@ void Lddc::InitPointcloud2Msg(const StoragePacket& pkg, PointCloud2& cloud, uint
     LivoxPointXyzrtlt point;
     point.x = pkg.points[i].x;
     point.y = pkg.points[i].y;
-    point.z = -pkg.points[i].z;
+    point.z = pkg.points[i].z;
     point.reflectivity = pkg.points[i].intensity;
     point.tag = pkg.points[i].tag;
     point.line = pkg.points[i].line;
@@ -388,7 +388,7 @@ void Lddc::FillPointsToCustomMsg(CustomMsg& livox_msg, const StoragePacket& pkg)
     CustomPoint point;
     point.x = points[i].x;
     point.y = points[i].y;
-    point.z = -points[i].z; // Inverted !!!!!!!!!!!!!!!!!!!!!
+    point.z = points[i].z; // Inverted !!!!!!!!!!!!!!!!!!!!!
     point.reflectivity = points[i].intensity;
     point.tag = points[i].tag;
     point.line = points[i].line;
@@ -446,7 +446,7 @@ void Lddc::FillPointsToPclMsg(const StoragePacket& pkg, PointCloud& pcl_msg) {
     pcl::PointXYZI point;
     point.x = points[i].x;
     point.y = points[i].y;
-    point.z = -points[i].z;
+    point.z = points[i].z;
     point.intensity = points[i].intensity;
 
     pcl_msg.points.push_back(std::move(point));
@@ -489,10 +489,10 @@ void Lddc::InitImuMsg(const ImuData& imu_data, ImuMsg& imu_msg, uint64_t& timest
 
   imu_msg.angular_velocity.x = imu_data.gyro_x;
   imu_msg.angular_velocity.y = imu_data.gyro_y;
-  imu_msg.angular_velocity.z = -imu_data.gyro_z;
+  imu_msg.angular_velocity.z = imu_data.gyro_z;
   imu_msg.linear_acceleration.x = imu_data.acc_x;
   imu_msg.linear_acceleration.y = imu_data.acc_y;
-  imu_msg.linear_acceleration.z = -imu_data.acc_z;
+  imu_msg.linear_acceleration.z = imu_data.acc_z;
 }
 
 void Lddc::PublishImuData(LidarImuDataQueue& imu_data_queue, const uint8_t index) {
