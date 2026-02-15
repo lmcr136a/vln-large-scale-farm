@@ -1,7 +1,7 @@
 #!/bin/bash
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
+SCRIPT_DIR="launch_files"
+WORKSPACE_DIR=$SCRIPT_DIR
 
 # Mode selection: real or sim
 MODE="${1:-real}"
@@ -39,9 +39,16 @@ sleep 1
 tmux new-window -t $SESSION:2 -n "control"
 tmux send-keys -t $SESSION:2 "bash $SCRIPT_DIR/launch_control_panel.sh" C-m
 
-# Attach to session
-tmux new-window -t "$SESSION:3" -n "-"
-tmux send-keys -t "$SESSION:3" "clear; printf '%s\n' \
+# Window 3: 2D Map Saver
+tmux new-window -t $SESSION:3 -n "2dmap"
+tmux send-keys -t $SESSION:3 "python3 fast_lio_ws/save_map.py" C-m
+
+# Window 4: Rosbag
+tmux new-window -t $SESSION:4 -n "rosbag"
+
+# Window 5: Status Info
+tmux new-window -t "$SESSION:5" -n "---"
+tmux send-keys -t "$SESSION:5" "clear; printf '%s\n' \
 '' \
 '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
 ' Navigation System Started in $MODE mode' \
@@ -51,6 +58,8 @@ tmux send-keys -t "$SESSION:3" "clear; printf '%s\n' \
 '  0: Lidar Sensor ($MODE)' \
 '  1: Cartographer + Map Saver' \
 '  2: Control Panel' \
+'  3: 2D Map Saver' \
+'  4: Rosbag' \
 '' \
 'Control Panel:' \
 '  http://100.78.219.75:8000/control.html' \

@@ -3,6 +3,8 @@ import time
 import threading
 import pyzed.sl as sl
 import cv2
+import subprocess
+import signal
 import numpy as np
 from datetime import datetime
 
@@ -83,7 +85,7 @@ class ZEDSVORecorder(threading.Thread):
         self.frame_lock = threading.Lock()
         
         # Optimization: Downscale for ROS to 540p (0.5) or 360p (0.33)
-        self.downscale_factor = 0.4 
+        self.downscale_factor = 0.2
 
         self.rgb_topic = f"/zed/rgb_{self.name.lower()}"
         self.rgb_pub = self.ros_node.create_publisher(Image, self.rgb_topic, _make_qos_sensor())
@@ -211,6 +213,7 @@ class MultiSensorRecorder:
         self.current_session_dir = None
         self.ros_node = ros_node
         self.zed_recorders = {}
+        self.rosbag_process = None 
 
     def create_session(self, session_name=None):
         if session_name is None:
@@ -236,13 +239,37 @@ class MultiSensorRecorder:
     def start_recording(self):
         for recorder in self.zed_recorders.values():
             recorder.start_recording(self.current_session_dir)
-        print("\n[Recorder] All ZED sensors recording started\n")
+            
+        rosbag_dir = os.path.join(self.current_session_dir, "rosbag")
+        self.rosbag_process = subprocess.Popen([
+            "ros2", "bag", "record",
+            "-o", rosbag_dir,
+            "-e", "/livox/.*|/zed/.*"
+        ])
+        print("\n[Recorder] ZED + Rosbag recording started\n")
 
     def stop_recording(self):
         for recorder in self.zed_recorders.values():
             recorder.stop_recording()
-        print("\n[Recorder] All ZED sensors recording stopped\n")
+
+        if self.rosbag_process:
+            self.rosbag_process.send_signal(signal.SIGINT)
+            try:
+                self.rosbag_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.rosbag_process.kill()
+            self.rosbag_process = None
+        
+        print("\n[Recorder] Recording stopped\n")
 
     def shutdown(self):
+        if self.rosbag_process:
+            self.rosbag_process.send_signal(signal.SIGINT)
+            try:
+                self.rosbag_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.rosbag_process.kill()
+            self.rosbag_process = None
+        
         for recorder in self.zed_recorders.values():
             recorder.stop()

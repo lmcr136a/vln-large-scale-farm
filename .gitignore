@@ -16,6 +16,8 @@ env/
 venv/
 *.egg
 
+fast_lio_ws/src/FAST_LIO/launch/mapping.launch.py
+
 # Data and outputs
 data/
 output/
