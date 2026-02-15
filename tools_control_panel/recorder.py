@@ -8,16 +8,63 @@ from datetime import datetime
 
 # ROS2 imports
 import rclpy
-from sensor_msgs.msg import PointCloud2, Imu
-from sensor_msgs_py import point_cloud2
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from std_msgs.msg import Header
+from sensor_msgs.msg import Image
 
 stop_event = threading.Event()
 
+# ---- Publish rate (set 10.0, if too heavy -> 5.0) ----
+PUBLISH_HZ = 3.0
+
+
+def _make_qos_sensor():
+    # Lighter QoS for high-bandwidth image topics
+    return QoSProfile(
+        history=HistoryPolicy.KEEP_LAST,
+        depth=1,
+        reliability=ReliabilityPolicy.BEST_EFFORT
+    )
+
+
+def _np_to_img_msg(np_img, encoding, frame_id, stamp_sec, stamp_nsec):
+    """
+    Create sensor_msgs/Image from numpy array.
+    - np_img: HxWxC (uint8) for rgb
+    - encoding: 'rgb8'
+    """
+    msg = Image()
+    msg.header = Header()
+    msg.header.stamp.sec = int(stamp_sec)
+    msg.header.stamp.nanosec = int(stamp_nsec)
+    msg.header.frame_id = frame_id
+
+    if np_img.ndim == 2:
+        h, w = np_img.shape
+        c = 1
+    else:
+        h, w, c = np_img.shape
+
+    msg.height = h
+    msg.width = w
+    msg.encoding = encoding
+    msg.is_bigendian = False
+
+    if encoding == "rgb8":
+        # Expect uint8 HxWx3
+        if np_img.dtype != np.uint8:
+            np_img = np_img.astype(np.uint8, copy=False)
+        msg.step = w * 3
+        msg.data = np_img.tobytes()
+    else:
+        raise ValueError(f"Unsupported encoding: {encoding}")
+
+    return msg
+
 
 class ZEDSVORecorder(threading.Thread):
-    """Records ZED camera to SVO2 file with samples every N seconds"""
     def __init__(self, serial_number, name, output_dir, ros_node, socketio=None, 
-                 sample_interval_sec=300, always_stream=False):
+                 sample_interval_sec=300, always_stream=False, publish_hz=PUBLISH_HZ, frame_id=None):
         super().__init__(name=name)
         self.serial = serial_number
         self.name = name
@@ -28,288 +75,174 @@ class ZEDSVORecorder(threading.Thread):
         self.recording = False
         self.always_stream = always_stream
         self.sample_interval_sec = sample_interval_sec
+        self.publish_hz = float(publish_hz)
+        self.publish_period = 1.0 / self.publish_hz
+        self.frame_id = frame_id or f"zed_{name}"
+
         self.latest_frame = None
         self.frame_lock = threading.Lock()
         
-        # SVO recording path (will be set when recording starts)
-        self.svo_path = None
-        self.samples_dir = None
-        
-        # Initialize camera
+        # Optimization: Downscale for ROS to 540p (0.5) or 360p (0.33)
+        self.downscale_factor = 0.4 
+
+        self.rgb_topic = f"/zed/rgb_{self.name.lower()}"
+        self.rgb_pub = self.ros_node.create_publisher(Image, self.rgb_topic, _make_qos_sensor())
+
         self.cam = sl.Camera()
         init = sl.InitParameters()
-        input_type = sl.InputType()
-        input_type.set_from_serial_number(serial_number)
-        init.input = input_type
-        init.depth_mode = sl.DEPTH_MODE.NEURAL
-        init.coordinate_units = sl.UNIT.METER
-        init.camera_resolution = sl.RESOLUTION.HD1080
-        init.camera_fps = 30
+        init.set_from_serial_number(serial_number)
         
+        # PERFORMANCE FIX: NEURAL depth is too heavy for high-speed streaming.
+        # Use ULTRA or PERFORMANCE if you aren't doing high-precision mapping.
+        init.depth_mode = sl.DEPTH_MODE.ULTRA 
+        
+        init.camera_resolution = sl.RESOLUTION.HD1080 
+        init.camera_fps = 30 # Set higher internal FPS
+        init.sdk_verbose = False
+
         status = self.cam.open(init)
         if status != sl.ERROR_CODE.SUCCESS:
-            raise RuntimeError(f"Failed to open ZED camera {serial_number}: {status}")
-        
-        self.image_rgb = sl.Mat()
-        self.image_depth = sl.Mat()
+            raise RuntimeError(f"ZED {serial_number} Open Failed: {status}")
+
+        # Pre-allocate sl.Mat to avoid memory fragmentation
+        self.image_zed = sl.Mat()
         self.runtime = sl.RuntimeParameters()
         
-        print(f"[{self.name}] Camera initialized - S/N: {serial_number}")
-        if self.always_stream:
-            print(f"[{self.name}] Always streaming to web")
-    
+    def run(self):
+        print(f"[{self.name}] Thread started. Target: {self.publish_hz}Hz")
+        next_pub_time = time.time()
+        next_sample_time = time.time()
+
+        while self.running and not stop_event.is_set():
+            # grab() is the bottleneck. 
+            if self.cam.grab(self.runtime) == sl.ERROR_CODE.SUCCESS:
+                now = time.time()
+                
+                if now >= next_pub_time:
+                    # 1. Retrieve directly
+                    self.cam.retrieve_image(self.image_zed, sl.VIEW.LEFT)
+                    
+                    # 2. Fast conversion: Only process what is needed
+                    # Note: get_data() is a heavy copy operation
+                    rgba_np = self.image_zed.get_data()
+                    
+                    # 3. Resize first (reduces cvtColor workload by ~70%)
+                    h, w = rgba_np.shape[:2]
+                    small_rgba = cv2.resize(rgba_np, 
+                                          (int(w * self.downscale_factor), int(h * self.downscale_factor)), 
+                                          interpolation=cv2.INTER_NEAREST) # INTER_NEAREST is faster
+                    
+                    rgb_small = cv2.cvtColor(small_rgba, cv2.COLOR_RGBA2RGB)
+
+                    # 4. Publish to ROS
+                    try:
+                        zed_ts = self.cam.get_timestamp(sl.TIME_REFERENCE.IMAGE)
+                        ts_ns = zed_ts.get_nanoseconds()
+                        
+                        msg = _np_to_img_msg(
+                            rgb_small, "rgb8", self.frame_id, 
+                            ts_ns // 1_000_000_000, ts_ns % 1_000_000_000
+                        )
+                        self.rgb_pub.publish(msg)
+                    except Exception as e:
+                        print(f"[{self.name}] Pub Error: {e}")
+
+                    # 5. Handle Web Stream (reuse resized image)
+                    if self.always_stream and self.socketio:
+                        _, buffer = cv2.imencode(".jpg", rgb_small, [cv2.IMWRITE_JPEG_QUALITY, 50])
+                        with self.frame_lock:
+                            self.latest_frame = buffer.tobytes()
+
+                    next_pub_time = now + self.publish_period
+                
+                # 6. Save samples at specified interval
+                if self.recording and now >= next_sample_time:
+                    timestamp_str = datetime.now().strftime("%m%d_%H%M")
+                    self.save_sample(timestamp_str)
+                    next_sample_time = now + self.sample_interval_sec
+            else:
+                # Avoid busy-waiting if grab fails
+                time.sleep(0.01)
+
+        self.cam.close()
+
+    def stop(self):
+        self.running = False
+        if self.is_alive():
+            self.join()
+        self.cam.close()
+
     def start_recording(self, output_dir):
-        """Start SVO2 recording"""
         self.output_dir = output_dir
         self.svo_path = os.path.join(output_dir, f"rgbd_{self.name}.svo2")
         self.samples_dir = os.path.join(output_dir, "samples")
         os.makedirs(self.samples_dir, exist_ok=True)
+
+        rec_params = sl.RecordingParameters(self.svo_path, sl.SVO_COMPRESSION_MODE.H265)
+        rec_params.transcode_streaming_input = True
         
-        # SVO recording parameters
-        recording_params = sl.RecordingParameters()
-        recording_params.compression_mode = sl.SVO_COMPRESSION_MODE.H265  # Best compression
-        recording_params.video_filename = self.svo_path
-        recording_params.transcode_streaming_input = True
-        
-        err = self.cam.enable_recording(recording_params)
-        if err != sl.ERROR_CODE.SUCCESS:
-            raise RuntimeError(f"Failed to enable SVO recording: {err}")
-        
-        self.recording = True
-        self.last_sample_time = time.time() - self.sample_interval_sec - 1
-        print(f"[{self.name}] SVO2 recording started: {self.svo_path}")
-        print(f"[{self.name}] Samples will be saved every {self.sample_interval_sec}s")
-    
+        if self.cam.enable_recording(rec_params) != sl.ERROR_CODE.SUCCESS:
+            print(f"[{self.name}] Failed to start SVO recording")
+        else:
+            self.recording = True
+            self.last_sample_time = time.time()
+
     def stop_recording(self):
-        """Stop SVO2 recording"""
         self.recording = False
         self.cam.disable_recording()
-        print(f"[{self.name}] SVO2 recording stopped: {self.svo_path}")
-    
+
     def save_sample(self, timestamp_str):
-        """Save sample RGB and Depth images"""
-        self.cam.retrieve_image(self.image_rgb, sl.VIEW.LEFT)
-        rgb_np = self.image_rgb.get_data()
-        
-        self.cam.retrieve_measure(self.image_depth, sl.MEASURE.DEPTH)
-        depth_np = self.image_depth.get_data()
-        
-        # Convert and save RGB
-        rgb_img = cv2.cvtColor(rgb_np, cv2.COLOR_RGBA2RGB)
-        rgb_path = os.path.join(self.samples_dir, f"{timestamp_str}_{self.name}.jpg")
-        cv2.imwrite(rgb_path, rgb_img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        
-        # Convert depth to 16-bit PNG (mm units, lossless compression)
-        depth_mm = np.clip(depth_np, 0, 65535).astype(np.uint16)
-        depth_path = os.path.join(self.samples_dir, f"{timestamp_str}_{self.name}_depth.png")
-        cv2.imwrite(depth_path, depth_mm)
-        
-        print(f"[{self.name}] Sample saved: {timestamp_str}")
+        # Save RGB sample from current Mat
+        self.cam.retrieve_image(self.image_zed, sl.VIEW.LEFT)
+        img = cv2.cvtColor(self.image_zed.get_data(), cv2.COLOR_RGBA2RGB)
+        path = os.path.join(self.samples_dir, f"{timestamp_str}_{self.name}.jpg")
+        cv2.imwrite(path, img, [cv2.IMWRITE_JPEG_QUALITY, 85])
     
     def get_latest_frame(self):
-        """Get latest frame for web streaming"""
+        """Return the latest frame for web streaming"""
         with self.frame_lock:
             return self.latest_frame
-    
-    def run(self):
-        frame_count = 0
-        print(f"[{self.name}] Thread started")
         
-        while self.running and not stop_event.is_set():
-            if self.cam.grab(self.runtime) == sl.ERROR_CODE.SUCCESS:
-                frame_count += 1
-                
-                # Web streaming
-                if self.always_stream and self.socketio:
-                    try:
-                        self.cam.retrieve_image(self.image_rgb, sl.VIEW.LEFT)
-                        rgb_np = self.image_rgb.get_data()
-                        rgb_display = cv2.cvtColor(rgb_np.copy(), cv2.COLOR_RGBA2RGB)
-                        H, W, _ = rgb_display.shape
-                        scale = 0.2
-                        rgb_display = cv2.resize(rgb_display, (int(W*scale), int(H*scale)))
-                        _, buffer = cv2.imencode('.jpg', rgb_display, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                        
-                        with self.frame_lock:
-                            self.latest_frame = buffer.tobytes()
-                    except Exception as e:
-                        print(f"[{self.name}] Web streaming error: {e}")
-                
-                # Save sample every N seconds
-                if self.recording:
-                    current_time = time.time()
-                    if current_time - self.last_sample_time >= self.sample_interval_sec:
-                        timestamp_str = datetime.now().strftime("%m%d_%H%M")
-                        self.save_sample(timestamp_str)
-                        self.last_sample_time = current_time
-                    
-                    if frame_count % 300 == 0:  # Every 10 seconds at 30fps
-                        print(f"[{self.name}] Recorded {frame_count} frames")
-            else:
-                time.sleep(0.001)
-        
-        print(f"[{self.name}] Exiting safely. Total frames: {frame_count}")
-    
-    def stop(self):
-        self.running = False
-        stop_event.set()
-        self.join()
-        self.cam.close()
-        print(f"[{self.name}] Stopped.")
-
-
-class LiDARRecorder:
-    """Records LiDAR point clouds and IMU to binary files"""
-    def __init__(self, output_dir, ros_node):
-        self.output_dir = output_dir
-        self.ros_node = ros_node
-        self.recording = False
-        
-        # Binary file handles
-        self.pc_file = None
-        self.imu_file = None
-        
-        # ROS subscribers
-        self.lidar_sub = None
-        self.imu_sub = None
-        
-        print("[LiDAR] Recorder initialized")
-    
-    def start_recording(self):
-        """Start recording LiDAR data"""
-        pc_path = os.path.join(self.output_dir, "lidar_pointcloud.bin")
-        imu_path = os.path.join(self.output_dir, "lidar_imu.bin")
-        
-        self.pc_file = open(pc_path, 'wb')
-        self.imu_file = open(imu_path, 'wb')
-        
-        # Create ROS2 subscribers
-        self.lidar_sub = self.ros_node.create_subscription(
-            PointCloud2, '/livox/lidar', self.lidar_callback, 10
-        )
-        self.imu_sub = self.ros_node.create_subscription(
-            Imu, '/livox/imu', self.imu_callback, 100
-        )
-        
-        self.recording = True
-        print(f"[LiDAR] Recording started")
-        print(f"  - PointCloud: {pc_path}")
-        print(f"  - IMU: {imu_path}")
-    
-    def stop_recording(self):
-        """Stop recording"""
-        self.recording = False
-        time.sleep(0.1)
-        
-        if self.pc_file:
-            self.pc_file.close()
-        if self.imu_file:
-            self.imu_file.close()
-        
-        print("[LiDAR] Recording stopped")
-    
-    def lidar_callback(self, msg):
-        """Save LiDAR point cloud with timestamp"""
-        if not self.recording:
-            return
-        
-        try:
-            sec = msg.header.stamp.sec
-            nanosec = msg.header.stamp.nanosec
-            
-            # Extract points
-            points_list = []
-            for data in point_cloud2.read_points(msg, field_names=("x", "y", "z", "intensity"), skip_nans=True):
-                points_list.append([data[0], data[1], data[2], data[3]])
-            
-            if len(points_list) > 0:
-                points_np = np.array(points_list, dtype=np.float32)
-                
-                # Write format: [timestamp_sec][timestamp_nsec][num_points][points_data]
-                self.pc_file.write(np.array([sec], dtype=np.int32).tobytes())
-                self.pc_file.write(np.array([nanosec], dtype=np.int32).tobytes())
-                self.pc_file.write(np.array([len(points_np)], dtype=np.int32).tobytes())
-                self.pc_file.write(points_np.tobytes())
-                
-        except Exception as e:
-            print(f"[LiDAR] Point cloud save error: {e}")
-    
-    def imu_callback(self, msg):
-        """Save IMU data with timestamp"""
-        if not self.recording:
-            return
-        
-        try:
-            sec = msg.header.stamp.sec
-            nanosec = msg.header.stamp.nanosec
-            
-            timestamp = np.array([sec, nanosec], dtype=np.int32)
-            self.imu_file.write(timestamp.tobytes())
-
-            sensor_data = np.array([
-                msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
-                msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z,
-                msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w
-            ], dtype=np.float32)
-            self.imu_file.write(sensor_data.tobytes())
-            
-        except Exception as e:
-            print(f"[LiDAR] IMU save error: {e}")
-
 
 class MultiSensorRecorder:
-    """Main recorder managing all sensors"""
+    """Main recorder managing ZED sensors only"""
     def __init__(self, ros_node, output_base_dir="./data"):
         self.output_base_dir = output_base_dir
         self.current_session_dir = None
         self.ros_node = ros_node
-        
-        # Recorders
         self.zed_recorders = {}
-        self.lidar_recorder = LiDARRecorder(None, self.ros_node)
-        
+
     def create_session(self, session_name=None):
-        """Create new recording session directory"""
         if session_name is None:
             session_name = datetime.now().strftime("%Y%m%d_%H%M")
-        
+
         self.current_session_dir = os.path.join(self.output_base_dir, session_name)
         os.makedirs(self.current_session_dir, exist_ok=True)
-        
-        # Update LiDAR recorder output dir
-        self.lidar_recorder.output_dir = self.current_session_dir
-        
         print(f"\n[Recorder] Session created: {self.current_session_dir}\n")
         return self.current_session_dir
-    
+
     def add_zed_camera(self, serial_number, name, **kwargs):
-        """Add ZED camera recorder"""
         recorder = ZEDSVORecorder(
-            serial_number, name, self.current_session_dir, self.ros_node, **kwargs
+            serial_number=serial_number,
+            name=name,
+            output_dir=self.current_session_dir,
+            ros_node=self.ros_node,
+            **kwargs,
         )
         self.zed_recorders[name] = recorder
         recorder.start()
         return recorder
-    
+
     def start_recording(self):
-        """Start all recorders"""
         for recorder in self.zed_recorders.values():
             recorder.start_recording(self.current_session_dir)
-        
-        self.lidar_recorder.start_recording()
-        
-        print("\n[Recorder] All sensors recording started\n")
-    
+        print("\n[Recorder] All ZED sensors recording started\n")
+
     def stop_recording(self):
-        """Stop all recorders"""
         for recorder in self.zed_recorders.values():
             recorder.stop_recording()
-        
-        self.lidar_recorder.stop_recording()
-        
-        print("\n[Recorder] All sensors recording stopped\n")
-    
+        print("\n[Recorder] All ZED sensors recording stopped\n")
+
     def shutdown(self):
-        """Clean shutdown"""
         for recorder in self.zed_recorders.values():
             recorder.stop()

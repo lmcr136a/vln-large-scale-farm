@@ -16,4 +16,3 @@ ros2 launch fast_lio mapping.launch.py config_path:=/home/nahyeon/box/vln-large-
 sleep 1
 
 # Start map saver with mode parameter
-python3 "$WORKSPACE_DIR/fast_lio_ws/save_map.py"

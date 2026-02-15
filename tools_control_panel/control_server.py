@@ -204,10 +204,11 @@ class ControlServer:
         @self.socketio.on('stop_autonomous')
         def handle_stop_autonomous():
             self.auto_controller.stop()
-        
+            
+            
         @self.socketio.on('start_recording')
         def handle_start_recording(dirname):
-            """Start multi-sensor recording (ZED SVO2 + LiDAR)"""
+            """Start multi-sensor recording (ZED SVO2 only)"""
             print(f"🔴 Received start_recording: {dirname}")
             
             if self.is_recording:
@@ -233,8 +234,6 @@ class ControlServer:
                 print(f"✅ Recording started to: {self.current_session_dir}")
                 print(f"   - Front ZED: rgbd_front.svo2")
                 print(f"   - Back ZED: rgbd_back.svo2")
-                print(f"   - LiDAR: lidar_pointcloud.bin")
-                print(f"   - LiDAR IMU: lidar_imu.bin")
                 print(f"   - Samples: Every {self.config['recording'].get('sample_interval_sec', 300)}s")
                 
             except Exception as e:
@@ -261,13 +260,9 @@ class ControlServer:
                     print("   20YYMMDD_HHMM/")
                     print("   ├── rgbd_front.svo2")
                     print("   ├── rgbd_back.svo2")
-                    print("   ├── lidar_pointcloud.bin")
-                    print("   ├── lidar_imu.bin")
                     print("   └── samples/")
                     print("       ├── MMDD_HHMM_front.jpg")
-                    print("       ├── MMDD_HHMM_front_depth.png")
-                    print("       ├── MMDD_HHMM_back.jpg")
-                    print("       └── MMDD_HHMM_back_depth.png")
+                    print("       └── MMDD_HHMM_back.jpg")
                     
                 self.current_session_dir = None
                 
@@ -318,7 +313,7 @@ class ControlServer:
             print(f"Error during recorder shutdown: {e}")
         
         print("✅ Cleanup complete")
-    
+        
     def run(self):
         """Run server"""
         # Start background threads
@@ -347,8 +342,6 @@ class ControlServer:
         print(f"🚀 Control server running on port {self.config['server']['port']}...")
         print(f"📊 Recording Format: SVO2 (H.265 compressed)")
         print(f"   - ZED Cameras: 30 FPS (compressed in SVO2)")
-        print(f"   - LiDAR: ~{self.config['recording']['lidar_hz']}Hz")
-        print(f"   - IMU: ~{self.config['recording']['imu_hz']}Hz")
         print(f"   - Samples: Every {self.config['recording'].get('sample_interval_sec', 300)}s")
         
         try:
