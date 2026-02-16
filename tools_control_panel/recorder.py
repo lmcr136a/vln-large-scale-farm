@@ -244,7 +244,7 @@ class MultiSensorRecorder:
         self.rosbag_process = subprocess.Popen([
             "ros2", "bag", "record",
             "-o", rosbag_dir,
-            "-e", "/livox/.*|/zed/.*"
+            "-e", "/livox/.*|/zed/.*|/ground_from_map|/gps_trajectory_marker|/gps/fix"
         ])
         print("\n[Recorder] ZED + Rosbag recording started\n")
 

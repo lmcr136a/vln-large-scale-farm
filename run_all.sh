@@ -23,7 +23,7 @@ if [ "$MODE" = "sim" ]; then
     tmux send-keys -t $SESSION:0 "echo '⚠️  Start Isaac Sim manually, then run:'" C-m
     tmux send-keys -t $SESSION:0 "echo 'ros2 launch isaac_cartographer_launch isaac_cartographer.launch.py use_sim_time:=true'" C-m
 else
-    tmux send-keys -t $SESSION:0 "source $WORKSPACE_DIR/livox_driver2_ws/install/setup.bash" C-m
+    tmux send-keys -t $SESSION:0 "source livox_driver2_ws/install/setup.bash" C-m
     tmux send-keys -t $SESSION:0 "ros2 launch livox_ros_driver2 msg_MID360_launch.py" C-m
 fi
 
@@ -43,12 +43,18 @@ tmux send-keys -t $SESSION:2 "bash $SCRIPT_DIR/launch_control_panel.sh" C-m
 tmux new-window -t $SESSION:3 -n "2dmap"
 tmux send-keys -t $SESSION:3 "python3 fast_lio_ws/save_map.py" C-m
 
-# Window 4: Rosbag
-tmux new-window -t $SESSION:4 -n "rosbag"
+# Window 4: gps
+tmux new-window -t $SESSION:4 -n "gps"
+tmux send-keys -t $SESSION:4 "python3 gps_optimization_ws/pub_gps.py" C-m
 
-# Window 5: Status Info
-tmux new-window -t "$SESSION:5" -n "---"
-tmux send-keys -t "$SESSION:5" "clear; printf '%s\n' \
+
+tmux new-window -t $SESSION:5 -n "gps-vis"
+tmux send-keys -t $SESSION:5 "python3 gps_optimization_ws/vis_gps_path.py" C-m
+
+
+# Window 6: Status Info
+tmux new-window -t "$SESSION:6" -n "---"
+tmux send-keys -t "$SESSION:6" "clear; printf '%s\n' \
 '' \
 '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
 ' Navigation System Started in $MODE mode' \

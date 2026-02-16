@@ -10,7 +10,7 @@ import numpy as np
 import yaml 
 import os
 from datetime import datetime
-from scipy.interpolate import RBFInterpolator
+from scipy.interpolate import RBFInterpolator, RegularGridInterpolator
 from PIL import Image, ImageDraw
 import tf2_ros
 from tf2_ros import TransformException
@@ -29,6 +29,7 @@ MIN_POINTS_PER_CELL = 5  # Density filter threshold
 IMAGE_RES_MULTIPLIER = 4 # Visual resolution multiplier
 update_rate = 1.0
 TARGET_FRAME = 'map'     # Target frame for all transformations
+RBF_GRID_SIZE = 1.0      # Ground estimation coarse grid
 
 # Dynamic sizing for robot visualization based on grid resolution
 ROBOT_ACTUAL_SIZE = 1.2
@@ -47,8 +48,13 @@ def get_projection_basis(path_positions):
     Calculates the average slope of the ground and creates basis vectors 
     for plane projection using the recent path history.
     """
-    # Estimate ground normal vector using the last 50 path points
-    pts = path_positions[-50:].copy()
+    # Estimate ground normal vector using downsampled path points
+    if len(path_positions) < 1000:
+        downsampling = 10   # 100
+    else:
+        downsampling = int(len(path_positions)/100)
+        
+    pts = path_positions[::downsampling].copy()
     pts[:, 2] -= sensor_height
     centroid = np.mean(pts, axis=0)
     pts_centered = pts - centroid
@@ -77,7 +83,7 @@ def save_high_res_map(occupancy_grid, metadata, path_2d, projected_yaw, output_d
         g = 40
         img_array[occupancy_grid == 0] = [g, g, g] 
         img_array[occupancy_grid == 1] = [0, 0, 0]       
-        img_array[occupancy_grid == 2] = [255, 255, 255] 
+        img_array[occupancy_grid == 2] = [255, 255, 255]  # occupied
 
         original_img = Image.fromarray(np.flipud(img_array), mode='RGB')
         new_size = (original_img.width * IMAGE_RES_MULTIPLIER, original_img.height * IMAGE_RES_MULTIPLIER)
@@ -279,6 +285,12 @@ class ContinuousPointCloudMapper(Node):
         self.last_save_time = None
         self.save_count = 0
         
+        # Cached projection basis
+        self.cached_centroid = None
+        self.cached_basis_x = None
+        self.cached_basis_y = None
+        self.last_basis_update_path_length = 0
+        
         # TF2 Setup
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -291,26 +303,62 @@ class ContinuousPointCloudMapper(Node):
         self.ground_pub = self.create_publisher(PointCloud2, '/ground_from_map', 10)
 
         print(f'[INFO] High-resolution Ground Projection Mapper Ready (Target Frame: {TARGET_FRAME})')
-
+    
+    def should_update_basis(self):
+        """Check if projection basis should be recalculated."""
+        current_length = len(self.path_positions)
+        
+        # 초기 계산 또는 path가 충분히 증가했을 때만 업데이트
+        if self.cached_centroid is None:
+            return True
+        
+        # Path가 100개 이상 증가했을 때만 재계산 (약 10m 이동)
+        if current_length - self.last_basis_update_path_length > 100:
+            return True
+        
+        return False
+    
+    def update_projection_basis(self):
+        """Update cached projection basis."""
+        centroid, basis_x, basis_y = get_projection_basis(self.path_positions)
+        self.cached_centroid = centroid
+        self.cached_basis_x = basis_x
+        self.cached_basis_y = basis_y
+        self.last_basis_update_path_length = len(self.path_positions)
+        self.get_logger().info(f'Updated projection basis at path length {self.last_basis_update_path_length}')
+        
+        
     def generate_smooth_ground(self, x_range, y_range):
         """Generates a smooth ground surface using RBF interpolation."""
-        if len(self.path_positions) < 10: return None, None, None
-        sampled_path = self.path_positions[::5]
+        if len(self.path_positions) < 10: 
+            return None, None, None
+            
+        # Downsampling
+        if len(self.path_positions) < 1000:
+            downsampling = 5
+        else:
+            downsampling = int(len(self.path_positions) / 1000)
+        
+        sampled_path = self.path_positions[::downsampling]
         sensor_xy = sampled_path[:, 0:2]
-        if len(np.unique(sensor_xy, axis=0)) < 3: return None, None, None
+        
+        if len(np.unique(sensor_xy, axis=0)) < 3: 
+            return None, None, None
 
         ground_z_ref = sampled_path[:, 2] - sensor_height
         rbf = RBFInterpolator(sensor_xy, ground_z_ref, kernel='thin_plate_spline', smoothing=0.1)
         
-        xi = np.arange(x_range[0], x_range[1] + pixel_grid_size, pixel_grid_size)
-        yi = np.arange(y_range[0], y_range[1] + pixel_grid_size, pixel_grid_size)
+        # RBF용 coarse grid
+        xi = np.arange(x_range[0], x_range[1] + RBF_GRID_SIZE, RBF_GRID_SIZE)
+        yi = np.arange(y_range[0], y_range[1] + RBF_GRID_SIZE, RBF_GRID_SIZE)
         gx, gy = np.meshgrid(xi, yi)
         
         try:
             surface = rbf(np.column_stack([gx.ravel(), gy.ravel()])).reshape(gx.shape)
             return surface, gx, gy
-        except: return None, None, None
-
+        except: 
+            return None, None, None
+        
     def path_callback(self, msg):
         """Updates robot path and the latest pose (transformed to map frame)."""
         if not msg.poses: 
@@ -329,7 +377,8 @@ class ContinuousPointCloudMapper(Node):
             self.path_positions = np.array([[p.pose.position.x, p.pose.position.y, p.pose.position.z] for p in msg.poses])
             self.latest_pose = msg.poses[-1].pose
             self.latest_pose_frame = msg.header.frame_id
-
+            
+            
     def pc_callback(self, msg):
         """Main callback for processing PointCloud and updating the map."""
         current_time = self.get_clock().now()
@@ -347,15 +396,45 @@ class ContinuousPointCloudMapper(Node):
         if len(self.path_positions) < 15 or self.latest_pose is None: 
             return
 
-        # 1. Accurate surface estimation using RBF (for obstacle detection)
-        x_min, x_max = pts[:, 0].min(), pts[:, 0].max()
-        y_min, y_max = pts[:, 1].min(), pts[:, 1].max()
-        surface, gx, gy = self.generate_smooth_ground((x_min, x_max), (y_min, y_max))
+        # === 데이터 검증: NaN/inf 제거 ===
+        valid_mask = np.isfinite(pts).all(axis=1)
+        pts = pts[valid_mask]
+        
+        if pts.size == 0:
+            self.get_logger().warn('No valid points after filtering NaN/inf')
+            return
+        
+        # === Path 기반 범위 계산 (margin 추가) ===
+        path_x_min, path_x_max = self.path_positions[:, 0].min(), self.path_positions[:, 0].max()
+        path_y_min, path_y_max = self.path_positions[:, 1].min(), self.path_positions[:, 1].max()
+        
+        margin = 50.0
+        x_range = (path_x_min - margin, path_x_max + margin)
+        y_range = (path_y_min - margin, path_y_max + margin)
+        
+        # Pointcloud를 합리적인 범위로 필터링
+        in_range = (
+            (pts[:, 0] >= x_range[0]) & (pts[:, 0] <= x_range[1]) &
+            (pts[:, 1] >= y_range[0]) & (pts[:, 1] <= y_range[1])
+        )
+        pts = pts[in_range]
+        
+        if pts.size == 0:
+            self.get_logger().warn('No points within valid range')
+            return
+
+        # 1. RBF surface estimation using path-based range
+        surface, gx, gy = self.generate_smooth_ground(x_range, y_range)
         if surface is None: 
             return
 
-        # 2. Calculate projection basis (for visualization and angle calculation)
-        centroid, basis_x, basis_y = get_projection_basis(self.path_positions)
+        # 2. Update projection basis only when necessary
+        if self.should_update_basis():
+            self.update_projection_basis()
+        
+        centroid = self.cached_centroid
+        basis_x = self.cached_basis_x
+        basis_y = self.cached_basis_y
         
         # 3. Project coordinates (World -> Plane)
         pts_rel = pts - centroid
@@ -366,7 +445,7 @@ class ContinuousPointCloudMapper(Node):
         path_u = np.dot(path_rel, basis_x)
         path_v = np.dot(path_rel, basis_y)
         path_2d = np.column_stack([path_u, path_v])
-
+        
         # 4. Project robot heading (transform orientation to map frame)
         q_transformed = transform_pose_orientation_to_map(
             self.latest_pose, 
@@ -382,21 +461,34 @@ class ContinuousPointCloudMapper(Node):
         ])
         p_yaw = np.arctan2(np.dot(f_world, basis_y), np.dot(f_world, basis_x))
 
-        # 5. Create Grid (Based on projected u, v coordinates)
-        u_min, u_max = pts_u.min(), pts_u.max()
-        v_min, v_max = pts_v.min(), pts_v.max()
+        # 5. Create Grid (Based on projected u, v coordinates - INCLUDING PATH)
+        u_min = min(pts_u.min(), path_u.min())
+        u_max = max(pts_u.max(), path_u.max())
+        v_min = min(pts_v.min(), path_v.min())
+        v_max = max(pts_v.max(), path_v.max())
         width = int(np.ceil((u_max - u_min) / pixel_grid_size))
         height = int(np.ceil((v_max - v_min) / pixel_grid_size))
         grid = np.zeros((height, width), dtype=np.uint8)
 
-        # 6. Index mapping and Obstacle detection (Using RBF height difference)
+        # 6. Obstacle detection using interpolated RBF surface
         iu = np.clip(((pts_u - u_min) / pixel_grid_size).astype(int), 0, width - 1)
         iv = np.clip(((pts_v - v_min) / pixel_grid_size).astype(int), 0, height - 1)
         
-        # Calculate relative height using RBF surface
-        ix_rbf = np.clip(((pts[:, 0] - x_min) / pixel_grid_size).astype(int), 0, surface.shape[1] - 1)
-        iy_rbf = np.clip(((pts[:, 1] - y_min) / pixel_grid_size).astype(int), 0, surface.shape[0] - 1)
-        relative_height = pts[:, 2] - surface[iy_rbf, ix_rbf]
+        # Create interpolator for RBF surface
+        x_coords = gx[0, :]  # X coordinates from meshgrid
+        y_coords = gy[:, 0]  # Y coordinates from meshgrid
+        interp = RegularGridInterpolator(
+            (y_coords, x_coords), 
+            surface, 
+            method='linear', 
+            bounds_error=False, 
+            fill_value=0
+        )
+        
+        # Query ground heights at actual point locations
+        query_points = np.column_stack([pts[:, 1], pts[:, 0]])
+        ground_heights = interp(query_points)
+        relative_height = pts[:, 2] - ground_heights
 
         grid[iv, iu] = 1 # Mark as free space
         obs_candidates = (relative_height >= min_z) & (relative_height <= max_z)

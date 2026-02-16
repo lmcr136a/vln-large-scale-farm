@@ -34,7 +34,7 @@ class GPSParserNode(Node):
         super().__init__('gps_parser_node')
         
         # Declare parameters
-        self.declare_parameter('serial_port', './gps_filtered')
+        self.declare_parameter('serial_port', '/dev/ttyACM0')
         self.declare_parameter('baudrate', 9600)
         self.declare_parameter('frame_id', 'gps')
         self.declare_parameter('reconnect_interval', 5.0)

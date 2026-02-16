@@ -2,8 +2,8 @@
   ros__parameters:
     # Input topics
     odom_topic: "/Odometry"
-    gps_topic: "/ublox_driver/receiver_lla"
-    cloud_registered_topic: "/cloud_registered"
+    gps_topic: "/gps/fixed"
+    cloud_registered_topic: "/Laser_map"
     
     # Output topics
     laser_map_gps_fused_topic: "/Laser_map_gps_fused"
