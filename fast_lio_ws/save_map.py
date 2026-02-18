@@ -24,7 +24,7 @@ min_z = 0.15
 max_z = 1.7
 sensor_height = 0.9
 output_dir = os.path.join(current_dir, 'output')
-pixel_grid_size = 0.1    # Physics/Logic grid size
+pixel_grid_size = 0.5    # Physics/Logic grid size
 MIN_POINTS_PER_CELL = 5  # Density filter threshold
 IMAGE_RES_MULTIPLIER = 4 # Visual resolution multiplier
 update_rate = 1.0
@@ -48,7 +48,7 @@ def get_projection_basis(path_positions):
     for plane projection using the recent path history.
     """
     # Estimate ground normal vector using the last 50 path points
-    pts = path_positions[-50:].copy()
+    pts = path_positions.copy()
     pts[:, 2] -= sensor_height
     centroid = np.mean(pts, axis=0)
     pts_centered = pts - centroid
