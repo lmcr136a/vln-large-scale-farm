@@ -157,6 +157,10 @@ class ZEDSVORecorder(threading.Thread):
         self.cam.close()
         print(f"[{self.name}] Stopped.")
 
+import os
+import signal
+import subprocess
+import time
 
 class LiDARRecorder:
     """Records LiDAR point clouds and IMU to binary files"""
@@ -257,6 +261,82 @@ class LiDARRecorder:
             print(f"[LiDAR] IMU save error: {e}")
 
 
+import os
+import signal
+import subprocess
+import time
+
+class RosbagRecorder:
+    """
+    Starts/stops rosbag2 recording using `ros2 bag record`.
+    Creates a folder containing metadata.yaml + *.db3 (sqlite) by default.
+    """
+    def __init__(self, output_dir, bag_name="rosbag", topics=None, storage="sqlite3", compression=None):
+        self.output_dir = output_dir
+        self.bag_name = bag_name
+        self.topics = topics or []
+        self.storage = storage
+        self.compression = compression  # e.g. "zstd"
+        self.proc = None
+        self.bag_path = None
+
+    def start(self):
+        if self.proc is not None:
+            return
+
+        # Bag output becomes a directory: <output_dir>/<bag_name>/
+        self.bag_path = os.path.join(self.output_dir, self.bag_name)
+
+        cmd = ["ros2", "bag", "record", "-o", self.bag_path]
+
+        # Optional: explicitly set storage
+        if self.storage:
+            cmd += ["--storage", self.storage]
+
+        # Optional: compression (ROS2 bag compression must be supported in your distro install)
+        # Example: cmd += ["--compression-mode", "file", "--compression-format", "zstd"]
+        if self.compression:
+            cmd += ["--compression-mode", "file", "--compression-format", self.compression]
+
+        # Record all topics if none provided, otherwise record selected
+        if self.topics:
+            cmd += self.topics
+        else:
+            cmd += ["-a"]
+
+        # Start the recorder
+        self.proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            preexec_fn=os.setsid  # so we can SIGINT the whole process group
+        )
+
+        print(f"[Rosbag] Recording started: {self.bag_path}")
+        print(f"[Rosbag] Command: {' '.join(cmd)}")
+
+    def stop(self):
+        if self.proc is None:
+            return
+
+        print("[Rosbag] Stopping rosbag recording (SIGINT)...")
+        try:
+            os.killpg(os.getpgid(self.proc.pid), signal.SIGINT)
+        except Exception as e:
+            print(f"[Rosbag] SIGINT failed: {e}")
+
+        # Give it time to flush/write metadata.yaml
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            print("[Rosbag] Recorder did not exit in time; terminating...")
+            os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
+            self.proc.wait(timeout=5)
+
+        self.proc = None
+        print(f"[Rosbag] Recording stopped: {self.bag_path}")
+
+
 class MultiSensorRecorder:
     """Main recorder managing all sensors"""
     def __init__(self, ros_node, output_base_dir="./data"):
@@ -267,6 +347,9 @@ class MultiSensorRecorder:
         # Recorders
         self.zed_recorders = {}
         self.lidar_recorder = LiDARRecorder(None, self.ros_node)
+
+        # NEW: rosbag recorder handle
+        self.rosbag_recorder = None
         
     def create_session(self, session_name=None):
         """Create new recording session directory"""
@@ -278,6 +361,24 @@ class MultiSensorRecorder:
         
         # Update LiDAR recorder output dir
         self.lidar_recorder.output_dir = self.current_session_dir
+
+        # NEW: choose topics to record (include GPS topic if your GPS publisher is running)
+        topics = [
+            "/lidar3d",
+            "/imu",
+            "/gps/fix",          # or whatever topic your GPS publisher uses
+            # add ZED topics if you publish images/imu/pointcloud from ZED via ROS
+            # "/zed/zed_node/left/image_rect_color",
+            # "/zed/zed_node/depth/depth_registered",
+        ]
+
+        self.rosbag_recorder = RosbagRecorder(
+            output_dir=self.current_session_dir,
+            bag_name="rosbag2",
+            topics=topics,      # or set topics=None to record EVERYTHING (-a)
+            storage="sqlite3",
+            compression=None
+        )
         
         print(f"\n[Recorder] Session created: {self.current_session_dir}\n")
         return self.current_session_dir
@@ -297,6 +398,10 @@ class MultiSensorRecorder:
             recorder.start_recording(self.current_session_dir)
         
         self.lidar_recorder.start_recording()
+
+        # NEW: start rosbag
+        if self.rosbag_recorder:
+            self.rosbag_recorder.start()
         
         print("\n[Recorder] All sensors recording started\n")
     
@@ -306,6 +411,10 @@ class MultiSensorRecorder:
             recorder.stop_recording()
         
         self.lidar_recorder.stop_recording()
+
+        # NEW: stop rosbag
+        if self.rosbag_recorder:
+            self.rosbag_recorder.stop()
         
         print("\n[Recorder] All sensors recording stopped\n")
     
