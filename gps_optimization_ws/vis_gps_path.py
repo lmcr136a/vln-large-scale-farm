@@ -12,12 +12,12 @@ from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
 import math
 
+ROBOT_HEIGHT = 1.0
 class GPSTrajectoryPlotter(Node):
     def __init__(self):
         super().__init__('gps_trajectory_plotter')
         
-        # 파라미터
-        self.declare_parameter('gps_topic', '/ublox_driver/receiver_lla')
+        self.declare_parameter('gps_topic', '/gps/fix')
         self.declare_parameter('marker_topic', '/gps_trajectory_marker')
         self.declare_parameter('frame_id', 'map')
         
@@ -25,7 +25,6 @@ class GPSTrajectoryPlotter(Node):
         marker_topic = self.get_parameter('marker_topic').value
         self.frame_id = self.get_parameter('frame_id').value
         
-        # GPS 구독
         self.gps_sub = self.create_subscription(
             NavSatFix,
             gps_topic,
@@ -77,7 +76,7 @@ class GPSTrajectoryPlotter(Node):
         point = Point()
         point.x = e
         point.y = n
-        point.z = u
+        point.z = ROBOT_HEIGHT
         self.trajectory_points.append(point)
         
         # Marker 발행
