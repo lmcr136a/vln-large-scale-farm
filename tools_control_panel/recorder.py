@@ -90,26 +90,29 @@ class ZEDSVORecorder(threading.Thread):
         self.rgb_topic = f"/zed/rgb_{self.name.lower()}"
         self.rgb_pub = self.ros_node.create_publisher(Image, self.rgb_topic, _make_qos_sensor())
 
-        self.cam = sl.Camera()
-        init = sl.InitParameters()
-        init.set_from_serial_number(serial_number)
-        
-        # PERFORMANCE FIX: NEURAL depth is too heavy for high-speed streaming.
-        # Use ULTRA or PERFORMANCE if you aren't doing high-precision mapping.
-        init.depth_mode = sl.DEPTH_MODE.ULTRA 
-        
-        init.camera_resolution = sl.RESOLUTION.HD1080 
-        init.camera_fps = 30 # Set higher internal FPS
-        init.sdk_verbose = False
+        try:
+            self.cam = sl.Camera()
+            init = sl.InitParameters()
+            init.set_from_serial_number(serial_number)
+            
+            # PERFORMANCE FIX: NEURAL depth is too heavy for high-speed streaming.
+            # Use ULTRA or PERFORMANCE if you aren't doing high-precision mapping.
+            init.depth_mode = sl.DEPTH_MODE.ULTRA 
+            
+            init.camera_resolution = sl.RESOLUTION.HD1080 
+            init.camera_fps = 30 # Set higher internal FPS
+            init.sdk_verbose = False
 
-        status = self.cam.open(init)
-        if status != sl.ERROR_CODE.SUCCESS:
-            raise RuntimeError(f"ZED {serial_number} Open Failed: {status}")
+            status = self.cam.open(init)
+            if status != sl.ERROR_CODE.SUCCESS:
+                raise RuntimeError(f"ZED {serial_number} Open Failed: {status}")
 
-        # Pre-allocate sl.Mat to avoid memory fragmentation
-        self.image_zed = sl.Mat()
-        self.runtime = sl.RuntimeParameters()
-        
+            # Pre-allocate sl.Mat to avoid memory fragmentation
+            self.image_zed = sl.Mat()
+            self.runtime = sl.RuntimeParameters()
+        except:
+            self.cam = None
+            
     def run(self):
         print(f"[{self.name}] Thread started. Target: {self.publish_hz}Hz")
         next_pub_time = time.time()
@@ -237,8 +240,8 @@ class MultiSensorRecorder:
         return recorder
 
     def start_recording(self):
-        for recorder in self.zed_recorders.values():
-            recorder.start_recording(self.current_session_dir)
+        # for recorder in self.zed_recorders.values():
+        #     recorder.start_recording(self.current_session_dir)
             
         rosbag_dir = os.path.join(self.current_session_dir, "rosbag")
         self.rosbag_process = subprocess.Popen([
@@ -249,8 +252,8 @@ class MultiSensorRecorder:
         print("\n[Recorder] ZED + Rosbag recording started\n")
 
     def stop_recording(self):
-        for recorder in self.zed_recorders.values():
-            recorder.stop_recording()
+        # for recorder in self.zed_recorders.values():
+        #     recorder.stop_recording()
 
         if self.rosbag_process:
             self.rosbag_process.send_signal(signal.SIGINT)
