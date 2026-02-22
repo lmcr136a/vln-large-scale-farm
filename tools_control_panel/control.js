@@ -1,393 +1,451 @@
-const host = window.location.hostname;
-console.log('Connecting to:', `http://${host}:8000`);
+// ═══════════════════════════════════════════════════════════════
+//  control.js  -  Optimized version
+//  ★ All setInterval image polling removed
+//  ★ SocketIO push: front_frame / back_frame / map_image / robot_pose
+//  ★ Konva.js: map zoom/pan + canvas layering (map layer / dynamic layer)
+// ═══════════════════════════════════════════════════════════════
+
+const host   = window.location.hostname;
 const socket = io(`http://${host}:8000`);
-const keyState = {};
-let frameInterval = null;
-let currentMapInfo = null;
-let isPathMode = false;
-let isAutoMode = false;
-let pathNodes = [];
 
-// Connection status
-socket.on('connect', () => {
-  console.log('Socket.IO connected! ID:', socket.id);
-});
+// ── State ─────────────────────────────────────────────────────
+const keyState    = {};
+let isPathMode    = true;   // always in path mode
+let isAutoMode    = false;
+let pathNodes     = [];
+let followRobot   = false;
+let currentMapMeta = null;   // { resolution, origin_x, origin_y, width, height }
+let robotPose      = null;   // { x, y, yaw }
 
-socket.on('disconnect', () => {
-  console.log('Socket.IO disconnected');
-});
+// ── Konva Stage / Layer Initialization ───────────────────────
+// Declared here, initialized in DOMContentLoaded to ensure container has real dimensions
+let stage, mapLayer, dynLayer, mapImage;
 
-socket.on('connect_error', (error) => {
-  console.error('Connection error:', error);
-});
+const ZOOM_MIN  = 0.1;
+const ZOOM_MAX  = 20;
+const ZOOM_STEP = 1.15;
 
-// Heartbeat
-setInterval(() => {
-    socket.emit('heartbeat');
-}, 500);
+function onWheel(e) {
+  e.preventDefault();
+  const oldScale = stage.scaleX();
+  const pointer  = stage.getPointerPosition();
+  const mousePointTo = {
+    x: (pointer.x - stage.x()) / oldScale,
+    y: (pointer.y - stage.y()) / oldScale,
+  };
+  const newScale = e.deltaY < 0
+    ? Math.min(oldScale * ZOOM_STEP, ZOOM_MAX)
+    : Math.max(oldScale / ZOOM_STEP, ZOOM_MIN);
+  stage.scale({ x: newScale, y: newScale });
+  stage.position({
+    x: pointer.x - mousePointTo.x * newScale,
+    y: pointer.y - mousePointTo.y * newScale,
+  });
+  stage.batchDraw();
+}
 
-// Window blur event - clear all keys
-window.addEventListener('blur', () => {
-    for (const key in keyState) {
-        if (keyState[key]) {
-            keyState[key] = false;
-            socket.emit('keyup', key);
-        }
-    }
-});
-
-// Keydown event
-window.addEventListener("keydown", (e) => {
-  if (document.activeElement.tagName === "INPUT") return;
-  if (isAutoMode) return;
-
-  const key = e.key;
-  if (!keyState[key]) {
-    keyState[key] = true;
-    socket.emit("keydown", key);
-  }
-});
-
-// Keyup event
-window.addEventListener("keyup", (e) => {
-  if (document.activeElement.tagName === "INPUT") return;
-  if (isAutoMode) return;
-
-  const key = e.key;
-  if (keyState[key]) {
-    keyState[key] = false;
-    socket.emit("keyup", key);
-  }
-});
-
-// Socket event listeners
-let frontFrameCount = 0;
-let backFrameCount = 0;
-
-const sysmonDiv = document.getElementById("sysmon");
-
-socket.on("sysmon", (data) => {
-  if (!data || typeof data !== "object") {
-    sysmonDiv.textContent = "System info unavailable";
+function initStage() {
+  const container = document.getElementById('map-konva-container');
+  if (!container) {
+    console.error('[Konva] map-konva-container not found in DOM');
     return;
   }
-  
-  const cpu = data.cpu;
-  const mem = data.mem;
-  const used = data.used_gb;
-  const total = data.total_gb;
-  const usedTB = (used / 1024).toFixed(1);
-  const totalTB = (total / 1024).toFixed(1);
-  const pct = data.used_pct;
-  const linear_mps = data.linear_mps;
-  const linear_mph = data.linear_mph;
-  const wifi = data.wifi || "Unknown";
+  const stageW = container.clientWidth  || 800;
+  const stageH = container.clientHeight || 600;
+  console.log(`[Konva] Stage init: ${stageW}x${stageH}`);
 
-  if (
-    typeof cpu !== "number" ||
-    typeof mem !== "number" ||
-    typeof used !== "number" ||
-    typeof total !== "number" ||
-    typeof pct !== "number"
-  ) {
-    sysmonDiv.textContent = "Invalid system data";
-    return;
-  }
+  stage = new Konva.Stage({
+    container: 'map-konva-container',
+    width:  stageW,
+    height: stageH,
+    draggable: true,
+  });
 
-  sysmonDiv.textContent =
-    `Wi-Fi: ${wifi} | CPU: ${cpu.toFixed(1)}% | SSD: ${usedTB} / ${totalTB} TB | Speed: ${linear_mps.toFixed(1)} m/s`;
-});
+  // Bottom Layer: map image (redrawn only when updated)
+  mapLayer = new Konva.Layer();
+  // Top Layer: robot icon + waypoints (redrawn on every update)
+  dynLayer = new Konva.Layer();
+  stage.add(mapLayer);
+  stage.add(dynLayer);
 
-socket.on('map_update', (data) => {
-  currentMapInfo = data.info;
-});
+  mapImage = new Konva.Image({ x: 0, y: 0, listening: false });
+  mapLayer.add(mapImage);
 
-socket.on('auto_mode_completed', () => {
-  if (isAutoMode) {
-    toggleAutoMode();
-  }
-});
+  // ── Mouse Wheel Zoom ────────────────────────────────────────
+  stage.container().addEventListener('wheel', onWheel, { passive: false });
 
-socket.on('robot_status', (data) => {
-  const statusDiv = document.getElementById('robot-status');
-  if (data.status) {
-    statusDiv.textContent = data.status;
-    statusDiv.style.display = 'block';
-  } else {
-    statusDiv.style.display = 'none';
-  }
-});
+  // ── Map click → waypoint ────────────────────────────────────
+  stage.on('click', onMapClick);
 
-socket.on('waypoint_reached', (data) => {
-  const index = data.index;
-  if (index >= 0 && index < pathNodes.length) {
-    pathNodes[index].reached = true;
-    drawPathNodes();
-  }
-});
+  // ── Resize handler ──────────────────────────────────────────
+  window.addEventListener('resize', () => {
+    stage.width(container.clientWidth);
+    stage.height(container.clientHeight);
+    stage.batchDraw();
+  });
+}
 
-// Toggle path mode
-function togglePathMode() {
-  isPathMode = !isPathMode;
-  const indicator = document.getElementById('modeIndicator');
-  const button = event.target;
-  const autoControl = document.getElementById('auto-mode-control');
-  
+// Script is loaded at bottom of <body>, so DOM is already ready - call directly
+initStage();
+
+// ── Util: World coordinates → Stage pixel coordinates ────────
+function worldToStagePixel(wx, wy) {
+  if (!currentMapMeta) return null;
+  const { resolution, origin_x, origin_y } = currentMapMeta;
+  const px = (wx - origin_x) / resolution;
+  const py = (wy - origin_y) / resolution;
+  return { x: px, y: py };
+}
+
+// ── Util: Stage click coordinates → World coordinates ────────
+function stageClickToWorld(stageX, stageY) {
+  if (!currentMapMeta) return null;
+  const { resolution, origin_x, origin_y } = currentMapMeta;
+  const wx = origin_x + stageX * resolution;
+  const wy = origin_y + stageY * resolution;
+  return { x: wx, y: wy };
+}
+
+// ── Map Click → Add Waypoint ──────────────────────────────────
+function onMapClick(e) {
+  if (!currentMapMeta) return;
+  if (isAutoMode)      return;
+  if (stage.isDragging()) return;
+
+  const pos    = stage.getRelativePointerPosition();
+  const stageX = pos.x;
+  const stageY = pos.y;
+
+  const world = stageClickToWorld(stageX, stageY);
+  if (!world) return;
+
+  socket.emit('map_clicked', {
+    img_x:   Math.round(stageX),
+    img_y:   Math.round(stageY),
+    world_x: world.x,
+    world_y: world.y,
+  });
+
   if (isPathMode) {
-    indicator.textContent = 'Mode: PATH';
-    indicator.style.backgroundColor = 'rgba(0, 200, 200, 0.6)';
-    button.textContent = 'Stop Path Mode & Resume Mapping';
-    autoControl.style.display = 'block';
-    pathNodes = [];
-    
-    // Check if currentMapInfo is available
-    if (!currentMapInfo) {
-      console.warn('Map info not available yet');
-      return;
-    }
-    
-    // Check robot position
-    if (currentMapInfo.robot_x === undefined || currentMapInfo.robot_y === undefined) {
-      console.warn('Robot position not available');
-      return;
-    }
-    
-    const robotX = currentMapInfo.robot_x;
-    const robotY = currentMapInfo.robot_y;
-    
-    const imgX = Math.round((robotX - currentMapInfo.origin_x) / currentMapInfo.resolution);
-    const imgY = Math.round((robotY - currentMapInfo.origin_y) / currentMapInfo.resolution);
-    
-    const img = document.getElementById('map-image');
-    const scaleX = img.clientWidth / currentMapInfo.width;
-    const scaleY = img.clientHeight / currentMapInfo.height;
-    
-    const displayX = imgX * scaleX;
-    const displayY = imgY * scaleY;
-    
     pathNodes.push({
-      imgX: imgX,
-      imgY: imgY,
-      worldX: robotX,
-      worldY: robotY,
-      displayX: displayX,
-      displayY: displayY,
-      reached: false
+      stageX, stageY,
+      worldX:  world.x,
+      worldY:  world.y,
+      reached: false,
     });
-    
-    console.log('Initial robot position added:', pathNodes[0]);
-    
-    // Update canvas and draw
-    setTimeout(() => {
-      drawPathNodes();
-    }, 50);
-    
-  } else {
-    indicator.textContent = 'Mode: MAP';
-    indicator.style.backgroundColor = 'rgba(100, 100, 100, 0.6)';
-    button.textContent = 'Stop Creating Map & Start Path Mode';
-    autoControl.style.display = 'none';
-    pathNodes = [];
-    drawPathNodes();
+    redrawDynLayer();
   }
 }
 
-// Toggle autonomous mode
-function toggleAutoMode() {
-  if (!isPathMode) {
-    alert('Please enter Path Mode first');
-    return;
+// ═══════════════════════════════════════════════════════════════
+//  Socket Connection
+// ═══════════════════════════════════════════════════════════════
+socket.on('connect',    () => console.log('Socket.IO connected:', socket.id));
+socket.on('disconnect', () => console.log('Socket.IO disconnected'));
+socket.on('connect_error', (e) => console.error('Connection error:', e));
+
+setInterval(() => socket.emit('heartbeat'), 500);
+
+// ── Keyboard Input (blocked during autonomous mode) ───────────
+window.addEventListener('blur', () => {
+  for (const key in keyState) {
+    if (keyState[key]) { keyState[key] = false; socket.emit('keyup', key); }
   }
-  
-  if (pathNodes.length < 2) {
-    alert('Please create at least 2 waypoints');
+});
+window.addEventListener('keydown', (e) => {
+  if (document.activeElement.tagName === 'INPUT') return;
+  if (isAutoMode) return;
+  const key = e.key;
+  if (!keyState[key]) { keyState[key] = true; socket.emit('keydown', key); }
+});
+window.addEventListener('keyup', (e) => {
+  if (document.activeElement.tagName === 'INPUT') return;
+  if (isAutoMode) return;
+  const key = e.key;
+  if (keyState[key]) { keyState[key] = false; socket.emit('keyup', key); }
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  ★ SocketIO Push Events (fully replaces HTTP polling)
+// ═══════════════════════════════════════════════════════════════
+
+// ── RGB Camera Frames ─────────────────────────────────────────
+socket.on('front_frame', (data) => {
+  document.getElementById('rgb-image').src = 'data:image/jpeg;base64,' + data.data;
+});
+socket.on('back_frame', (data) => {
+  document.getElementById('back-rgb-image').src = 'data:image/jpeg;base64,' + data.data;
+});
+
+// ── Map Image (server pushes only when changed) ──────────────
+socket.on('map_image', (data) => {
+  // Store metadata
+  currentMapMeta = {
+    resolution: data.resolution,
+    origin_x:   data.origin_x,
+    origin_y:   data.origin_y,
+    width:      data.width,
+    height:     data.height,
+  };
+
+  if (!mapImage) {
+    console.warn('[map] Konva not ready yet, skipping render');
     return;
   }
 
-  isAutoMode = !isAutoMode;
-  const indicator = document.getElementById('autoIndicator');
-  const button = document.getElementById('autoButton');
-  
-  if (isAutoMode) {
-    indicator.textContent = 'AUTO: ON';
-    indicator.style.backgroundColor = 'rgba(0, 255, 0, 0.8)';
-    button.textContent = 'Stop Autonomous Driving';
-    button.style.backgroundColor = 'rgba(200, 0, 0, 0.8)';
-    
-    const waypoints = pathNodes.map(node => ({
-      x: node.worldX,
-      y: node.worldY
+  // base64 → HTMLImageElement → update Konva.Image
+  const img = new window.Image();
+  img.onload = () => {
+    mapImage.image(img);
+    mapImage.width(data.width);
+    mapImage.height(data.height);
+    mapLayer.batchDraw();
+    redrawDynLayer();
+  };
+  img.src = 'data:image/jpeg;base64,' + data.image;
+
+  console.log(`[map] received ${data.width}×${data.height}`);
+});
+
+// ── Robot Pose (10Hz) ─────────────────────────────────────────
+socket.on('robot_pose', (data) => {
+  const isFirst = robotPose === null;
+  robotPose = data;   // { x, y, yaw }
+
+  // On first pose received, auto-add robot position as first waypoint
+  if (isFirst && currentMapMeta && pathNodes.length === 0) {
+    pathNodes.push({ worldX: data.x, worldY: data.y, reached: false });
+  }
+
+  // Follow robot mode: move stage so robot stays centered
+  if (followRobot && currentMapMeta) {
+    const p = worldToStagePixel(data.x, data.y);
+    if (p) {
+      const sc = stage.scaleX();
+      stage.position({
+        x: stageW / 2 - p.x * sc,
+        y: stageH / 2 - p.y * sc,
+      });
+    }
+  }
+
+  redrawDynLayer();
+});
+
+// ── sysmon ────────────────────────────────────────────────────
+const sysmonDiv = document.getElementById('sysmon'); // kept for fallback
+socket.on('sysmon', (data) => {
+  if (!data || typeof data !== 'object') return;
+  const { cpu, mem, used_gb, total_gb, used_pct, linear_mps, wifi } = data;
+
+  const wifiEl = document.getElementById('info-wifi');
+  const cpuEl  = document.getElementById('info-cpu');
+  const ssdEl  = document.getElementById('info-ssd');
+
+  if (wifiEl) wifiEl.textContent = wifi || '—';
+  if (cpuEl)  cpuEl.textContent  = typeof cpu  === 'number' ? `${cpu.toFixed(1)}%` : '—';
+  if (ssdEl && typeof used_gb === 'number' && typeof total_gb === 'number') {
+    const usedTB  = (used_gb  / 1024).toFixed(1);
+    const totalTB = (total_gb / 1024).toFixed(1);
+    ssdEl.textContent = `${usedTB} / ${totalTB} TB`;
+  }
+});
+
+socket.on('auto_mode_completed', () => { if (isAutoMode) toggleAutoMode(); });
+
+socket.on('robot_status', (data) => {
+  const div = document.getElementById('robot-status');
+  if (data.status) { div.textContent = data.status; div.style.display = 'block'; }
+  else             { div.style.display = 'none'; }
+});
+
+socket.on('waypoint_reached', (data) => {
+  const idx = data.index;
+  if (idx >= 0 && idx < pathNodes.length) {
+    pathNodes[idx].reached = true;
+    redrawDynLayer();
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  Draw Dynamic Layer (robot + waypoints)
+// ═══════════════════════════════════════════════════════════════
+function redrawDynLayer() {
+  if (!dynLayer) return;  // Konva not yet initialized - skip
+  dynLayer.destroyChildren();
+
+  // Always recompute pixel positions from world coords so map resizes stay correct
+  const visibleNodes = pathNodes.map(n => {
+    const p = worldToStagePixel(n.worldX, n.worldY);
+    return p ? { ...n, stageX: p.x, stageY: p.y } : null;
+  }).filter(Boolean);
+
+  // ── Waypoint lines ─────────────────────────────────────────
+  if (visibleNodes.length > 1) {
+    const pts = [];
+    visibleNodes.forEach(n => pts.push(n.stageX, n.stageY));
+    if (visibleNodes.length > 2) pts.push(visibleNodes[0].stageX, visibleNodes[0].stageY);
+
+    dynLayer.add(new Konva.Line({
+      points: pts,
+      stroke: 'rgb(0,200,200)',
+      strokeWidth: 2,
+      listening: false,
     }));
-    
+  }
+
+  // ── Waypoint dots ──────────────────────────────────────────
+  visibleNodes.forEach((n, i) => {
+    let fill = 'rgb(0,100,150)';
+    if (n.reached)    fill = 'rgb(255,255,0)';
+    else if (i === 0) fill = 'rgb(255,0,255)';
+
+    const circle = new Konva.Circle({
+      x: n.stageX, y: n.stageY,
+      radius: 2,          // same as line strokeWidth
+      fill,
+      stroke: null,
+    });
+
+    // Click on waypoint → remove it (except first/starting point)
+    circle.on('click', (e) => {
+      e.cancelBubble = true;
+      if (i === 0) return;
+      pathNodes.splice(i, 1);
+      redrawDynLayer();
+    });
+    // Slightly larger hit area for easier clicking
+    circle.hitFunc((ctx) => {
+      ctx.beginPath();
+      ctx.arc(0, 0, 8, 0, Math.PI * 2, true);
+      ctx.closePath();
+    });
+    circle.on('mouseenter', () => { stage.container().style.cursor = 'pointer'; });
+    circle.on('mouseleave', () => { stage.container().style.cursor = 'grab'; });
+
+    dynLayer.add(circle);
+  });
+
+  // ── Robot icon: dot + heading line ────────────────────────
+  if (robotPose && currentMapMeta) {
+    const p = worldToStagePixel(robotPose.x, robotPose.y);
+    if (p) {
+      // yaw: ROS convention - positive = CCW. Konva y-axis is flipped.
+      const yawRad = robotPose.yaw;
+      const headLen = 6;   // half of old radius 12
+      const dx =  Math.cos(yawRad) * headLen;
+      const dy = -Math.sin(yawRad) * headLen;  // flip y for canvas coords
+
+      // Center dot
+      dynLayer.add(new Konva.Circle({
+        x: p.x, y: p.y,
+        radius: 3,
+        fill: 'rgba(255,100,0,0.95)',
+        stroke: 'white',
+        strokeWidth: 1,
+        listening: false,
+      }));
+
+      // Heading arrow
+      dynLayer.add(new Konva.Arrow({
+        points: [p.x, p.y, p.x + dx, p.y + dy],
+        pointerLength: 4,
+        pointerWidth: 3,
+        fill: 'rgba(255,100,0,0.95)',
+        stroke: 'rgba(255,100,0,0.95)',
+        strokeWidth: 1.5,
+        listening: false,
+      }));
+    }
+  }
+
+  dynLayer.batchDraw();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Auto Mode Toggle
+// ═══════════════════════════════════════════════════════════════
+function toggleAutoMode() {
+  if (pathNodes.length < 2) { alert('Please create at least 2 waypoints'); return; }
+
+  isAutoMode = !isAutoMode;
+  const button = document.getElementById('autoButton');
+
+  if (isAutoMode) {
+    button.textContent = 'Stop Autonomous';
+    button.classList.add('active-auto');
     socket.emit('start_autonomous', {
-      robot_x: currentMapInfo.robot_x,
-      robot_y: currentMapInfo.robot_y,
-      robot_yaw: currentMapInfo.robot_yaw,
-      waypoints: waypoints
+      robot_x:   robotPose ? robotPose.x   : 0,
+      robot_y:   robotPose ? robotPose.y   : 0,
+      robot_yaw: robotPose ? robotPose.yaw : 0,
+      waypoints: pathNodes.map(n => ({ x: n.worldX, y: n.worldY })),
     });
   } else {
-    indicator.textContent = 'AUTO: OFF';
-    indicator.style.backgroundColor = 'rgba(0, 100, 0, 0.6)';
-    button.textContent = 'Start Autonomous Driving';
-    button.style.backgroundColor = 'rgba(0, 150, 0, 0.8)';
-    
+    button.textContent = 'Start Autonomous';
+    button.classList.remove('active-auto');
     socket.emit('stop_autonomous');
   }
 }
 
-// Draw path nodes on canvas
-function drawPathNodes() {
-  const canvas = document.getElementById('map-canvas');
-  const img = document.getElementById('map-image');
-  
-  // Wait if image not loaded
-  if (img.clientWidth === 0 || img.clientHeight === 0) {
-    console.warn('Map image not loaded yet');
-    return;
-  }
-  
-  canvas.width = img.clientWidth;
-  canvas.height = img.clientHeight;
-  
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  
-  if (pathNodes.length === 0) return;
-  
-  console.log(`Drawing ${pathNodes.length} nodes`);
-  
-  // Draw lines
-  if (pathNodes.length > 1) {
-    ctx.strokeStyle = 'rgb(0, 155, 155)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    
-    for (let i = 0; i < pathNodes.length; i++) {
-      const node = pathNodes[i];
-      if (i === 0) {
-        ctx.moveTo(node.displayX, node.displayY);
-      } else {
-        ctx.lineTo(node.displayX, node.displayY);
-      }
-    }
-    
-    if (pathNodes.length > 2) {
-      ctx.lineTo(pathNodes[0].displayX, pathNodes[0].displayY);
-    }
-    
-    ctx.stroke();
-  }
-  
-  // Draw points
-  for (let i = 0; i < pathNodes.length; i++) {
-    const node = pathNodes[i];
-    ctx.beginPath();
-    if (node.reached) {
-      ctx.fillStyle = 'rgb(255, 255, 0)';
-    } else if (i === 0) {
-      ctx.fillStyle = 'rgb(255, 0, 255)';  // First point is magenta
-    } else {
-      ctx.fillStyle = 'rgb(0, 255, 255)';
-    }
-    ctx.arc(node.displayX, node.displayY, 8, 0, 2 * Math.PI);
-    ctx.fill();
-    ctx.strokeStyle = 'white';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
+// ═══════════════════════════════════════════════════════════════
+//  Reset Map Zoom / Follow Robot Toggle
+// ═══════════════════════════════════════════════════════════════
+function resetMapZoom() {
+  stage.scale({ x: 1, y: 1 });
+  stage.position({ x: 0, y: 0 });
+  stage.batchDraw();
 }
 
-// Map click handler
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('map-image').addEventListener('click', (e) => {
-    if (!currentMapInfo) {
-      return;
-    }
+function toggleFollowRobot() {
+  followRobot = !followRobot;
+  document.getElementById('followBtn').textContent =
+    `Follow Robot: ${followRobot ? 'ON' : 'OFF'}`;
+}
 
-    if (isAutoMode) {
-      return;
-    }
+// ═══════════════════════════════════════════════════════════════
+//  Streaming Toggle
+// ═══════════════════════════════════════════════════════════════
+function toggleStreaming(enabled) {
+  socket.emit('toggle_streaming', { enabled });
+}
 
-    const img = e.target;
-    const rect = img.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
+// ═══════════════════════════════════════════════════════════════
+//  Recording
+// ═══════════════════════════════════════════════════════════════
+function setRecordingState(active, dirname) {
+  const statusEl   = document.getElementById('recordingStatus');
+  const inputEl    = document.getElementById('dirnameInput');
+  const dirnameEl  = document.getElementById('dirnameDisplay');
 
-    const scaleX = currentMapInfo.width / img.clientWidth;
-    const scaleY = currentMapInfo.height / img.clientHeight;
+  statusEl.textContent = active ? 'Recording' : 'Stopped';
+  statusEl.classList.toggle('active', active);
 
-    const imgX = Math.round(clickX * scaleX);
-    const imgY = Math.round(clickY * scaleY);
-
-    const worldX = currentMapInfo.origin_x + imgX * currentMapInfo.resolution;
-    const worldY = currentMapInfo.origin_y + imgY * currentMapInfo.resolution;
-    
-    if (isPathMode) {
-      pathNodes.push({
-        imgX: imgX,
-        imgY: imgY,
-        worldX: worldX,
-        worldY: worldY,
-        displayX: clickX,
-        displayY: clickY,
-        reached: false
-      });
-      drawPathNodes();
-    }
-    
-    socket.emit('map_clicked', {
-      img_x: imgX,
-      img_y: imgY,
-      world_x: worldX,
-      world_y: worldY
-    });
-  });
-
-  // Map image load event
-  document.getElementById('map-image').addEventListener('load', () => {
-    if (isPathMode && pathNodes.length > 0) {
-      drawPathNodes();
-    }
-  });
-});
-
-// Recording functions
-function startRecording() {
-  const dirname = document.getElementById("dirnameInput").value.trim();
-  if (!dirname) {
-    alert("Please enter the dir name to save.");
-    return;
+  inputEl.style.display   = active ? 'none' : '';
+  dirnameEl.style.display = active ? ''     : 'none';
+  if (active) {
+    // Use provided dirname, or fall back to what's in the input box
+    dirnameEl.textContent = dirname || inputEl.value || '—';
   }
-  
+
+  document.getElementById('btn-rec-start').style.display = active ? 'none' : '';
+  document.getElementById('btn-rec-stop').style.display  = active ? ''     : 'none';
+}
+
+function startRecording() {
+  const dirname = document.getElementById('dirnameInput').value.trim();
+  if (!dirname) { alert('Please enter the dir name to save.'); return; }
   setTimeout(() => {
-    socket.emit("start_recording", dirname);
-    document.getElementById("recordingStatus").textContent = "Recording";
+    socket.emit('start_recording', dirname);
+    setRecordingState(true, dirname);
   }, 100);
 }
 
 function stopRecording() {
-  if (frameInterval) {
-    clearInterval(frameInterval);
-    frameInterval = null;
-  }
-  socket.emit("stop_recording");
-  document.getElementById("recordingStatus").textContent = "Stopped";
+  socket.emit('stop_recording');
+  setRecordingState(false);
 }
 
-// Map image auto-refresh
-setInterval(() => {
-  const mapImg = document.getElementById('map-image');
-  mapImg.src = `http://${host}:8000/map_latest?t=${Date.now()}`;
-}, 1000);
-
-// RGB frame auto-refresh (front)
-setInterval(() => {
-  const img = document.getElementById('rgb-image');
-  img.src = `http://${host}:8000/front_rgb?t=${Date.now()}`;
-}, 100);  // 100ms = 10 FPS
-
-// RGB frame auto-refresh (back)
-setInterval(() => {
-  const img = document.getElementById('back-rgb-image');
-  img.src = `http://${host}:8000/back_rgb?t=${Date.now()}`;
-}, 100);
+// Sync recording state on reconnect
+socket.on('recording_status', (data) => {
+  setRecordingState(data.active, data.dirname);
+});

@@ -39,6 +39,21 @@ autonomous:
   max_repeat_num: 3
   min_waypoints: 2
 
+  position_tolerance: 0.3     # m   - waypoint reached within this distance
+  orientation_tolerance: 10   # deg - start moving forward within this angle
+
+  # Rotation stages: [time(s), vel(rad/s), range(deg upper bound)]
+  # r1 = slowest/closest, r3 = fastest/farthest
+  r1: [1.0, 0.3, 15]
+  r2: [2.0, 0.5, 60]
+  r3: [3.0, 0.7, 360]
+
+  # Translation stages: [time(s), vel(m/s), range(m upper bound)]
+  # t1 = slowest/closest, t3 = fastest/farthest
+  t1: [1.0, 0.3, 1.5]
+  t2: [2.0, 0.5, 3.0]
+  t3: [4.0, 0.8, 999]
+
 # System Monitor
 monitor:
   update_interval: 0.25

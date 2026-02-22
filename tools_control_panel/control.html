@@ -3,56 +3,86 @@
 <head>
   <meta charset="UTF-8" />
   <title>Control + Streaming</title>
-
   <script src="https://cdn.socket.io/3.1.3/socket.io.min.js"></script>
   <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+  <script src="https://unpkg.com/konva@9/konva.min.js"></script>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div id="container">
-    <div id="video-section">
-      <div id="video-wrapper">
-        <img id="rgb-image" style="display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; background: black;" />
-        <img id="back-rgb-image" style="position: absolute; top: 10px; left: 10px; width: 25%; border: 2px solid white; background: black;" />
-        <div id="robot-status"></div>
+
+  <!-- ── Full-screen map background ── -->
+  <div id="map-konva-container"></div>
+
+  <!-- ── Top overlay panel ── -->
+  <div id="top-panel">
+
+    <!-- 1. Back camera (small) -->
+    <div class="panel-col" id="col-back">
+      <img id="back-rgb-image" alt="Back camera" />
+    </div>
+
+    <!-- 2. Front camera (main) -->
+    <div class="panel-col" id="col-front">
+      <img id="rgb-image" alt="Front camera" />
+    </div>
+
+    <!-- divider -->
+    <div class="col-divider"></div>
+
+    <!-- 3. System status -->
+    <div class="panel-col" id="col-sysmon">
+      <div class="sysmon-row"><span class="sysmon-label">WiFi</span><span id="info-wifi">—</span></div>
+      <div class="sysmon-row"><span class="sysmon-label">CPU</span><span id="info-cpu">—</span></div>
+      <div class="sysmon-row"><span class="sysmon-label">SSD</span><span id="info-ssd">—</span></div>
+    </div>
+
+    <!-- divider -->
+    <div class="col-divider"></div>
+
+    <!-- 4. Recording -->
+    <div class="panel-col" id="col-recording">
+      <div class="rec-row">
+        <span class="sysmon-label">Recording</span>
+        <span id="recordingStatus" class="rec-status">Stopped</span>
+      </div>
+      <div class="rec-row">
+        <input id="dirnameInput" type="text" placeholder="directory name" />
+        <span id="dirnameDisplay" style="display:none;font-size:14px;color:rgba(255,255,255,0.85);"></span>
+      </div>
+      <div class="rec-row">
+        <!-- Start shown when stopped, Stop shown when recording -->
+        <button id="btn-rec-start" onclick="startRecording()">Start</button>
+        <button id="btn-rec-stop"  onclick="stopRecording()" style="display:none;">Stop</button>
       </div>
     </div>
-    <div id="map-section">
-      <div id="map-container">
-        <img id="map-image" src="" alt="Map loading...">
-        <canvas id="map-canvas"></canvas>
-      </div>
+
+    <!-- divider -->
+    <div class="col-divider"></div>
+
+    <!-- 5. Navigation buttons -->
+    <div class="panel-col" id="col-buttons">
+      <button onclick="resetMapZoom()" class="util-btn">Reset Zoom</button>
+      <button id="followBtn" onclick="toggleFollowRobot()" class="util-btn">Follow: OFF</button>
+      <label class="util-btn">
+        <input type="checkbox" id="streamToggle" checked onchange="toggleStreaming(this.checked)" />
+        RGB Stream
+      </label>
+      <div style="flex:1;"></div>
+      <button id="autoButton" onclick="toggleAutoMode()">Start Autonomous</button>
     </div>
-  </div>
 
-  <div id="sysmon">
-    Loading system info...
-  </div>
+  </div><!-- end top-panel -->
 
-  <div id="recording-control">
-    <input id="dirnameInput" type="text" placeholder="directory name" 
-      style="padding: 0.4rem; font-size: 1rem; width: 200px; background-color: rgba(0, 0, 0, 0.5); color: white; border: 1px solid white; border-radius: 5px;" />
-    <button onclick="startRecording()" style="margin-left: 5px;">Start</button>
-    <button onclick="stopRecording()" style="margin-left: 5px;">Stop</button>
-    <span id="recordingStatus" style="margin-left: 10px; font-size: 1.2rem;">Stopped</span>
-  </div>
+  <!-- ── Robot status overlay (bottom of map) ── -->
+  <div id="robot-status"></div>
 
-  <div id="path-mode-control">
-    <button onclick="togglePathMode()">Stop Creating Map & Start Path Mode</button>
-    <span id="modeIndicator" class="mode-indicator">Mode: MAP</span>
-  </div>
-
-  <div id="auto-mode-control">
-    <button id="autoButton" onclick="toggleAutoMode()" style="background-color: rgba(0, 150, 0, 0.8);">Start Autonomous Driving</button>
-    <span id="autoIndicator" class="mode-indicator" style="background-color: rgba(0, 100, 0, 0.6);">AUTO: OFF</span>
-  </div>
-
+  <!-- ── Keyboard hint bar ── -->
   <div id="controls">
-    <b>W/A/S/D</b>: PTZ pan/tilt &nbsp; | &nbsp;
-    <b>Z/X</b>: Zoom out/in &nbsp; | &nbsp;
-    <b>↑↓←→</b>: Move Scout &nbsp; | &nbsp;
-    <b>&lt; / &gt;</b>: Linear speed -/+ &nbsp; | &nbsp;
-    <b>[ / ]</b>: Angular speed -/+ &nbsp;
+    <b>W/A/S/D</b>: PTZ &nbsp;|&nbsp;
+    <b>Z/X</b>: Zoom &nbsp;|&nbsp;
+    <b>↑↓←→</b>: Move &nbsp;|&nbsp;
+    <b>&lt;/&gt;</b>: Linear spd &nbsp;|&nbsp;
+    <b>[/]</b>: Angular spd
   </div>
 
   <script src="control.js"></script>
