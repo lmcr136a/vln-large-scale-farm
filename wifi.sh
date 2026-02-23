@@ -1,0 +1,5 @@
+sudo nmcli device wifi rescan
+sleep 30
+sudo nmcli device wifi rescan
+sleep 5
+sudo nmcli device wifi connect Jetson-AGX password 12345678

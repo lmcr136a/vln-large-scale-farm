@@ -47,6 +47,7 @@ class ControlServer:
             ping_interval=self.config['server']['ping_interval'],
             ping_timeout=self.config['server']['ping_timeout'],
             max_http_buffer_size=self.config['server']['max_http_buffer_size'],
+            allow_upgrades=False,   # Disable WebSocket upgrade - Tailscale breaks WS headers
         )
         print("Flask & SocketIO initialized")
 
@@ -77,6 +78,8 @@ class ControlServer:
         self.server_to_panel = ServerToPanel(self.socketio, self.config)
         self.map_controller  = MapCreationController(self.cmd_vel_pub, self.config)
         self.path_planner    = PathPlanner(self.config)
+
+        # Mapper: emits robot_pose at ~10 Hz and map_updated at 1 Hz directly via socketio
         self.auto_controller = AutonomousController(
             self.cmd_vel_pub, self.socketio, self.config
         )
@@ -109,6 +112,20 @@ class ControlServer:
         def serve_css():
             return send_file('styles.css', mimetype='text/css')
 
+        @self.app.route('/map_latest.png')
+        def serve_map():
+            """Serve map image via HTTP - avoids sending large blobs through socket.io polling"""
+            import os
+            map_path = os.path.join(
+                os.path.expanduser(self.config['paths']['map_dir']),
+                'map_latest.png'
+            )
+            if not os.path.exists(map_path):
+                return ('Map not found', 404)
+            return send_file(map_path, mimetype='image/png',
+                             max_age=0,
+                             conditional=False)
+
     # ── SocketIO Events ──────────────────────────────────────────────────────
     def register_socketio_events(self):
 
@@ -116,8 +133,12 @@ class ControlServer:
         def handle_connect():
             print(f"✅ Client connected: {request.sid}")
             self.map_controller.should_update_twist = True
-            # Send map immediately on connect (force=True ignores hash check)
+            # Send map immediately on connect
             self.server_to_panel.send_map_update(force=True)
+            # Re-emit cached pose so robot marker appears immediately after refresh
+            pose = self.auto_controller.get_current_pose()
+            if pose:
+                self.socketio.emit('robot_pose', pose)
             # Sync recording state to newly connected client
             if self.is_recording:
                 self.socketio.emit('recording_status', {
@@ -153,11 +174,8 @@ class ControlServer:
 
         @self.socketio.on('start_autonomous')
         def handle_start_autonomous(data):
-            robot_x   = data.get('robot_x', 0.0)
-            robot_y   = data.get('robot_y', 0.0)
-            robot_yaw = data.get('robot_yaw', 0.0)
             waypoints = data.get('waypoints', [])
-            self.auto_controller.start(robot_x, robot_y, robot_yaw, waypoints)
+            self.auto_controller.start(waypoints)
 
         @self.socketio.on('stop_autonomous')
         def handle_stop_autonomous():
@@ -212,7 +230,8 @@ class ControlServer:
 
     def ros_spin(self):
         while rclpy.ok() and not self.shutdown_flag.is_set():
-            rclpy.spin_once(self.recorder.ros_node, timeout_sec=0.1)
+            rclpy.spin_once(self.recorder.ros_node, timeout_sec=0.05)
+            rclpy.spin_once(self.auto_controller, timeout_sec=0.05)
 
     def cleanup(self):
         if self.shutdown_flag.is_set():

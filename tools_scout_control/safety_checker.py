@@ -1,206 +1,273 @@
 #!/usr/bin/env python3
 """
-Safety Interceptor Node for Scout Robot
-Subscribes to /livox/lidar and /cmd_vel_raw, publishes to /cmd_vel.
-Implements self-filtering, danger zone detection, and tension zone speed limiting.
+Safety Interceptor Node for Scout Robot — directional obstacle stop.
+
+Danger zone is split into FRONT and REAR halves.
+- Obstacle in FRONT danger zone → block forward motion only (backward still allowed)
+- Obstacle in REAR  danger zone → block backward motion only (forward still allowed)
+- Caution zone caps speed to TENSION_CAP in the affected direction only.
+
+Architecture:
+  - LiDAR callback  : updates shared state only (non-blocking)
+  - cmd_vel callback: reads cached state, enforces limits, publishes immediately
+  - MultiThreadedExecutor + ReentrantCallbackGroup → parallel execution
 """
 
-import rclpy
-from rclpy.node import Node
+import threading
+
 import numpy as np
+import rclpy
 from geometry_msgs.msg import Twist
 from livox_ros_driver2.msg import CustomMsg
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSHistoryPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+)
 
-# ── ANSI color codes for terminal logging ──────────────────────────────────────
-RESET      = "\033[0m"
-BOLD_RED   = "\033[1;31m"
-BOLD_GRAY  = "\033[1;90m"
+# ── ANSI colors ────────────────────────────────────────────────────────────────
+RESET     = "\033[0m"
+BOLD_RED  = "\033[1;31m"
+BOLD_GRAY = "\033[1;90m"
 
-# ── Robot geometry (Scout mini approximate dimensions) ─────────────────────────
-ROBOT_HALF_X = 0.465   # half-length  (front/back)
-ROBOT_HALF_Y = 0.350   # half-width   (left/right)
+# ── Robot geometry (Scout) ─────────────────────────────────────────────────────
+ROBOT_HALF_X = 0.465
+ROBOT_HALF_Y = 0.350
 
-# ── Self-filter box (LiDAR sees its own chassis) ──────────────────────────────
-SELF_FILTER_X = 0.30   # |x| < this  → ignored
-SELF_FILTER_Y = 0.20   # |y| < this  → ignored
+# ── Self-filter (chassis bounding box) ────────────────────────────────────────
+SELF_X = 0.30
+SELF_Y = 0.20
 
-# ── Height band: skip ground noise and overhead clearance ─────────────────────
+# ── Height band ───────────────────────────────────────────────────────────────
 Z_MIN = 0.05
 Z_MAX = 0.60
 
-# ── Danger zone margins ───────────────────────────────────────────────────────
-DANGER_MARGIN    = 0.15   # robot body + this  → danger box
-TENSION_MARGIN   = 0.20   # danger edge + this → tension box
+# ── Zone margins ──────────────────────────────────────────────────────────────
+DANGER_MARGIN  = 0.15
+TENSION_MARGIN = 0.20
 
-DANGER_HALF_X = ROBOT_HALF_X + DANGER_MARGIN          # 0.615 m
-DANGER_HALF_Y = ROBOT_HALF_Y + DANGER_MARGIN          # 0.500 m
-TENSION_HALF_X = DANGER_HALF_X + TENSION_MARGIN       # 0.815 m
-TENSION_HALF_Y = DANGER_HALF_Y + TENSION_MARGIN       # 0.700 m
+DANGER_HX  = ROBOT_HALF_X + DANGER_MARGIN   # 0.615 m
+DANGER_HY  = ROBOT_HALF_Y + DANGER_MARGIN   # 0.500 m
+TENSION_HX = DANGER_HX + TENSION_MARGIN     # 0.815 m
+TENSION_HY = DANGER_HY + TENSION_MARGIN     # 0.700 m
 
-# ── Detection threshold ───────────────────────────────────────────────────────
-DANGER_POINT_THRESHOLD = 10
+DANGER_THRESHOLD = 10
+TENSION_CAP      = 0.1
 
-# ── Speed cap inside tension zone ─────────────────────────────────────────────
-TENSION_SPEED_CAP = 0.1
+SENSOR_QOS = QoSProfile(
+    reliability=QoSReliabilityPolicy.BEST_EFFORT,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=1,
+    durability=QoSDurabilityPolicy.VOLATILE,
+)
 
 
 class SafetyInterceptor(Node):
     def __init__(self):
         super().__init__("safety_interceptor")
 
-        self._collision_detected = False
+        # Shared state — written by LiDAR thread, read by cmd thread
+        self._lock = threading.Lock()
+
+        # Directional danger flags
+        self._danger_front   = False   # obstacle in front   danger zone
+        self._danger_rear    = False   # obstacle in rear    danger zone
+
+        # Directional caution flags
+        self._caution_front  = False   # obstacle in front   caution band
+        self._caution_rear   = False   # obstacle in rear    caution band
+        self._caution_left   = False   # obstacle in lateral caution band
+        self._caution_right  = False   # obstacle in lateral caution band
+
+        self._front_count    = 0
+        self._rear_count     = 0
+
         self._latest_cmd: Twist | None = None
 
+        cg = ReentrantCallbackGroup()
+
         self.sub_lidar = self.create_subscription(
-            CustomMsg, "/livox/lidar", self._lidar_cb, 10
+            CustomMsg, "/livox/lidar", self._lidar_cb, SENSOR_QOS,
+            callback_group=cg,
         )
         self.sub_cmd = self.create_subscription(
-            Twist, "/cmd_vel_raw", self._cmd_cb, 10
+            Twist, "/cmd_vel_raw", self._cmd_cb, 10,
+            callback_group=cg,
         )
         self.pub_cmd = self.create_publisher(Twist, "/cmd_vel", 10)
 
-        self.get_logger().info("SafetyInterceptor started.")
-
-    # ── Helpers ────────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _extract_points(msg: CustomMsg) -> np.ndarray:
-        """Convert Livox CustomMsg points to (N,3) float32 numpy array."""
-        n = len(msg.points)
-        if n == 0:
-            return np.empty((0, 3), dtype=np.float32)
-        pts = np.empty((n, 3), dtype=np.float32)
-        for i, p in enumerate(msg.points):
-            pts[i, 0] = p.x
-            pts[i, 1] = p.y
-            pts[i, 2] = p.z
-        return pts
-
-    @staticmethod
-    def _self_filter(pts: np.ndarray) -> np.ndarray:
-        """Remove points that fall inside the robot chassis bounding box."""
-        mask = ~(
-            (np.abs(pts[:, 0]) < SELF_FILTER_X) &
-            (np.abs(pts[:, 1]) < SELF_FILTER_Y)
-        )
-        return pts[mask]
-
-    @staticmethod
-    def _height_filter(pts: np.ndarray) -> np.ndarray:
-        """Keep only points within the valid height band."""
-        mask = (pts[:, 2] > Z_MIN) & (pts[:, 2] < Z_MAX)
-        return pts[mask]
-
-    @staticmethod
-    def _in_box(pts: np.ndarray, hx: float, hy: float) -> np.ndarray:
-        """Return boolean mask for points inside an axis-aligned box ±hx, ±hy."""
-        return (np.abs(pts[:, 0]) < hx) & (np.abs(pts[:, 1]) < hy)
+        self.get_logger().info("SafetyInterceptor started (directional mode).")
 
     # ── LiDAR callback ────────────────────────────────────────────────────────
 
     def _lidar_cb(self, msg: CustomMsg):
-        pts = self._extract_points(msg)
+        if not msg.points:
+            return
+
+        pts = np.array(
+            [[p.x, p.y, p.z] for p in msg.points], dtype=np.float32
+        )
+
+        # Self-filter
+        keep = ~((np.abs(pts[:, 0]) < SELF_X) & (np.abs(pts[:, 1]) < SELF_Y))
+        pts  = pts[keep]
         if pts.shape[0] == 0:
             return
 
-        pts = self._self_filter(pts)
-        pts = self._height_filter(pts)
+        # Height filter
+        keep = (pts[:, 2] > Z_MIN) & (pts[:, 2] < Z_MAX)
+        pts  = pts[keep]
+
+        # Reset all flags if no valid points remain
         if pts.shape[0] == 0:
+            with self._lock:
+                self._danger_front  = self._danger_rear   = False
+                self._caution_front = self._caution_rear  = False
+                self._caution_left  = self._caution_right = False
             return
 
-        cmd = self._latest_cmd
+        x  = pts[:, 0]
+        ax = np.abs(x)
+        ay = np.abs(pts[:, 1])
 
-        # Determine current motion intent
-        linear_v  = cmd.linear.x  if cmd else 0.0
-        angular_v = cmd.angular.z if cmd else 0.0
+        # ── Shared masks ──────────────────────────────────────────────────────
+        in_y_danger  = ay < DANGER_HY
+        in_y_tension = ay < DANGER_HY          # same y-band for front/rear caution
+        in_x_danger  = ax < DANGER_HX
 
-        moving_forward  = linear_v  >  0.01
-        moving_backward = linear_v  < -0.01
-        turning         = abs(angular_v) > 0.01
+        # ── DANGER ZONE (directional) ─────────────────────────────────────────
+        # Front: x > 0, within danger box
+        front_danger_mask = (x > 0) & (x < DANGER_HX) & in_y_danger
+        rear_danger_mask  = (x < 0) & (x > -DANGER_HX) & in_y_danger
 
-        # ── Danger zone: full box, all sides ──────────────────────────────────
-        danger_mask  = self._in_box(pts, DANGER_HALF_X, DANGER_HALF_Y)
-        danger_count = int(danger_mask.sum())
-        self._collision_detected = danger_count >= DANGER_POINT_THRESHOLD
+        front_count = int(front_danger_mask.sum())
+        rear_count  = int(rear_danger_mask.sum())
 
-        # ── Tension zone: directional ─────────────────────────────────────────
-        in_tension = False
-        if not self._collision_detected:
-            if moving_forward:
-                # Check front band: x in (DANGER_HALF_X, TENSION_HALF_X), |y| < DANGER_HALF_Y
-                front_mask = (
-                    (pts[:, 0] >  DANGER_HALF_X) &
-                    (pts[:, 0] <  TENSION_HALF_X) &
-                    (np.abs(pts[:, 1]) < DANGER_HALF_Y)
-                )
-                in_tension = bool(front_mask.any())
+        danger_front = front_count >= DANGER_THRESHOLD
+        danger_rear  = rear_count  >= DANGER_THRESHOLD
 
-            elif moving_backward:
-                # Check rear band
-                rear_mask = (
-                    (pts[:, 0] < -DANGER_HALF_X) &
-                    (pts[:, 0] > -TENSION_HALF_X) &
-                    (np.abs(pts[:, 1]) < DANGER_HALF_Y)
-                )
-                in_tension = bool(rear_mask.any())
+        # ── CAUTION ZONE (directional) ────────────────────────────────────────
+        # Front band: x in (DANGER_HX, TENSION_HX), within danger y
+        caution_front = bool(
+            ((x > DANGER_HX) & (x < TENSION_HX) & in_y_tension).any()
+        )
+        # Rear band
+        caution_rear  = bool(
+            ((x < -DANGER_HX) & (x > -TENSION_HX) & in_y_tension).any()
+        )
+        # Lateral bands (both left and right, for turning)
+        caution_right = bool(
+            ((pts[:, 1] >  DANGER_HY) & (pts[:, 1] <  TENSION_HY) & in_x_danger).any()
+        )
+        caution_left  = bool(
+            ((pts[:, 1] < -DANGER_HY) & (pts[:, 1] > -TENSION_HY) & in_x_danger).any()
+        )
 
-            if turning:
-                # Check lateral bands
-                lat_mask = (
-                    (np.abs(pts[:, 1]) > DANGER_HALF_Y) &
-                    (np.abs(pts[:, 1]) < TENSION_HALF_Y) &
-                    (np.abs(pts[:, 0]) < DANGER_HALF_X)
-                )
-                in_tension = in_tension or bool(lat_mask.any())
+        with self._lock:
+            self._danger_front  = danger_front
+            self._danger_rear   = danger_rear
+            self._caution_front = caution_front
+            self._caution_rear  = caution_rear
+            self._caution_left  = caution_left
+            self._caution_right = caution_right
+            self._front_count   = front_count
+            self._rear_count    = rear_count
 
-        # ── Build output command ───────────────────────────────────────────────
-        out = Twist()
-
-        if self._collision_detected:
-            out.linear.x  = 0.0
-            out.angular.z = 0.0
-            self.get_logger().warn(
-                f"{BOLD_RED}[DANGER ZONE] Obstacle detected ({danger_count} pts) "
-                f"— EMERGENCY STOP{RESET}"
-            )
-
-        elif in_tension:
-            if cmd:
-                # Cap speeds to TENSION_SPEED_CAP while preserving sign/direction
-                lv = cmd.linear.x
-                av = cmd.angular.z
-                out.linear.x  = float(np.clip(lv,  -TENSION_SPEED_CAP, TENSION_SPEED_CAP))
-                out.angular.z = float(np.clip(av,  -TENSION_SPEED_CAP, TENSION_SPEED_CAP))
-            if abs(out.linear.x) > 0.0 or abs(out.angular.z) > 0.0:
-                self.get_logger().warn(
-                    f"{BOLD_GRAY}[CAUTION ZONE] Obstacle nearby — "
-                    f"linear={out.linear.x:.2f} m/s  angular={out.angular.z:.2f} rad/s{RESET}"
-                )
-
-        else:
-            if cmd:
-                out.linear.x  = cmd.linear.x
-                out.angular.z = cmd.angular.z
-            if abs(out.linear.x) > 0.0 or abs(out.angular.z) > 0.0:
-                self.get_logger().info(
-                    f"[PASS-THROUGH] linear={out.linear.x:.2f} m/s  "
-                    f"angular={out.angular.z:.2f} rad/s"
-                )
-
-        self.pub_cmd.publish(out)
-
-    # ── /cmd_vel_raw callback ──────────────────────────────────────────────────
+    # ── cmd_vel callback ───────────────────────────────────────────────────────
 
     def _cmd_cb(self, msg: Twist):
-        """Cache the latest velocity command from the web app."""
         self._latest_cmd = msg
+
+        with self._lock:
+            danger_front  = self._danger_front
+            danger_rear   = self._danger_rear
+            caution_front = self._caution_front
+            caution_rear  = self._caution_rear
+            caution_left  = self._caution_left
+            caution_right = self._caution_right
+            front_count   = self._front_count
+            rear_count    = self._rear_count
+
+        lv  = msg.linear.x
+        av  = msg.angular.z
+        out = Twist()
+        out.linear.x  = lv
+        out.angular.z = av
+
+        blocked_linear  = False
+        capped_linear   = False
+        capped_angular  = False
+        log_parts       = []
+
+        # ── Linear velocity: direction-aware danger check ─────────────────────
+        if lv > 0.01 and danger_front:
+            # Trying to go forward but obstacle ahead → block forward only
+            out.linear.x = 0.0
+            blocked_linear = True
+            log_parts.append(
+                f"{BOLD_RED}[DANGER FRONT] {front_count} pts — forward BLOCKED{RESET}"
+            )
+
+        elif lv < -0.01 and danger_rear:
+            # Trying to go backward but obstacle behind → block backward only
+            out.linear.x = 0.0
+            blocked_linear = True
+            log_parts.append(
+                f"{BOLD_RED}[DANGER REAR] {rear_count} pts — backward BLOCKED{RESET}"
+            )
+
+        # ── Linear velocity: direction-aware caution cap ──────────────────────
+        elif lv > 0.01 and caution_front:
+            out.linear.x = min(lv, TENSION_CAP)
+            capped_linear = True
+
+        elif lv < -0.01 and caution_rear:
+            out.linear.x = max(lv, -TENSION_CAP)
+            capped_linear = True
+
+        # ── Angular velocity: caution cap based on turning direction ──────────
+        # Positive angular.z = turning left (CCW)
+        # → left side becomes the swept side → check caution_left
+        if av > 0.01 and caution_left:
+            out.angular.z = min(av, TENSION_CAP)
+            capped_angular = True
+        elif av < -0.01 and caution_right:
+            out.angular.z = max(av, -TENSION_CAP)
+            capped_angular = True
+
+        # ── Logging ───────────────────────────────────────────────────────────
+        moving = abs(out.linear.x) > 0.0 or abs(out.angular.z) > 0.0
+
+        if capped_linear or capped_angular:
+            log_parts.append(
+                f"{BOLD_GRAY}[CAUTION] "
+                f"linear={out.linear.x:.2f} m/s  "
+                f"angular={out.angular.z:.2f} rad/s{RESET}"
+            )
+
+        if log_parts:
+            for part in log_parts:
+                self.get_logger().warn(part)
+        elif moving:
+            self.get_logger().info(
+                f"[PASS] linear={out.linear.x:.2f} m/s  "
+                f"angular={out.angular.z:.2f} rad/s"
+            )
+
+        self.pub_cmd.publish(out)
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = SafetyInterceptor()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:

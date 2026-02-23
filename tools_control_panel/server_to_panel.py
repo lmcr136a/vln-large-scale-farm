@@ -1,29 +1,27 @@
 """
-Server to Panel Communication
-Map is sent only when hash changes; robot pose is sent separately at 10Hz
+Server to Panel Communication.
+
+Responsibilities:
+  - sysmon:     CPU / memory / disk / WiFi  → every ~1s
+  - map_updated: watch map_latest.png for changes (mtime), read yaml metadata,
+                 emit metadata to client (client fetches PNG via HTTP GET)
+  - robot_pose:  NOT handled here — autonomous_mode.py emits directly
 """
 import os
 import time
-import base64
-import hashlib
-import threading
-import psutil
 import shutil
 import yaml
-import cv2
-
-
-# Maximum map dimension (px) for downscaling before sending - optimized for Tailscale
-MAP_MAX_DIM = 1500
+import psutil
 
 
 class ServerToPanel:
     def __init__(self, socketio, config):
-        self.socketio = socketio
-        self.config   = config
-        self._last_map_hash = None
+        self.socketio       = socketio
+        self.config         = config
+        self._last_mtime    = 0.0
+        self._map_version   = 0
 
-    # ── Internal Utilities ───────────────────────────────────────────────
+    # ── WiFi ──────────────────────────────────────────────────────────────────
 
     def get_wifi_name(self):
         try:
@@ -32,29 +30,57 @@ class ServerToPanel:
         except Exception:
             return "Unavailable"
 
-    def _read_map_yaml(self):
-        """Read map metadata and robot pose from map_latest.yaml"""
-        map_dir  = os.path.expanduser(self.config['paths']['map_dir'])
-        map_yaml = os.path.join(map_dir, 'map_latest.yaml')
+    # ── Map ───────────────────────────────────────────────────────────────────
 
-        info = {
-            'resolution': 0.05,
-            'origin_x': 0.0, 'origin_y': 0.0,
-            'robot_x':  0.0, 'robot_y':  0.0, 'robot_yaw': 0.0,
-        }
-        if os.path.exists(map_yaml):
-            with open(map_yaml, 'r') as f:
-                d = yaml.safe_load(f)
-            info['resolution'] = d.get('resolution', info['resolution'])
-            origin = d.get('origin', [0.0, 0.0, 0.0])
-            info['origin_x']   = origin[0]
-            info['origin_y']   = origin[1]
-            info['robot_x']    = d.get('robot_x',   0.0)
-            info['robot_y']    = d.get('robot_y',   0.0)
-            info['robot_yaw']  = d.get('robot_yaw', 0.0)
-        return info
+    def _map_paths(self):
+        map_dir = os.path.expanduser(self.config['paths']['map_dir'])
+        return (
+            os.path.join(map_dir, 'map_latest.png'),
+            os.path.join(map_dir, 'map_latest.yaml'),
+        )
 
-    # ── System Monitor ────────────────────────────────────────────────────
+    def send_map_update(self, force=False):
+        """
+        Check if map_latest.png has changed (via mtime).
+        If yes, read map_latest.yaml for metadata and emit map_updated.
+        The client fetches the actual PNG via HTTP GET /map_latest.png?v=N.
+        """
+        png_path, yaml_path = self._map_paths()
+
+        if not os.path.exists(png_path) or not os.path.exists(yaml_path):
+            return
+
+        mtime = os.path.getmtime(png_path)
+        if not force and mtime <= self._last_mtime:
+            return
+        self._last_mtime = mtime
+
+        try:
+            with open(yaml_path, 'r') as f:
+                meta = yaml.safe_load(f)
+        except Exception:
+            return
+
+        origin = meta.get('origin', [0.0, 0.0, 0.0])
+        img_w  = int(meta.get('grid_width',  0) * 2)   # IMAGE_RES_MUL = 2
+        img_h  = int(meta.get('grid_height', 0) * 2)
+
+        self._map_version += 1
+
+        try:
+            self.socketio.emit('map_updated', {
+                'version':    self._map_version,
+                'resolution': float(meta.get('resolution', 0.1)),
+                'origin_x':   float(origin[0]),
+                'origin_y':   float(origin[1]),
+                'width':      img_w,
+                'height':     img_h,
+            })
+            print(f'[map] notified {img_w}×{img_h}')
+        except Exception as e:
+            print(f'[map] emit failed: {e}')
+
+    # ── System Monitor ────────────────────────────────────────────────────────
 
     def send_system_monitor(self, linear_speed):
         data_dir = os.path.expanduser(self.config['paths']['data_dir'])
@@ -65,114 +91,45 @@ class ServerToPanel:
         mem  = psutil.virtual_memory().percent
         wifi = self.get_wifi_name()
 
-        self.socketio.emit('sysmon', {
-            'cpu':        cpu,
-            'mem':        mem,
-            'used_gb':    round(used  / (1024**3), 1),
-            'total_gb':   round(total / (1024**3), 1),
-            'used_pct':   round((used / total) * 100, 1),
-            'linear_mps': round(linear_speed, 2),
-            'linear_mph': round(linear_speed * 2.23694, 2),
-            'wifi':       wifi,
-        })
+        try:
+            self.socketio.emit('sysmon', {
+                'cpu':        cpu,
+                'mem':        mem,
+                'used_gb':    round(used  / (1024**3), 1),
+                'total_gb':   round(total / (1024**3), 1),
+                'used_pct':   round((used / total) * 100, 1),
+                'linear_mps': round(linear_speed, 2),
+                'linear_mph': round(linear_speed * 2.23694, 2),
+                'wifi':       wifi,
+            })
+        except Exception:
+            pass
 
-    # ── Map Transmission (hash comparison - only send on change) ──────────
-
-    def send_map_update(self, force=False):
-        """
-        Read map PNG, compare hash, and send as base64 only if changed.
-        force=True bypasses hash check and always sends (used on initial connect).
-        """
-        map_dir = os.path.expanduser(self.config['paths']['map_dir'])
-        map_png = os.path.join(map_dir, 'map_latest.png')
-
-        if not os.path.exists(map_png):
-            return
-
-        # Read file
-        with open(map_png, 'rb') as f:
-            raw = f.read()
-
-        new_hash = hashlib.md5(raw).hexdigest()
-        if not force and new_hash == self._last_map_hash:
-            return   # No change - skip transmission
-        self._last_map_hash = new_hash
-
-        # Decode with OpenCV and downscale (e.g. 6000×6000 → max 1500px)
-        img = cv2.imdecode(
-            __import__('numpy').frombuffer(raw, dtype='uint8'),
-            cv2.IMREAD_COLOR
-        )
-        if img is None:
-            return
-
-        h, w = img.shape[:2]
-        max_dim = MAP_MAX_DIM
-        if max(h, w) > max_dim:
-            scale = max_dim / max(h, w)
-            img = cv2.resize(img,
-                             (int(w * scale), int(h * scale)),
-                             interpolation=cv2.INTER_AREA)
-            h, w = img.shape[:2]
-
-        # JPEG encode at quality 60 (maps need more clarity than RGB stream)
-        _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 60])
-        b64 = base64.b64encode(buf).decode('utf-8')
-
-        # Read map metadata
-        info = self._read_map_yaml()
-
-        self.socketio.emit('map_image', {
-            'image':      b64,
-            'width':      w,
-            'height':     h,
-            'resolution': info['resolution'],
-            'origin_x':   info['origin_x'],
-            'origin_y':   info['origin_y'],
-        })
-        print(f"[map] sent {w}×{h} ({len(b64)//1024} KB)")
-
-    # ── Robot Pose Transmission (10~20 Hz) ───────────────────────────────
-
-    def send_robot_pose(self):
-        """Read only robot position from yaml and emit lightweight pose event"""
-        info = self._read_map_yaml()
-        self.socketio.emit('robot_pose', {
-            'x':   info['robot_x'],
-            'y':   info['robot_y'],
-            'yaw': info['robot_yaw'],
-        })
-
-    # ── Main Loop ─────────────────────────────────────────────────────────
+    # ── Main Loop ─────────────────────────────────────────────────────────────
 
     def monitor_loop(self, linear_speed_getter):
         """
-        - sysmon:     every monitor.update_interval seconds (default 0.25s = 4Hz)
-        - robot_pose: every 0.1s (10Hz)
-        - map_image:  every map.update_interval counter tick, only if hash changed
+        - map check:  every map.update_interval seconds (mtime-based, no re-send if unchanged)
+        - sysmon:     every monitor.update_interval seconds
         """
-        pose_interval    = 0.1   # 10 Hz
-        sysmon_interval  = self.config['monitor']['update_interval']
-        map_check_count  = max(1, int(self.config['map']['update_interval'] / pose_interval))
+        sysmon_interval = self.config['monitor']['update_interval']
+        map_interval    = self.config.get('map', {}).get('update_interval', 1.0)
 
         last_sysmon = 0.0
-        counter     = 0
+        last_map    = 0.0
+
+        # Force-send on startup so the client gets the map immediately
+        self.send_map_update(force=True)
 
         while True:
             now = time.time()
 
-            # Robot pose (every loop iteration = 10Hz)
-            self.send_robot_pose()
+            if now - last_map >= map_interval:
+                self.send_map_update()
+                last_map = now
 
-            # System monitor
             if now - last_sysmon >= sysmon_interval:
                 self.send_system_monitor(linear_speed_getter())
                 last_sysmon = now
 
-            # Map (check for changes at configured interval)
-            counter += 1
-            if counter >= map_check_count:
-                self.send_map_update()
-                counter = 0
-
-            time.sleep(pose_interval)
+            time.sleep(0.2)

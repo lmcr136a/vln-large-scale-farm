@@ -33,8 +33,6 @@ sleep 1
 tmux new-window -t $SESSION:1 -n "slam"
 tmux send-keys -t $SESSION:1 "bash $SCRIPT_DIR/launch_slam.sh $MODE" C-m
 
-sleep 1
-
 # Window 2: Control Panel
 tmux new-window -t $SESSION:2 -n "control"
 tmux send-keys -t $SESSION:2 "bash $SCRIPT_DIR/launch_control_panel.sh" C-m
@@ -48,8 +46,8 @@ tmux new-window -t $SESSION:4 -n "gps"
 tmux send-keys -t $SESSION:4 "python3 gps_optimization_ws/pub_gps.py" C-m
 
 
-tmux new-window -t $SESSION:5 -n "gps-vis"
-tmux send-keys -t $SESSION:5 "python3 gps_optimization_ws/vis_gps_path.py" C-m
+tmux new-window -t $SESSION:5 -n "safety"
+tmux send-keys -t $SESSION:5 "python3 tools_scout_control/safety_checker.py" C-m
 
 
 # Window 6: Status Info

@@ -6,7 +6,9 @@
 // ═══════════════════════════════════════════════════════════════
 
 const host   = window.location.hostname;
-const socket = io(`http://${host}:8000`);
+const socket = io(`http://${host}:8000`, {
+  transports: ['polling'],   // WebSocket disabled - Tailscale mangles WS headers
+});
 
 // ── State ─────────────────────────────────────────────────────
 const keyState    = {};
@@ -15,6 +17,7 @@ let isAutoMode    = false;
 let pathNodes     = [];
 let followRobot   = false;
 let currentMapMeta = null;   // { resolution, origin_x, origin_y, width, height }
+let isFirstMap     = true;   // center stage on first map load
 let robotPose      = null;   // { x, y, yaw }
 
 // ── Konva Stage / Layer Initialization ───────────────────────
@@ -89,20 +92,24 @@ function initStage() {
 initStage();
 
 // ── Util: World coordinates → Stage pixel coordinates ────────
+// Image saved with np.flipud → row 0 = world Y_max (canvas top).
+// So world +Y → canvas up (decreasing py).
+//   px =         (wx - origin_x) / resolution
+//   py = height - (wy - origin_y) / resolution   ← Y flip
 function worldToStagePixel(wx, wy) {
   if (!currentMapMeta) return null;
-  const { resolution, origin_x, origin_y } = currentMapMeta;
+  const { resolution, origin_x, origin_y, height } = currentMapMeta;
   const px = (wx - origin_x) / resolution;
-  const py = (wy - origin_y) / resolution;
+  const py = height - (wy - origin_y) / resolution;
   return { x: px, y: py };
 }
 
 // ── Util: Stage click coordinates → World coordinates ────────
 function stageClickToWorld(stageX, stageY) {
   if (!currentMapMeta) return null;
-  const { resolution, origin_x, origin_y } = currentMapMeta;
+  const { resolution, origin_x, origin_y, height } = currentMapMeta;
   const wx = origin_x + stageX * resolution;
-  const wy = origin_y + stageY * resolution;
+  const wy = origin_y + (height - stageY) * resolution;  // Y flip
   return { x: wx, y: wy };
 }
 
@@ -178,8 +185,8 @@ socket.on('back_frame', (data) => {
 });
 
 // ── Map Image (server pushes only when changed) ──────────────
-socket.on('map_image', (data) => {
-  // Store metadata
+socket.on('map_updated', (data) => {
+  // Store metadata from socket notification
   currentMapMeta = {
     resolution: data.resolution,
     origin_x:   data.origin_x,
@@ -193,18 +200,35 @@ socket.on('map_image', (data) => {
     return;
   }
 
-  // base64 → HTMLImageElement → update Konva.Image
+  // Fetch image via HTTP GET (avoids sending large blobs through socket.io polling)
   const img = new window.Image();
   img.onload = () => {
     mapImage.image(img);
     mapImage.width(data.width);
     mapImage.height(data.height);
     mapLayer.batchDraw();
+
+    // 첫 로드 시 맵을 화면 중앙에 배치
+    if (isFirstMap) {
+      isFirstMap = false;
+      const scale = Math.min(
+        stage.width()  / data.width,
+        stage.height() / data.height,
+      ) * 0.9;  // 90% so there's a small margin
+      stage.scale({ x: scale, y: scale });
+      stage.position({
+        x: (stage.width()  - data.width  * scale) / 2,
+        y: (stage.height() - data.height * scale) / 2,
+      });
+      stage.batchDraw();
+    }
+
     redrawDynLayer();
   };
-  img.src = 'data:image/jpeg;base64,' + data.image;
+  // Cache-bust with version token so browser doesn't serve stale PNG
+  img.src = `/map_latest.png?v=${data.version}`;
 
-  console.log(`[map] received ${data.width}×${data.height}`);
+  console.log(`[map] received ${data.width}\u00d7${data.height}`);
 });
 
 // ── Robot Pose (10Hz) ─────────────────────────────────────────
@@ -330,11 +354,12 @@ function redrawDynLayer() {
   if (robotPose && currentMapMeta) {
     const p = worldToStagePixel(robotPose.x, robotPose.y);
     if (p) {
-      // yaw: ROS convention - positive = CCW. Konva y-axis is flipped.
+      // yaw: ROS convention CCW positive. Canvas Y is flipped vs world Y.
+      // world +Y = canvas up → negate sin component.
       const yawRad = robotPose.yaw;
-      const headLen = 6;   // half of old radius 12
+      const headLen = 6;
       const dx =  Math.cos(yawRad) * headLen;
-      const dy = -Math.sin(yawRad) * headLen;  // flip y for canvas coords
+      const dy = -Math.sin(yawRad) * headLen;
 
       // Center dot
       dynLayer.add(new Konva.Circle({
