@@ -74,3 +74,10 @@ glim_ws/src/pointcloud_to_2dmap/
 glim_ws/build/
 glim_ws/install/
 glim_ws/log/
+glim_ws/src/glim/
+glim_ws/src/glim_ext/
+glim_ws/src/glim_ros2/
+glim_ws/src/pointcloud_to_2dmap/
+glim_ws/build/
+glim_ws/install/
+glim_ws/log/
