@@ -1,5 +1,6 @@
 {
   "logging": {
+    "level": "debug",
     "log_dir": "/tmp",
     "save_logs": true,
     "rotate_logs": true,
