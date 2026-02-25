@@ -12,7 +12,7 @@
     "distance_near_thresh": 0.25,
     "distance_far_thresh": 100.0,
     "use_random_grid_downsampling": true,
-    "downsample_resolution": 0.25,
+    "downsample_resolution": 0.5,
     "random_downsample_target": 10000,
     "random_downsample_rate": 0.1,
     "enable_outlier_removal": true,
