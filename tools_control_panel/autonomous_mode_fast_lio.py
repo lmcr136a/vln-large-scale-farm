@@ -1,19 +1,20 @@
 """
 Autonomous Mode — independent ROS2 node.
 
-Subscribes to /glim_ros/odom (~10 Hz) to maintain a high-frequency
-pose cache.  GLIM publishes odometry directly in the map frame, so no
-TF transformation is required.
+Subscribes to /path directly at LiDAR rate (~10 Hz) to maintain
+a high-frequency pose cache. Completely independent of save_map.py
+(which is slow due to map rendering at 1 Hz).
 
 Architecture:
-    /glim_ros/odom  →  _odom_callback (~10 Hz)  →  _current_pose cache
-                                                          ↓
+    /path topic  →  _path_callback (~10 Hz)  →  _current_pose cache
+                                                       ↓
     control_server  →  start(waypoints)  →  _drive_loop (CONTROL_DT = 0.1 s)
-                                                   ↓ get_current_pose()
-                                             autonomous_driving.run()
-                                                   ↓
-                                             cmd_vel publisher
+                                                  ↓ get_current_pose()
+                                            autonomous_driving.run()
+                                                  ↓
+                                            cmd_vel publisher
 """
+import math
 import time
 import threading
 
@@ -21,10 +22,15 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Path
 from geometry_msgs.msg import Twist
+import tf2_ros
+from tf2_ros import TransformException
+from rclpy.duration import Duration
 
 import autonomous_driving
+
+TARGET_FRAME = 'map'
 
 
 def _quat_to_yaw(x, y, z, w):
@@ -32,10 +38,20 @@ def _quat_to_yaw(x, y, z, w):
     return float(np.arctan2(2.0*(w*z + x*y), 1.0 - 2.0*(y**2 + z**2)))
 
 
+def _compose_quaternions(xt, yt, zt, wt, xp, yp, zp, wp):
+    """Quaternion product q_result = q_t * q_p."""
+    return (
+        wt*xp + xt*wp + yt*zp - zt*yp,
+        wt*yp - xt*zp + yt*wp + zt*xp,
+        wt*zp + xt*yp - yt*xp + zt*wp,
+        wt*wp - xt*xp - yt*yp - zt*zp,
+    )
+
+
 class AutonomousController(Node):
     """
     Independent ROS2 node for pose tracking and autonomous driving.
-    Does NOT depend on save_map_glim.py at all.
+    Does NOT depend on save_map.py at all.
     """
 
     def __init__(self, publisher, socketio, config):
@@ -46,46 +62,75 @@ class AutonomousController(Node):
         self.config   = config
 
         self._pose_lock    = threading.Lock()
-        self._current_pose = None   # {x, y, z, yaw} in map frame, updated at ~10 Hz
+        self._current_pose = None   # {x, y, z, yaw} in TARGET_FRAME, updated at ~10 Hz
 
         self._active     = False
         self._stop_event = threading.Event()
         self._thread     = None
 
-        # /glim_ros/odom is published with VOLATILE durability
+        # TF2 to transform /path poses into TARGET_FRAME
+        self.tf_buffer   = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
         qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10)
 
-        self.odom_sub = self.create_subscription(
-            Odometry, '/glim_ros/odom', self._odom_callback, qos)
+        self.path_sub = self.create_subscription(
+            Path, '/path', self._path_callback, qos)
 
-        self.get_logger().info('AutonomousController ready — listening on /glim_ros/odom')
+        self.get_logger().info('AutonomousController ready')
 
     # ── High-frequency pose update ─────────────────────────────────────────────
 
-    def _odom_callback(self, msg: Odometry):
+    def _path_callback(self, msg):
         """
-        Called at ~10 Hz.
-        /glim_ros/odom is already in the map frame — no TF needed.
+        Called at LiDAR rate (~10 Hz).
+        Transforms the last pose in the path into TARGET_FRAME and caches it.
         """
-        pos = msg.pose.pose.position
-        q   = msg.pose.pose.orientation
-        yaw = _quat_to_yaw(q.x, q.y, q.z, q.w)
+        if not msg.poses:
+            return
 
-        pose = {
-            'x':   float(pos.x),
-            'y':   float(pos.y),
-            'z':   float(pos.z),
-            'yaw': yaw,
-        }
+        last = msg.poses[-1].pose
+        pos  = last.position
+        q    = last.orientation
+
+        try:
+            tf = self.tf_buffer.lookup_transform(
+                TARGET_FRAME, msg.header.frame_id,
+                msg.header.stamp, timeout=Duration(seconds=0.1))
+
+            t  = tf.transform.translation
+            r  = tf.transform.rotation
+            rx, ry, rz, rw = r.x, r.y, r.z, r.w
+
+            # Rotate + translate position into TARGET_FRAME
+            R = np.array([
+                [1-2*(ry**2+rz**2), 2*(rx*ry-rw*rz), 2*(rx*rz+rw*ry)],
+                [2*(rx*ry+rw*rz),   1-2*(rx**2+rz**2), 2*(ry*rz-rw*rx)],
+                [2*(rx*rz-rw*ry),   2*(ry*rz+rw*rx),   1-2*(rx**2+ry**2)],
+            ])
+            p_map = R @ np.array([pos.x, pos.y, pos.z]) + np.array([t.x, t.y, t.z])
+
+            # Compose quaternions to get yaw in TARGET_FRAME
+            xr, yr, zr, wr = _compose_quaternions(
+                rx, ry, rz, rw, q.x, q.y, q.z, q.w)
+            yaw = _quat_to_yaw(xr, yr, zr, wr)
+
+            pose = {'x': float(p_map[0]), 'y': float(p_map[1]),
+                    'z': float(p_map[2]), 'yaw': yaw}
+
+        except TransformException:
+            # TF not yet available — use raw pose as fallback
+            yaw  = _quat_to_yaw(q.x, q.y, q.z, q.w)
+            pose = {'x': pos.x, 'y': pos.y, 'z': pos.z, 'yaw': yaw}
 
         with self._pose_lock:
             self._current_pose = pose
 
-        # Emit robot_pose to web at odom callback rate (~10 Hz)
+        # Emit robot_pose to web at path callback rate (~10 Hz)
         try:
             self.socketio.emit('robot_pose', pose)
         except Exception:
