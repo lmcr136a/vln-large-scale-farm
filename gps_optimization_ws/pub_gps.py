@@ -10,6 +10,7 @@ from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_msgs.msg import Header
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 import serial
 import threading
 import time
@@ -52,8 +53,16 @@ class GPSNode(Node):
         marker_topic = self.get_parameter('marker_topic').value
         self.map_frame_id = self.get_parameter('map_frame_id').value
 
+        # QoS for sensor data
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+
         # Publishers
-        self.gps_pub = self.create_publisher(NavSatFix, gps_topic, 10)
+        self.gps_pub = self.create_publisher(NavSatFix, gps_topic, sensor_qos)
         self.marker_pub = self.create_publisher(Marker, marker_topic, 10)
 
         # Serial state
@@ -177,7 +186,7 @@ class GPSNode(Node):
                 self.last_rmc_data = msg
                 self._publish_navsat_fix()
         except Exception as e:
-            self.get_logger().debug(f'Parse error: {e}')
+            self.get_logger().error(f'Parse error: {e}')
 
     def _parse_basic(self, sentence: str):
         parts = sentence.split(',')
@@ -279,10 +288,13 @@ class GPSNode(Node):
                 variance = 25.0
 
         msg.position_covariance_type = NavSatFix.COVARIANCE_TYPE_APPROXIMATED
-        msg.position_covariance = [variance, 0, 0, 0, variance, 0, 0, 0, variance * 2]
+        msg.position_covariance = [float(variance), 0.0, 0.0, 0.0, float(variance), 0.0, 0.0, 0.0, float(variance) * 2.0]
 
-        self.gps_pub.publish(msg)
-        self.get_logger().info(f'NavSatFix -> lat: {msg.latitude:.6f}, lon: {msg.longitude:.6f}, alt: {msg.altitude:.1f}m')
+        try:
+            self.gps_pub.publish(msg)
+            self.get_logger().info(f'NavSatFix -> lat: {msg.latitude:.6f}, lon: {msg.longitude:.6f}, alt: {msg.altitude:.1f}m')
+        except Exception as pub_err:
+            self.get_logger().error(f'PUBLISH FAILED: {pub_err}')
 
         if msg.status.status >= 0:
             self._update_trajectory(msg.latitude, msg.longitude, msg.altitude)
@@ -304,7 +316,7 @@ class GPSNode(Node):
         num_sats = self.last_gga_data['num_sats']
         variance = (10.0 / max(num_sats, 4)) ** 2
         msg.position_covariance_type = NavSatFix.COVARIANCE_TYPE_APPROXIMATED
-        msg.position_covariance = [variance, 0, 0, 0, variance, 0, 0, 0, variance * 2]
+        msg.position_covariance = [float(variance), 0.0, 0.0, 0.0, float(variance), 0.0, 0.0, 0.0, float(variance) * 2.0]
 
         self.gps_pub.publish(msg)
         self.get_logger().info(f'NavSatFix -> lat: {msg.latitude:.6f}, lon: {msg.longitude:.6f}, alt: {msg.altitude:.1f}m')
