@@ -10,6 +10,7 @@ from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_msgs.msg import Header
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 import serial
 import threading
 import time
@@ -24,6 +25,11 @@ except ImportError:
     print("WARNING: pynmea2 not found. Using basic parsing. Install with: pip install pynmea2 --break-system-packages")
 
 ROBOT_HEIGHT = 1.0
+
+# UCLA fallback coordinates (used when GPS has no fix)
+UCLA_LAT = 34.068928
+UCLA_LON = -118.445181
+UCLA_ALT = 71.0
 
 
 class GPSNode(Node):
@@ -47,8 +53,16 @@ class GPSNode(Node):
         marker_topic = self.get_parameter('marker_topic').value
         self.map_frame_id = self.get_parameter('map_frame_id').value
 
+        # QoS for sensor data
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+
         # Publishers
-        self.gps_pub = self.create_publisher(NavSatFix, gps_topic, 10)
+        self.gps_pub = self.create_publisher(NavSatFix, gps_topic, sensor_qos)
         self.marker_pub = self.create_publisher(Marker, marker_topic, 10)
 
         # Serial state
@@ -165,15 +179,14 @@ class GPSNode(Node):
         try:
             msg = pynmea2.parse(sentence)
             if isinstance(msg, pynmea2.types.talker.GGA):
-                if msg.latitude is not None and msg.longitude is not None:
-                    self.last_gga_data = msg
-                    self._publish_navsat_fix()
+                # Store regardless of fix quality — fallback will handle no-fix case
+                self.last_gga_data = msg
+                self._publish_navsat_fix()
             elif isinstance(msg, pynmea2.types.talker.RMC):
-                if msg.latitude is not None and msg.longitude is not None:
-                    self.last_rmc_data = msg
-                    self._publish_navsat_fix()
+                self.last_rmc_data = msg
+                self._publish_navsat_fix()
         except Exception as e:
-            self.get_logger().debug(f'Parse error: {e}')
+            self.get_logger().error(f'Parse error: {e}')
 
     def _parse_basic(self, sentence: str):
         parts = sentence.split(',')
@@ -229,34 +242,59 @@ class GPSNode(Node):
         msg.status.service = NavSatStatus.SERVICE_GPS
 
         if self.last_gga_data:
-            try: msg.latitude = float(self.last_gga_data.latitude) or 0.0
-            except: msg.latitude = 0.0
-            try: msg.longitude = float(self.last_gga_data.longitude) or 0.0
-            except: msg.longitude = 0.0
-            try: msg.altitude = float(self.last_gga_data.altitude) or 0.0
-            except: msg.altitude = 0.0
+            try: lat = float(self.last_gga_data.latitude)
+            except: lat = 0.0
+            try: lon = float(self.last_gga_data.longitude)
+            except: lon = 0.0
             try: quality_int = int(self.last_gga_data.gps_qual or 0)
             except: quality_int = 0
-            msg.status.status = self._map_gps_quality_to_status(quality_int)
-            hdop = getattr(self.last_gga_data, 'horizontal_dil', None)
-            try: variance = (float(hdop) * 2.0) ** 2 if hdop and float(hdop) > 0 else 25.0
-            except: variance = 25.0
+
+            # Use UCLA fallback when no valid fix
+            if lat == 0.0 or lon == 0.0 or quality_int == 0:
+                msg.latitude = UCLA_LAT
+                msg.longitude = UCLA_LON
+                msg.altitude = UCLA_ALT
+                msg.status.status = NavSatStatus.STATUS_NO_FIX
+                variance = 9999.0
+                self.get_logger().warn('No GPS fix — publishing UCLA fallback coordinates')
+            else:
+                msg.latitude = lat
+                msg.longitude = lon
+                try: msg.altitude = float(self.last_gga_data.altitude) or 0.0
+                except: msg.altitude = 0.0
+                msg.status.status = self._map_gps_quality_to_status(quality_int)
+                hdop = getattr(self.last_gga_data, 'horizontal_dil', None)
+                try: variance = (float(hdop) * 2.0) ** 2 if hdop and float(hdop) > 0 else 25.0
+                except: variance = 25.0
         else:
-            try: msg.latitude = float(self.last_rmc_data.latitude) or 0.0
-            except: msg.latitude = 0.0
-            try: msg.longitude = float(self.last_rmc_data.longitude) or 0.0
-            except: msg.longitude = 0.0
-            msg.altitude = 0.0
-            msg.status.status = (NavSatStatus.STATUS_FIX
-                if hasattr(self.last_rmc_data, 'status') and self.last_rmc_data.status == 'A'
-                else NavSatStatus.STATUS_NO_FIX)
-            variance = 25.0
+            try: lat = float(self.last_rmc_data.latitude)
+            except: lat = 0.0
+            try: lon = float(self.last_rmc_data.longitude)
+            except: lon = 0.0
+            is_active = hasattr(self.last_rmc_data, 'status') and self.last_rmc_data.status == 'A'
+
+            if lat == 0.0 or lon == 0.0 or not is_active:
+                msg.latitude = UCLA_LAT
+                msg.longitude = UCLA_LON
+                msg.altitude = UCLA_ALT
+                msg.status.status = NavSatStatus.STATUS_NO_FIX
+                variance = 9999.0
+                self.get_logger().warn('No GPS fix — publishing UCLA fallback coordinates')
+            else:
+                msg.latitude = lat
+                msg.longitude = lon
+                msg.altitude = 0.0
+                msg.status.status = NavSatStatus.STATUS_FIX
+                variance = 25.0
 
         msg.position_covariance_type = NavSatFix.COVARIANCE_TYPE_APPROXIMATED
-        msg.position_covariance = [variance, 0, 0, 0, variance, 0, 0, 0, variance * 2]
+        msg.position_covariance = [float(variance), 0.0, 0.0, 0.0, float(variance), 0.0, 0.0, 0.0, float(variance) * 2.0]
 
-        self.gps_pub.publish(msg)
-        self.get_logger().info(f'NavSatFix -> lat: {msg.latitude:.6f}, lon: {msg.longitude:.6f}, alt: {msg.altitude:.1f}m')
+        try:
+            self.gps_pub.publish(msg)
+            self.get_logger().info(f'NavSatFix -> lat: {msg.latitude:.6f}, lon: {msg.longitude:.6f}, alt: {msg.altitude:.1f}m')
+        except Exception as pub_err:
+            self.get_logger().error(f'PUBLISH FAILED: {pub_err}')
 
         if msg.status.status >= 0:
             self._update_trajectory(msg.latitude, msg.longitude, msg.altitude)
@@ -278,7 +316,7 @@ class GPSNode(Node):
         num_sats = self.last_gga_data['num_sats']
         variance = (10.0 / max(num_sats, 4)) ** 2
         msg.position_covariance_type = NavSatFix.COVARIANCE_TYPE_APPROXIMATED
-        msg.position_covariance = [variance, 0, 0, 0, variance, 0, 0, 0, variance * 2]
+        msg.position_covariance = [float(variance), 0.0, 0.0, 0.0, float(variance), 0.0, 0.0, 0.0, float(variance) * 2.0]
 
         self.gps_pub.publish(msg)
         self.get_logger().info(f'NavSatFix -> lat: {msg.latitude:.6f}, lon: {msg.longitude:.6f}, alt: {msg.altitude:.1f}m')
