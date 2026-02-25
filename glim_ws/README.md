@@ -61,7 +61,8 @@ source install/setup.bash
 
 ```bash
 # Terminal 1: converters (Livox CustomMsg -> PointCloud2, NavSatFix -> Pose, map QoS bridge)
-python3 glim_converters.py
+source ~/box/vln-large-scale-farm/glim_ws/install/setup.bash
+ros2 run glim_converters glim_converters
 
 # Terminal 2: GLIM
 source ~/box/vln-large-scale-farm/glim_ws/install/setup.bash

@@ -18,15 +18,15 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 
 # ===== Configuration =====
 PUBLISH_GROUND   = True
-MIN_OBS_Z        = 0.15       # min height above ground to count as obstacle (m)
-MAX_OBS_Z        = 1.7        # max height above ground to count as obstacle (m)
-OUTPUT_DIR       = os.path.join(current_dir, 'output')
-PIXEL_GRID_SIZE  = 0.2        # occupancy grid cell size (m)
-MIN_POINTS_CELL  = 5          # min LiDAR hits per cell to mark as obstacle
-IMAGE_RES_MUL    = 2          # PNG pixels per grid cell
-MAP_UPDATE_RATE  = 1.0        # seconds between map redraws
-TARGET_FRAME     = 'map'      # all data is transformed into this frame
-RBF_GRID_SIZE    = 1.0        # ground RBF coarse grid resolution (m)
+MIN_OBS_Z        = 0.15        # min relative height above ground to be obstacle (m)
+MAX_OBS_Z        = 1.7         # max relative height above ground to be obstacle (m)
+OUTPUT_DIR       = os.path.join(current_dir, 'output_glim')
+PIXEL_GRID_SIZE  = 0.2         # grid cell size in metres
+MIN_POINTS_CELL  = 5           # min lidar hits per cell to mark as obstacle
+IMAGE_RES_MUL    = 2           # PNG pixels per grid cell
+MAP_UPDATE_RATE  = 1.0         # seconds between full map redraws
+TARGET_FRAME     = 'map'       # unified 3D coordinate frame for everything
+RBF_GRID_SIZE    = 1.0         # ground RBF coarse grid resolution (m)
 
 ROBOT_ACTUAL_SIZE = 1.2
 ROBOT_CIRCLE_SIZE = max(2, int(ROBOT_ACTUAL_SIZE / PIXEL_GRID_SIZE / 4 * IMAGE_RES_MUL))
