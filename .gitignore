@@ -5,6 +5,7 @@ log/
 *.egg-info/
 
 fast_lio_sam_ws/ 
+glim_ws/config/config_ros.json
 
 # Python
 __pycache__/
