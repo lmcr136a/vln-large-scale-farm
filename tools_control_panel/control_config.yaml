@@ -44,15 +44,15 @@ autonomous:
 
   # Rotation stages: [time(s), vel(rad/s), range(deg upper bound)]
   # r1 = slowest/closest, r3 = fastest/farthest
-  r1: [0.1, 15]
-  r2: [0.1, 60]
-  r3: [0.1, 360]
+  r1: [0.2, 15]
+  r2: [0.5, 60]
+  r3: [0.7, 360]
 
   # Translation stages: [time(s), vel(m/s), range(m upper bound)]
   # t1 = slowest/closest, t3 = fastest/farthest
-  t1: [0.1, 1.5]
-  t2: [0.1, 3.0]
-  t3: [0.2, 999]
+  t1: [0.2, 1.5]
+  t2: [0.5, 3.0]
+  t3: [0.8, 999]
 
 # System Monitor
 monitor:

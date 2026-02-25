@@ -20,7 +20,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 import math
-import struct
+import numpy as np
 
 from sensor_msgs.msg import NavSatFix, PointCloud2, PointField
 from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -81,6 +81,15 @@ class GlimConverters(Node):
         self.lidar_sub = self.create_subscription(CustomMsg, lidar_in, self.lidar_callback, 10)
         self.lidar_pub = self.create_publisher(PointCloud2, lidar_out, 10)
 
+        # Preallocate fields list (same every time)
+        self._fields = [
+            PointField(name='x',         offset=0,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='y',         offset=4,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='z',         offset=8,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='intensity', offset=12, datatype=PointField.FLOAT32, count=1),
+            PointField(name='time',      offset=16, datatype=PointField.FLOAT32, count=1),
+        ]
+
         # --- GPS converter ---
         self.gps_sub = self.create_subscription(NavSatFix, gps_in, self.gps_callback, 10)
         self.gps_pub = self.create_publisher(PoseWithCovarianceStamped, gps_out, 10)
@@ -110,40 +119,32 @@ class GlimConverters(Node):
         self.get_logger().info(f'[MAP]   {map_in} -> {map_out} (QoS bridge)')
 
     # -------------------------------------------------------------------------
-    # LiDAR: CustomMsg -> PointCloud2
+    # LiDAR: CustomMsg -> PointCloud2 (numpy vectorized)
     # -------------------------------------------------------------------------
     def lidar_callback(self, msg: CustomMsg):
         n = msg.point_num
         if n == 0:
             return
 
-        fields = [
-            PointField(name='x',         offset=0,  datatype=PointField.FLOAT32, count=1),
-            PointField(name='y',         offset=4,  datatype=PointField.FLOAT32, count=1),
-            PointField(name='z',         offset=8,  datatype=PointField.FLOAT32, count=1),
-            PointField(name='intensity', offset=12, datatype=PointField.FLOAT32, count=1),
-            PointField(name='time',      offset=16, datatype=PointField.FLOAT32, count=1),
-        ]
-        point_step = 20
-        data = bytearray(n * point_step)
+        points = msg.points
 
-        for i, pt in enumerate(msg.points):
-            time_offset = pt.offset_time * 1e-9
-            offset = i * point_step
-            struct.pack_into('fffff', data, offset,
-                             pt.x, pt.y, pt.z,
-                             float(pt.reflectivity),
-                             time_offset)
+        # Vectorized extraction using numpy
+        arr = np.empty((n, 5), dtype=np.float32)
+        arr[:, 0] = [p.x            for p in points]
+        arr[:, 1] = [p.y            for p in points]
+        arr[:, 2] = [p.z            for p in points]
+        arr[:, 3] = [p.reflectivity for p in points]
+        arr[:, 4] = [p.offset_time * 1e-9 for p in points]  # ns -> s
 
         pc2 = PointCloud2()
         pc2.header      = msg.header
         pc2.height      = 1
         pc2.width       = n
-        pc2.fields      = fields
+        pc2.fields      = self._fields
         pc2.is_bigendian = False
-        pc2.point_step  = point_step
-        pc2.row_step    = point_step * n
-        pc2.data        = bytes(data)
+        pc2.point_step  = 20  # 5 * float32
+        pc2.row_step    = 20 * n
+        pc2.data        = arr.tobytes()
         pc2.is_dense    = False
         self.lidar_pub.publish(pc2)
 
