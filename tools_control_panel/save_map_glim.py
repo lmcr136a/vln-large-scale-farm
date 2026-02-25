@@ -8,7 +8,7 @@ import numpy as np
 import yaml
 import os
 import threading
-from scipy.interpolate import RBFInterpolator, RegularGridInterpolator
+from scipy.ndimage import median_filter, binary_dilation
 from PIL import Image, ImageDraw
 import tf2_ros
 from tf2_ros import TransformException
@@ -17,31 +17,42 @@ from rclpy.duration import Duration
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
 # ===== Configuration =====
-PUBLISH_GROUND   = True
-MIN_OBS_Z        = 0.15        # min relative height above ground to be obstacle (m)
-MAX_OBS_Z        = 1.7         # max relative height above ground to be obstacle (m)
-OUTPUT_DIR       = os.path.join(current_dir, 'output_glim')
-PIXEL_GRID_SIZE  = 0.2         # grid cell size in metres
-MIN_POINTS_CELL  = 5           # min lidar hits per cell to mark as obstacle
-IMAGE_RES_MUL    = 2           # PNG pixels per grid cell
-MAP_UPDATE_RATE  = 1.0         # seconds between full map redraws
-TARGET_FRAME     = 'map'       # unified 3D coordinate frame for everything
-RBF_GRID_SIZE    = 1.0         # ground RBF coarse grid resolution (m)
+PIXEL_GRID_SIZE    = 0.7    # grid cell size (m)
+MAP_UPDATE_RATE    = 1.0    # seconds between map redraws
+TARGET_FRAME       = 'map'  # all coordinates expressed in this frame
+IMAGE_RES_MUL      = 2      # PNG pixels per grid cell
 
-ROBOT_ACTUAL_SIZE = 1.2
-ROBOT_CIRCLE_SIZE = max(2, int(ROBOT_ACTUAL_SIZE / PIXEL_GRID_SIZE / 4 * IMAGE_RES_MUL))
+# --- Per-cell point count threshold ---
+MIN_POINTS_CELL    = 1      # min lidar hits to mark cell as observed (black)
+
+# --- Obstacle band (relative to z_low) ---
+BAND_LOW           = 0.30   # ignore ground roughness below this offset (m)
+BAND_HIGH          = 1.80   # robot body / overhang threshold (m)
+MIN_POINTS_BAND    = 50     # min points in band to declare occupancy
+
+# --- Step / slope detection ---
+STEP_THRESHOLD     = 0.25   # |z_low - median(z_low)| >= this → step obstacle (m)
+MEDIAN_FILTER_SIZE = 7      # kernel size for z_low median filter (cells)
+STEP_MIN_PTS       = 10     # min points for reliable step detection
+
+# --- Visualization ---
+ROBOT_ACTUAL_SIZE  = 1.2                      # robot footprint diameter (m)
+# Robot marker sizes are expressed in WORLD METRES, converted to pixels at render time.
+ROBOT_RADIUS_M     = ROBOT_ACTUAL_SIZE / 2.0  # circle radius (m)
+ROBOT_ARROW_LEN_M  = 1.5                      # heading arrow length (m)
 
 COLOR_TRAJECTORY   = (100, 255, 170)
 COLOR_ROBOT_CIRCLE = (0, 0, 255)
 COLOR_ARROW        = (100, 100, 255)
 
+OUTPUT_DIR = os.path.join(current_dir, 'output_glim')
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 # ── Coordinate helpers ─────────────────────────────────────────────────────────
 
 def _quat_to_rot(qx, qy, qz, qw):
-    """Return 3x3 rotation matrix from unit quaternion."""
+    """Return a 3x3 rotation matrix from a unit quaternion."""
     return np.array([
         [1-2*(qy**2+qz**2), 2*(qx*qy-qw*qz), 2*(qx*qz+qw*qy)],
         [2*(qx*qy+qw*qz),   1-2*(qx**2+qz**2), 2*(qy*qz-qw*qx)],
@@ -58,7 +69,7 @@ def _apply_tf(pts_n3, tf_stamped):
 
 
 def transform_cloud_to_map(pc_msg, tf_buffer, logger):
-    """Transform PointCloud2 into TARGET_FRAME. Returns (N,3) array or None."""
+    """Transform a PointCloud2 message into TARGET_FRAME. Returns (N,3) or None."""
     try:
         tf = tf_buffer.lookup_transform(
             TARGET_FRAME, pc_msg.header.frame_id,
@@ -75,17 +86,17 @@ def transform_cloud_to_map(pc_msg, tf_buffer, logger):
 
 def extract_yaw_in_map(pose, source_frame, tf_buffer):
     """
-    Compose TF from source_frame -> TARGET_FRAME with pose.orientation,
-    then extract yaw (rotation around map Z-axis).
-    Falls back to raw pose quaternion on TF failure.
+    Compose TF (source_frame -> TARGET_FRAME) with pose.orientation,
+    then extract yaw around the map Z-axis.
+    Falls back to the raw pose quaternion on TF failure.
     """
     try:
         tf = tf_buffer.lookup_transform(
             TARGET_FRAME, source_frame,
             rclpy.time.Time(), timeout=Duration(seconds=0.5))
-        r = tf.transform.rotation
+        r  = tf.transform.rotation
         xt, yt, zt, wt = r.x, r.y, r.z, r.w
-        q = pose.orientation
+        q  = pose.orientation
         xp, yp, zp, wp = q.x, q.y, q.z, q.w
         # Quaternion product: q_map = q_tf * q_pose
         w = wt*wp - xt*xp - yt*yp - zt*zp
@@ -98,18 +109,127 @@ def extract_yaw_in_map(pose, source_frame, tf_buffer):
     return float(np.arctan2(2.0*(w*z + x*y), 1.0 - 2.0*(y**2 + z**2)))
 
 
+# ── Core obstacle detection ────────────────────────────────────────────────────
+
+def build_occupancy_grid(pts, iu, iv, grid_w, grid_h):
+    """
+    Build a 2D occupancy grid from an (N,3) point cloud.
+    Fully vectorized — no Python loops.
+
+    Step 1 — Per-cell statistics
+        Sort all points by (cell_index, z) once.
+        z_low  : 10th-percentile z  — robust ground-level estimate
+        z_high : maximum z          — used for overhang detection
+
+    Step 2 — Obstacle band count  (count_band)
+        Count points in [z_low + BAND_LOW, z_low + BAND_HIGH] per cell.
+        Ignores ground returns and high overhangs.
+
+    Step 3 — Step / slope check
+        median_filter on z_low map.  Large residual = sudden step.
+        Gradual slopes pass through and are NOT flagged.
+
+    Step 4 — Overhang exception
+        Body space clear + object above head height → Free.
+
+    Step 5 — Boundary: free cells touching unknown → obstacle.
+
+    Returns  np.int8  (grid_h, grid_w)   -1=Unknown  0=Free  1=Occupied
+    """
+    num_cells = grid_h * grid_w
+    flat      = iv * grid_w + iu
+
+    # ── Step 1 ─────────────────────────────────────────────────────────────────
+    sort_idx   = np.lexsort((pts[:, 2], flat))
+    s_flat     = flat[sort_idx]
+    s_z        = pts[sort_idx, 2]
+
+    cell_count = np.bincount(flat, minlength=num_cells)
+    cell_end   = np.cumsum(cell_count)
+    cell_start = cell_end - cell_count
+
+    valid     = cell_count >= MIN_POINTS_CELL
+    valid_idx = np.where(valid)[0]
+
+    z_low_flat  = np.full(num_cells, np.nan, dtype=np.float32)
+    z_high_flat = np.full(num_cells, np.nan, dtype=np.float32)
+
+    if valid_idx.size > 0:
+        p10_offset = np.floor(cell_count[valid_idx] * 0.10).astype(int)
+        p10_global = cell_start[valid_idx] + p10_offset
+        z_low_flat[valid_idx]  = s_z[p10_global]
+        z_high_flat[valid_idx] = s_z[cell_end[valid_idx] - 1]
+
+    z_low    = z_low_flat.reshape(grid_h, grid_w)
+    z_high   = z_high_flat.reshape(grid_h, grid_w)
+    hit_mask = valid.reshape(grid_h, grid_w)
+
+    # ── Step 2 ─────────────────────────────────────────────────────────────────
+    z_low_per_pt = z_low_flat[flat]
+    in_band = (
+        np.isfinite(z_low_per_pt) &
+        (pts[:, 2] >= z_low_per_pt + BAND_LOW) &
+        (pts[:, 2] <= z_low_per_pt + BAND_HIGH)
+    )
+    count_band = np.bincount(flat[in_band], minlength=num_cells).reshape(grid_h, grid_w)
+
+    # ── Step 3 ─────────────────────────────────────────────────────────────────
+    z_low_filled  = np.where(np.isnan(z_low), 0.0, z_low)
+    z_low_smooth  = median_filter(z_low_filled, size=MEDIAN_FILTER_SIZE, mode='nearest')
+    step_reliable = (cell_count >= STEP_MIN_PTS).reshape(grid_h, grid_w)
+    step_diff     = np.where(step_reliable, np.abs(z_low - z_low_smooth), 0.0)
+    step_obstacle = step_reliable & (step_diff >= STEP_THRESHOLD)
+
+    # ── Step 4 ─────────────────────────────────────────────────────────────────
+    band_obstacle = count_band >= MIN_POINTS_BAND
+    obs_mask      = step_obstacle | band_obstacle
+
+    overhang = (
+        hit_mask &
+        (count_band < MIN_POINTS_BAND) &
+        np.isfinite(z_low) &
+        (z_high >= z_low + BAND_HIGH)
+    )
+    obs_mask &= ~overhang
+
+    # ── Assemble ───────────────────────────────────────────────────────────────
+    grid = np.full((grid_h, grid_w), -1, dtype=np.int8)
+    grid[hit_mask] = 0
+    grid[obs_mask] = 1
+
+    # ── Step 5: free cells touching unknown → obstacle ─────────────────────────
+    unknown_dilated = binary_dilation((grid == -1), structure=np.ones((3, 3), dtype=bool))
+    grid[(grid == 0) & unknown_dilated] = 1
+
+    return grid
+
+
 # ── Map rendering ──────────────────────────────────────────────────────────────
 
-def render_and_save(occupancy_grid, meta, path_xyz, robot_yaw):
+def render_and_save(grid, meta, path_xyz, robot_yaw):
     """
-    Render occupancy grid to PNG and save to OUTPUT_DIR/map_latest.png.
+    Render the occupancy grid to PNG + YAML sidecar.
 
-    Image convention:
-      col = (world_X - u_min) / PIXEL_GRID_SIZE * IMAGE_RES_MUL
-      row = (grid_height - 1 - (world_Y - v_min) / PIXEL_GRID_SIZE) * IMAGE_RES_MUL
-      np.flipud: image row 0 = world Y_max (north = top)
+    Pixel coordinate mapping (Y-up world → Y-down image):
+      After np.flipud, the base image row for world Y = wy is:
+        base_row = gh - (wy - v_min) / gs       (note: NOT gh-1, see below)
+      In the resized image (* IMAGE_RES_MUL):
+        px_row   = (gh - (wy - v_min) / gs) * IMAGE_RES_MUL - 0.5
 
-    Returns (resolution_m_per_px, img_width_px, img_height_px) or (None, None, None).
+      The -0.5 centres the point within its resized cell. PIL rounds floats
+      to int internally, so passing the float is fine for draw calls.
+
+      Similarly for columns:
+        px_col = (wx - u_min) / gs * IMAGE_RES_MUL + 0.5
+
+      Using gh (not gh-1) accounts for the fact that after flipud the
+      lowest-Y row (iv=0) maps to image row gh-1, i.e. index gh-1 in
+      [0, gh-1], which in the resized image spans rows
+      (gh-1)*R .. gh*R-1 whose centre is (gh - 0.5)*R - 0.5 = gh*R - R/2 - 0.5.
+
+    Robot marker sizes are expressed in world metres (ROBOT_RADIUS_M,
+    ROBOT_ARROW_LEN_M) and converted to pixels here so they scale
+    automatically with PIXEL_GRID_SIZE and IMAGE_RES_MUL.
     """
     try:
         u_min = meta['u_min']
@@ -117,10 +237,9 @@ def render_and_save(occupancy_grid, meta, path_xyz, robot_yaw):
         gs    = meta['grid_size']
         gh    = meta['grid_height']
 
-        # 0 = unknown (dark), 1 = free (black), 2 = obstacle (white)
-        arr = np.full((*occupancy_grid.shape, 3), 40, dtype=np.uint8)
-        arr[occupancy_grid == 1] = [0,   0,   0  ]
-        arr[occupancy_grid == 2] = [255, 255, 255]
+        arr = np.full((*grid.shape, 3), 40, dtype=np.uint8)
+        arr[grid == 0] = [0,   0,   0  ]
+        arr[grid == 1] = [255, 255, 255]
 
         base = Image.fromarray(np.flipud(arr), mode='RGB')
         img  = base.resize(
@@ -128,39 +247,54 @@ def render_and_save(occupancy_grid, meta, path_xyz, robot_yaw):
             resample=Image.NEAREST)
         draw = ImageDraw.Draw(img)
 
+        # World → resized-image pixel (float).
+        # X: cell centre at  (wx - u_min)/gs + 0.5  cells from left
+        #    → pixel = that * IMAGE_RES_MUL  - 0.5
+        # Y: after flipud, world Y maps to image row counted from top;
+        #    cell centre at  gh - (wy - v_min)/gs - 0.5  cells from top
+        #    → pixel = that * IMAGE_RES_MUL  - 0.5
+        m = IMAGE_RES_MUL / gs   # metres-to-pixels scale factor
+
         def to_px(wx, wy):
-            col = (wx - u_min) / gs * IMAGE_RES_MUL
-            row = (gh - 1 - (wy - v_min) / gs) * IMAGE_RES_MUL
+            col = (wx - u_min) * m + 0.5 * IMAGE_RES_MUL - 0.5
+            row = (gh * gs - (wy - v_min)) * m - 0.5 * IMAGE_RES_MUL + 0.5
             return col, row
 
-        lw = max(int(0.2 * ROBOT_CIRCLE_SIZE), 1)
+        # Pixel sizes derived from world-metre constants
+        r_px  = ROBOT_RADIUS_M   * m   # circle radius in pixels
+        al_px = ROBOT_ARROW_LEN_M * m  # arrow length in pixels
+        lw    = max(1, int(r_px * 0.25))
 
-        # Draw trajectory
+        # Trajectory
         if path_xyz is not None and len(path_xyz) > 1:
             pts_px = [to_px(p[0], p[1]) for p in path_xyz]
             draw.line(pts_px, fill=COLOR_TRAJECTORY, width=lw)
 
-        # Draw robot position and heading arrow
+        # Robot circle (at exact robot position) + heading arrow
         if path_xyz is not None and len(path_xyz) > 0:
             rx, ry = to_px(path_xyz[-1][0], path_xyz[-1][1])
-            off = int(ROBOT_CIRCLE_SIZE * 0.8)
-            cx  = rx - off * np.cos(robot_yaw)
-            cy  = ry + off * np.sin(robot_yaw)
-            al  = int(ROBOT_CIRCLE_SIZE * 1.5)
-            ax  = cx + al * np.cos(robot_yaw)
-            ay  = cy - al * np.sin(robot_yaw)
-            draw.line([(cx, cy), (ax, ay)], fill=COLOR_ARROW, width=lw)
+
+            # Forward direction in image space:
+            #   world forward = (+cos(yaw), +sin(yaw))
+            #   image X = world X  →  +cos(yaw)
+            #   image Y = -world Y →  -sin(yaw)
+            dx =  np.cos(robot_yaw)
+            dy = -np.sin(robot_yaw)
+
+            ax = rx + al_px * dx
+            ay = ry + al_px * dy
+
+            draw.line([(rx, ry), (ax, ay)], fill=COLOR_ARROW, width=lw)
             draw.regular_polygon(
-                (ax, ay, ROBOT_CIRCLE_SIZE), 3,
+                (ax, ay, max(2, r_px * 0.6)), 3,
                 rotation=np.degrees(robot_yaw) - 90, fill=COLOR_ARROW)
-            r = ROBOT_CIRCLE_SIZE
-            draw.ellipse([cx-r, cy-r, cx+r, cy+r],
-                         fill=COLOR_ROBOT_CIRCLE, outline=COLOR_ARROW, width=lw)
+            draw.ellipse(
+                [rx - r_px, ry - r_px, rx + r_px, ry + r_px],
+                fill=COLOR_ROBOT_CIRCLE, outline=COLOR_ARROW, width=lw)
 
         final_res = float(gs / IMAGE_RES_MUL)
         img.save(os.path.join(OUTPUT_DIR, 'map_latest.png'))
 
-        # Save map metadata (origin, resolution, grid size)
         yaml_data = {
             'resolution':  final_res,
             'origin':      [float(u_min), float(v_min), 0.0],
@@ -181,40 +315,32 @@ def render_and_save(occupancy_grid, meta, path_xyz, robot_yaw):
 
 class ContinuousPointCloudMapper(Node):
     """
-    Builds a 2D occupancy map from GLIM's 3D point cloud map.
+    2D occupancy mapper consuming GLIM's accumulated 3D point-cloud map.
 
-    odom_callback  (~10 Hz)
-        - Receives nav_msgs/Odometry from /glim_ros/odom
-        - Accumulates trajectory in TARGET_FRAME
-        - Updates current pose (thread-safe)
+    Topics
+    ------
+    /glim_ros/map  (PointCloud2, TRANSIENT_LOCAL) — full accumulated GLIM map
+    /glim_ros/odom (Odometry)                     — robot pose in map frame
 
-    pc_callback  (rate-limited to 1/MAP_UPDATE_RATE Hz)
-        - Receives PointCloud2 from /glim_ros/map
-        - Estimates ground surface via RBF on robot trajectory Z values
-        - Builds occupancy grid using relative height above ground
-        - Saves PNG + YAML to OUTPUT_DIR
-
-    get_current_pose()
-        - Thread-safe accessor; returns {x, y, z, yaw} or None
+    Update pipeline  (rate-limited to MAP_UPDATE_RATE Hz)
+    -------------------------------------------------------
+    1. Transform cloud → TARGET_FRAME.
+    2. Compute grid bounds from points + trajectory.
+    3. build_occupancy_grid() → int8 grid (-1/0/1).
+    4. render_and_save() → PNG + YAML.
     """
 
     def __init__(self):
         super().__init__('continuous_mapper_high_res')
 
         self._pose_lock    = threading.Lock()
-        self._current_pose = None  # {x, y, z, yaw} in TARGET_FRAME
+        self._current_pose = None
 
         self.path_positions    = np.empty((0, 3))
         self.latest_pose       = None
         self.latest_pose_frame = None
-
-        # Cached ground surface from last RBF fit
-        self._ground_surface = None
-        self._ground_gx      = None
-        self._ground_gy      = None
-
-        self.last_map_time = None
-        self.map_version   = 0
+        self.last_map_time     = None
+        self.map_version       = 0
 
         self.tf_buffer   = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -224,124 +350,72 @@ class ContinuousPointCloudMapper(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST,
             depth=10)
-
         odom_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10)
 
-        self.pc_sub   = self.create_subscription(PointCloud2, '/glim_ros/map',  self.pc_callback,   map_qos)
-        self.odom_sub = self.create_subscription(Odometry,    '/glim_ros/odom', self.odom_callback, odom_qos)
-        self.ground_pub = self.create_publisher(PointCloud2, '/ground_from_map', 10)
+        self.pc_sub   = self.create_subscription(
+            PointCloud2, '/glim_ros/map',  self.pc_callback,   map_qos)
+        self.odom_sub = self.create_subscription(
+            Odometry,    '/glim_ros/odom', self.odom_callback, odom_qos)
 
-        print(f'[Mapper] Ready — target frame: "{TARGET_FRAME}"')
-
-    # ── Public API ─────────────────────────────────────────────────────────────
+        print(f'[Mapper] Ready — frame="{TARGET_FRAME}"  cell={PIXEL_GRID_SIZE}m  '
+              f'band=[{BAND_LOW},{BAND_HIGH}]m  step={STEP_THRESHOLD}m')
 
     def get_current_pose(self):
-        """Thread-safe. Returns {x, y, z, yaw} in map frame, or None."""
+        """Thread-safe. Returns {x, y, z, yaw} or None."""
         with self._pose_lock:
             return dict(self._current_pose) if self._current_pose is not None else None
 
-    # ── odom_callback ──────────────────────────────────────────────────────────
-
     def odom_callback(self, msg: Odometry):
-        """Accumulate robot trajectory from odometry messages."""
+        """Accumulate robot trajectory. /glim_ros/odom is already in map frame."""
         pos = msg.pose.pose.position
         pt  = np.array([[pos.x, pos.y, pos.z]])
 
-        # /glim_ros/odom is already in map frame — no TF needed
-        if len(self.path_positions) == 0:
-            self.path_positions = pt
-        else:
-            self.path_positions = np.vstack([self.path_positions, pt])
+        self.path_positions = pt if len(self.path_positions) == 0 \
+            else np.vstack([self.path_positions, pt])
 
         self.latest_pose       = msg.pose.pose
         self.latest_pose_frame = msg.header.frame_id
 
         yaw = extract_yaw_in_map(self.latest_pose, self.latest_pose_frame, self.tf_buffer)
-
         with self._pose_lock:
             self._current_pose = {
-                'x':   float(pt[0, 0]),
-                'y':   float(pt[0, 1]),
-                'z':   float(pt[0, 2]),
-                'yaw': yaw,
+                'x': float(pt[0, 0]), 'y': float(pt[0, 1]),
+                'z': float(pt[0, 2]), 'yaw': yaw,
             }
 
-    # ── pc_callback ────────────────────────────────────────────────────────────
-
     def pc_callback(self, msg: PointCloud2):
-        """Rate-limited map update. Builds and saves occupancy grid."""
+        """Rate-limited map update: transform → grid → render → save."""
         now = self.get_clock().now()
         if self.last_map_time is not None:
-            elapsed = (now - self.last_map_time).nanoseconds / 1e9
-            if elapsed < MAP_UPDATE_RATE:
+            if (now - self.last_map_time).nanoseconds / 1e9 < MAP_UPDATE_RATE:
                 return
-
         if len(self.path_positions) < 15 or self.latest_pose is None:
             return
 
         pts = transform_cloud_to_map(msg, self.tf_buffer, self.get_logger())
         if pts is None or pts.size == 0:
             return
-
-        # Remove NaN/Inf
         pts = pts[np.isfinite(pts).all(axis=1)]
         if pts.size == 0:
             return
 
-        # Clip to path bounding box + margin
-        px_min, px_max = self.path_positions[:, 0].min(), self.path_positions[:, 0].max()
-        py_min, py_max = self.path_positions[:, 1].min(), self.path_positions[:, 1].max()
-        mg   = 50.0
-        mask = (
-            (pts[:, 0] >= px_min - mg) & (pts[:, 0] <= px_max + mg) &
-            (pts[:, 1] >= py_min - mg) & (pts[:, 1] <= py_max + mg)
-        )
-        pts = pts[mask]
-        if pts.size == 0:
-            return
-
-        # Estimate ground surface from trajectory Z values
-        surface, gx, gy = self._estimate_ground()
-        if surface is None:
-            return
-        self._ground_surface = surface
-        self._ground_gx      = gx
-        self._ground_gy      = gy
-
-        # Interpolate ground height at each point's (X, Y)
-        interp     = RegularGridInterpolator(
-            (gy[:, 0], gx[0, :]), surface,
-            method='linear', bounds_error=False, fill_value=0)
-        ground_z   = interp(np.column_stack([pts[:, 1], pts[:, 0]]))  # (y, x) order
-        rel_height = pts[:, 2] - ground_z
-
-        # Build occupancy grid aligned to cell boundaries
         all_x = np.concatenate([pts[:, 0], self.path_positions[:, 0]])
         all_y = np.concatenate([pts[:, 1], self.path_positions[:, 1]])
-        u_min = float(np.floor(all_x.min() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
-        v_min = float(np.floor(all_y.min() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
-        u_max = float(np.ceil( all_x.max() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
-        v_max = float(np.ceil( all_y.max() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
-
+        u_min  = float(np.floor(all_x.min() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
+        v_min  = float(np.floor(all_y.min() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
+        u_max  = float(np.ceil( all_x.max() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
+        v_max  = float(np.ceil( all_y.max() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
         grid_w = int(round((u_max - u_min) / PIXEL_GRID_SIZE))
         grid_h = int(round((v_max - v_min) / PIXEL_GRID_SIZE))
-        grid   = np.zeros((grid_h, grid_w), dtype=np.uint8)
 
         iu = np.clip(((pts[:, 0] - u_min) / PIXEL_GRID_SIZE).astype(int), 0, grid_w - 1)
         iv = np.clip(((pts[:, 1] - v_min) / PIXEL_GRID_SIZE).astype(int), 0, grid_h - 1)
-        grid[iv, iu] = 1   # free space (LiDAR hit, but not obstacle height)
 
-        # Mark obstacles based on relative height above ground
-        obs = (rel_height >= MIN_OBS_Z) & (rel_height <= MAX_OBS_Z)
-        if np.any(obs):
-            flat = iv[obs] * grid_w + iu[obs]
-            cnt  = np.bincount(flat, minlength=grid_w * grid_h)
-            occ  = np.where(cnt >= MIN_POINTS_CELL)[0]
-            grid[occ // grid_w, occ % grid_w] = 2   # obstacle
+        grid = build_occupancy_grid(pts, iu, iv, grid_w, grid_h)
 
         robot_yaw = extract_yaw_in_map(
             self.latest_pose, self.latest_pose_frame, self.tf_buffer)
@@ -351,78 +425,17 @@ class ContinuousPointCloudMapper(Node):
             'grid_size': PIXEL_GRID_SIZE,
             'grid_width': grid_w, 'grid_height': grid_h,
         }
-
-        final_res, img_w, img_h = render_and_save(
-            grid, meta, self.path_positions, robot_yaw)
-
+        final_res, _, _ = render_and_save(grid, meta, self.path_positions, robot_yaw)
         if final_res is None:
             return
 
-        # Optionally publish ground surface as PointCloud2 for RViz visualization
-        if PUBLISH_GROUND:
-            from std_msgs.msg import Header
-            hdr          = Header()
-            hdr.stamp    = msg.header.stamp
-            hdr.frame_id = TARGET_FRAME
-            g_pts = np.vstack([gx.ravel(), gy.ravel(), surface.ravel()]).T
-            self.ground_pub.publish(point_cloud2.create_cloud_xyz32(hdr, g_pts))
-
         self.last_map_time = now
         self.map_version  += 1
-        print(f'[Map #{self.map_version}] grid {grid_w}x{grid_h} '
-              f'res={final_res:.3f} m/px  yaw={np.degrees(robot_yaw):.1f} deg')
-
-    # ── Ground surface estimation ──────────────────────────────────────────────
-
-    def _estimate_ground(self):
-        """
-        Fit a thin-plate-spline RBF to robot path Z values.
-        Returns (surface_array, gx_mesh, gy_mesh) or (None, None, None).
-        The surface represents estimated ground elevation Z = f(X, Y).
-        """
-        n = len(self.path_positions)
-        if n < 10:
-            return None, None, None
-
-        # Downsample path to at most 1000 points for RBF speed
-        ds      = max(5, n // 1000)
-        sampled = self.path_positions[::ds]
-        xy      = sampled[:, :2]
-
-        if len(np.unique(xy, axis=0)) < 3:
-            return None, None, None
-
-        rbf = RBFInterpolator(xy, sampled[:, 2],
-                              kernel='thin_plate_spline', smoothing=0.1)
-
-        mg    = max(RBF_GRID_SIZE * 2, 5.0)
-        x_min = xy[:, 0].min() - mg
-        x_max = xy[:, 0].max() + mg
-        y_min = xy[:, 1].min() - mg
-        y_max = xy[:, 1].max() + mg
-
-        # Sanity check: skip if bounding box is unreasonably large
-        MAX_RANGE = 5000.0
-        if (x_max - x_min) > MAX_RANGE or (y_max - y_min) > MAX_RANGE:
-            self.get_logger().warn(
-                f'Ground RBF range too large ({x_max-x_min:.0f} x {y_max-y_min:.0f} m)'
-                f' — skipping')
-            return None, None, None
-
-        xi = np.arange(x_min, x_max + RBF_GRID_SIZE, RBF_GRID_SIZE)
-        yi = np.arange(y_min, y_max + RBF_GRID_SIZE, RBF_GRID_SIZE)
-
-        if len(xi) * len(yi) > 10_000_000:
-            self.get_logger().warn(f'Ground RBF grid too large ({len(xi)}x{len(yi)}), skipping')
-            return None, None, None
-
-        gx, gy = np.meshgrid(xi, yi)
-        try:
-            surface = rbf(np.column_stack([gx.ravel(), gy.ravel()])).reshape(gx.shape)
-            return surface, gx, gy
-        except Exception as e:
-            self.get_logger().warn(f'RBF failed: {e}')
-            return None, None, None
+        n_obs  = int((grid == 1).sum())
+        n_free = int((grid == 0).sum())
+        print(f'[Map #{self.map_version}] {grid_w}x{grid_h}  '
+              f'free={n_free}  obs={n_obs}  '
+              f'res={final_res:.3f}m/px  yaw={np.degrees(robot_yaw):.1f}°')
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
