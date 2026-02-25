@@ -21,7 +21,6 @@ tmux new-session -d -s $SESSION -n "lidar"
 # Window 0: Sensor (Livox or Isaac Sim)
 if [ "$MODE" = "sim" ]; then
     tmux send-keys -t $SESSION:0 "echo '⚠️  Start Isaac Sim manually, then run:'" C-m
-    tmux send-keys -t $SESSION:0 "echo 'ros2 launch isaac_cartographer_launch isaac_cartographer.launch.py use_sim_time:=true'" C-m
 else
     tmux send-keys -t $SESSION:0 "source livox_driver2_ws/install/setup.bash" C-m
     tmux send-keys -t $SESSION:0 "ros2 launch livox_ros_driver2 msg_MID360_launch.py" C-m
@@ -38,8 +37,8 @@ tmux new-window -t $SESSION:2 -n "control"
 tmux send-keys -t $SESSION:2 "bash $SCRIPT_DIR/launch_control_panel.sh" C-m
 
 # Window 3: 2D Map Saver
-tmux new-window -t $SESSION:3 -n "2dmap"
-tmux send-keys -t $SESSION:3 "python3 fast_lio_ws/save_map.py" C-m
+tmux new-window -t $SESSION:3 -n "save_map"
+tmux send-keys -t $SESSION:3 "python3 tools_control_panel/save_map_glim.py" C-m
 
 # Window 4: gps
 tmux new-window -t $SESSION:4 -n "gps"
@@ -60,13 +59,18 @@ tmux send-keys -t "$SESSION:6" "clear; printf '%s\n' \
 '' \
 'Windows:' \
 '  0: Lidar Sensor ($MODE)' \
-'  1: Cartographer + Map Saver' \
-'  2: Control Panel' \
+'  1: SLAM' \
+'  2: WEB Control Panel' \
 '  3: 2D Map Saver' \
-'  4: Rosbag' \
+'  4: GPS' \
+'  5: Safety Checker' \
+'  6: Here' \
 '' \
 'Control Panel:' \
 '  http://100.78.219.75:8000/control.html' \
+'' \
+'' \
+' PLEASE CHECK CONTROL CONFIG YAML' \
 '' \
 '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
 ''" C-m

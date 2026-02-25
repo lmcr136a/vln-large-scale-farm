@@ -1,6 +1,6 @@
 # File Paths
 paths:
-  map_dir: '~/box/vln-large-scale-farm/tools_control_panel/output'
+  map_dir: '~/box/vln-large-scale-farm/tools_control_panel/output_glim'
   data_dir: '~/box/vln-large-scale-farm/data'
 
 # Robot Control Configuration
