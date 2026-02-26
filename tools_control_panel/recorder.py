@@ -266,9 +266,13 @@ class MultiSensorRecorder:
         self.rosbag_process = subprocess.Popen([
             "ros2", "bag", "record",
             "-o", rosbag_dir,
-            "-e", "/livox/.*|/zed/.*|/ground_from_map|/gps_trajectory_marker|/gps/fix"
+            "-e", "/livox/.*|/zed/.*|/gps_trajectory_marker|/gps/.*"
         ])
         print("\n[Recorder] Rosbag recording started\n")
+        
+        for name, recorder in self.zed_recorders.items():
+            recorder.start_recording(self.current_session_dir)
+            print(f"[Recorder] ZED SVO2 recording started: {name}")
 
     def stop_recording(self):
         if self.rosbag_process:
@@ -279,6 +283,10 @@ class MultiSensorRecorder:
                 self.rosbag_process.kill()
             self.rosbag_process = None
         print("\n[Recorder] Recording stopped\n")
+        
+        for name, recorder in self.zed_recorders.items():
+            recorder.stop_recording()
+            print(f"[Recorder] ZED SVO2 recording stopped: {name}")
 
     def shutdown(self):
         if self.rosbag_process:

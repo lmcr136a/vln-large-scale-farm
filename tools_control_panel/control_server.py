@@ -20,6 +20,8 @@ from map_creation import MapCreationController
 from get_path import PathPlanner
 from autonomous_mode import AutonomousController
 from recorder import MultiSensorRecorder
+import logging
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 
 class ControlServer:
@@ -284,6 +286,7 @@ class ControlServer:
                 port=self.config['server']['port'],
                 allow_unsafe_werkzeug=True,
                 use_reloader=False,
+                log_output=False,
                 # threaded=True is implicit when async_mode='threading'
             )
         except KeyboardInterrupt:

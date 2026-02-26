@@ -1,7 +1,7 @@
-grid_height: 123
-grid_width: 147
+grid_height: 1062
+grid_width: 729
 origin:
-- -38.5
-- -68.6
+- -170.0
+- -69.60000000000001
 - 0.0
-resolution: 0.35
+resolution: 0.2
