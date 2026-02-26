@@ -17,7 +17,7 @@ from rclpy.duration import Duration
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
 # ===== Configuration =====
-PIXEL_GRID_SIZE    = 0.4    # grid cell size (m)
+PIXEL_GRID_SIZE    = 0.5    # grid cell size (m)
 MAP_UPDATE_RATE    = 1.0    # seconds between map redraws
 TARGET_FRAME       = 'map'  # all coordinates expressed in this frame
 IMAGE_RES_MUL      = 2      # PNG pixels per grid cell
