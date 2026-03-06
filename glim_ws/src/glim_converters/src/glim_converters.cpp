@@ -10,9 +10,6 @@
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 
-// ---------------------------------------------------------------------------
-// WGS84 helpers
-// ---------------------------------------------------------------------------
 static constexpr double WGS84_A  = 6378137.0;
 static constexpr double WGS84_E2 = 0.00669437999014;
 
@@ -49,36 +46,30 @@ static std::array<double, 3> ecef_to_enu(
   };
 }
 
-// ---------------------------------------------------------------------------
-// GlimConverters node
-// ---------------------------------------------------------------------------
 class GlimConverters : public rclcpp::Node
 {
 public:
   GlimConverters() : Node("glim_converters"), gps_origin_set_(false)
   {
-    // --- parameters ---
     declare_parameter("lidar_input_topic",  "/livox/lidar");
     declare_parameter("lidar_output_topic", "/livox/lidar_pointcloud2");
     declare_parameter("gps_input_topic",    "/gps/fix");
     declare_parameter("gps_output_topic",   "/gps/fix_pose");
-    declare_parameter("map_input_topic",    "/glim_ros/map");
-    declare_parameter("map_output_topic",   "/glim_ros/map_volatile");
+    declare_parameter("gps_enu_yaw_deg",    214.8);
+    declare_parameter("gps_offset_x",       0.0);
+    declare_parameter("gps_offset_y",       0.1);
+    declare_parameter("gps_offset_z",       0.0);
 
     const auto lidar_in  = get_parameter("lidar_input_topic").as_string();
     const auto lidar_out = get_parameter("lidar_output_topic").as_string();
     const auto gps_in    = get_parameter("gps_input_topic").as_string();
     const auto gps_out   = get_parameter("gps_output_topic").as_string();
-    const auto map_in    = get_parameter("map_input_topic").as_string();
-    const auto map_out   = get_parameter("map_output_topic").as_string();
 
-    // --- LiDAR ---
     lidar_sub_ = create_subscription<livox_ros_driver2::msg::CustomMsg>(
       lidar_in, 10,
       std::bind(&GlimConverters::lidar_callback, this, std::placeholders::_1));
     lidar_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(lidar_out, 10);
 
-    // pre-build PointCloud2 fields (constant)
     fields_.resize(5);
     fields_[0].name = "x";         fields_[0].offset = 0;  fields_[0].datatype = sensor_msgs::msg::PointField::FLOAT32; fields_[0].count = 1;
     fields_[1].name = "y";         fields_[1].offset = 4;  fields_[1].datatype = sensor_msgs::msg::PointField::FLOAT32; fields_[1].count = 1;
@@ -86,39 +77,21 @@ public:
     fields_[3].name = "intensity"; fields_[3].offset = 12; fields_[3].datatype = sensor_msgs::msg::PointField::FLOAT32; fields_[3].count = 1;
     fields_[4].name = "time";      fields_[4].offset = 16; fields_[4].datatype = sensor_msgs::msg::PointField::FLOAT32; fields_[4].count = 1;
 
-    // --- GPS ---
     gps_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
       gps_in, 10,
       std::bind(&GlimConverters::gps_callback, this, std::placeholders::_1));
     gps_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(gps_out, 10);
 
-    // --- Map QoS bridge ---
-    rclcpp::QoS transient_qos(10);
-    transient_qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
-    transient_qos.durability(rclcpp::DurabilityPolicy::TransientLocal);
-
-    rclcpp::QoS volatile_qos(10);
-    volatile_qos.reliability(rclcpp::ReliabilityPolicy::BestEffort);
-    volatile_qos.durability(rclcpp::DurabilityPolicy::Volatile);
-
-    map_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
-      map_in, transient_qos,
-      std::bind(&GlimConverters::map_callback, this, std::placeholders::_1));
-    map_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(map_out, volatile_qos);
-
     RCLCPP_INFO(get_logger(), "[LiDAR] %s -> %s", lidar_in.c_str(), lidar_out.c_str());
     RCLCPP_INFO(get_logger(), "[GPS]   %s -> %s", gps_in.c_str(), gps_out.c_str());
-    RCLCPP_INFO(get_logger(), "[MAP]   %s -> %s (QoS bridge)", map_in.c_str(), map_out.c_str());
   }
 
 private:
-  // ---- LiDAR callback -------------------------------------------------------
   void lidar_callback(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg)
   {
     const uint32_t n = msg->point_num;
     if (n == 0) return;
 
-    // struct layout: x, y, z, intensity, time  (5 x float32 = 20 bytes/point)
     constexpr uint32_t POINT_STEP = 20;
     std::vector<uint8_t> data(n * POINT_STEP);
 
@@ -129,24 +102,23 @@ private:
       ptr[i * 5 + 1] = p.y;
       ptr[i * 5 + 2] = p.z;
       ptr[i * 5 + 3] = static_cast<float>(p.reflectivity);
-      ptr[i * 5 + 4] = static_cast<float>(p.offset_time) * 1e-9f;  // ns -> s
+      ptr[i * 5 + 4] = static_cast<float>(p.offset_time) * 1e-9f;
     }
 
     sensor_msgs::msg::PointCloud2 out;
-    out.header      = msg->header;
-    out.height      = 1;
-    out.width       = n;
-    out.fields      = fields_;
+    out.header       = msg->header;
+    out.height       = 1;
+    out.width        = n;
+    out.fields       = fields_;
     out.is_bigendian = false;
-    out.point_step  = POINT_STEP;
-    out.row_step    = POINT_STEP * n;
-    out.data        = std::move(data);
-    out.is_dense    = false;
+    out.point_step   = POINT_STEP;
+    out.row_step     = POINT_STEP * n;
+    out.data         = std::move(data);
+    out.is_dense     = false;
 
     lidar_pub_->publish(out);
   }
 
-  // ---- GPS callback ---------------------------------------------------------
   void gps_callback(const sensor_msgs::msg::NavSatFix::SharedPtr msg)
   {
     if (msg->status.status < 0) return;
@@ -166,13 +138,24 @@ private:
 
     const auto enu = ecef_to_enu(ecef, gps_origin_ecef_, gps_origin_lat_, gps_origin_lon_);
 
+    const double yaw   = get_parameter("gps_enu_yaw_deg").as_double() * M_PI / 180.0;
+    const double cos_y = std::cos(yaw);
+    const double sin_y = std::sin(yaw);
+
+    const double ox = get_parameter("gps_offset_x").as_double();
+    const double oy = get_parameter("gps_offset_y").as_double();
+    const double oz = get_parameter("gps_offset_z").as_double();
+
     geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
     pose_msg.header          = msg->header;
     pose_msg.header.frame_id = "map";
-    pose_msg.pose.pose.position.x    = enu[0];
-    pose_msg.pose.pose.position.y    = enu[1];
-    pose_msg.pose.pose.position.z    = enu[2];
-    pose_msg.pose.pose.orientation.w = 1.0;
+    pose_msg.pose.pose.position.x    = cos_y * enu[0] + sin_y * enu[1] - ox;
+    pose_msg.pose.pose.position.y    = -sin_y * enu[0] + cos_y * enu[1] - oy;
+    pose_msg.pose.pose.position.z    = enu[2] - oz;
+
+    const double yaw_corr = get_parameter("gps_enu_yaw_deg").as_double() * M_PI / 180.0;
+    pose_msg.pose.pose.orientation.z = std::cos(yaw_corr / 2.0);
+    pose_msg.pose.pose.orientation.w = std::sin(yaw_corr / 2.0);
 
     if (msg->position_covariance_type > 0) {
       pose_msg.pose.covariance[0]  = msg->position_covariance[0];
@@ -191,28 +174,17 @@ private:
     gps_pub_->publish(pose_msg);
   }
 
-  // ---- Map QoS bridge -------------------------------------------------------
-  void map_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
-  {
-    map_pub_->publish(*msg);
-  }
-
-  // ---- members --------------------------------------------------------------
-  rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr  lidar_sub_;
-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr          lidar_pub_;
+  rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr lidar_sub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr         lidar_pub_;
   std::vector<sensor_msgs::msg::PointField> fields_;
 
-  rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr                   gps_sub_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr     gps_pub_;
+  rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr                gps_sub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr  gps_pub_;
   bool gps_origin_set_;
   std::array<double, 3> gps_origin_ecef_{};
   double gps_origin_lat_{0.0}, gps_origin_lon_{0.0};
-
-  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr map_sub_;
-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr    map_pub_;
 };
 
-// ---------------------------------------------------------------------------
 int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv);
