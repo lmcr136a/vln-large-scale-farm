@@ -16,7 +16,7 @@
     "submap_voxel_resolution": 0.5,
     "submap_voxelmap_levels": 1,
     "submap_voxelmap_scaling_factor": 2.0,
-    "max_implicit_loop_distance": 100.0,
+    "max_implicit_loop_distance": 210.0,
     "min_implicit_loop_overlap": 0.2,
     // Optimizer settings
     "use_isam2_dogleg": false,

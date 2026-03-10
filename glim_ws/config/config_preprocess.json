@@ -9,12 +9,12 @@
   // k_correspondences           : Number of neighbors for covariance estimation
   */
   "preprocess": {
-    "distance_near_thresh": 0.25,
+    "distance_near_thresh": 0.3,
     "distance_far_thresh": 100.0,
-    "use_random_grid_downsampling": true,
-    "downsample_resolution": 0.25,
-    "random_downsample_target": 10000,
-    "random_downsample_rate": 0.1,
+    "use_random_grid_downsampling": false,
+    "downsample_resolution": 0.5,
+    "random_downsample_target": 100000,
+    "random_downsample_rate": 0.9,
     "enable_outlier_removal": false,
     "outlier_removal_k": 10,
     "outlier_std_mul_factor": 1.0,
