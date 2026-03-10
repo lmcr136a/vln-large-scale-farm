@@ -40,8 +40,8 @@
     "min_inliear_fraction": 0.5,
     "subsample_target": 10000,
     "subsample_rate": 0.1,
-    "gicp_max_correspondence_dist": 0.3,
-    "vgicp_voxel_resolution": 0.3,
+    "gicp_max_correspondence_dist": 2.0,
+    "vgicp_voxel_resolution": 2.0,
     // Factor settings
     "odom_factor_stddev": 1e-3,
     "loop_factor_stddev": 0.1,
