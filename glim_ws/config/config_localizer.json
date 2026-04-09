@@ -1,0 +1,14 @@
+{
+  "localizer": {
+    "map_path": "/home/koala/box/data/oxnard/section2/20260309_1835_Loop_Sunset/glim_20260309_1835_sunset/",
+    "output_map_path": "/tmp/dump",
+    "map_frame": "map",
+    "lidar_frame": "livox_frame",
+    "vgicp_voxel_resolution": 1.0,
+    "prior_inf_scale_trans": 1e3,
+    "prior_inf_scale_rot": 1e2,
+    "mount_roll_deg": 180.0,
+    "mount_pitch_deg": 0.0,
+    "mount_yaw_deg": 0.0
+  }
+}

@@ -35,7 +35,7 @@
     "init_pose_damping_scale": 1e6,
     // Loop detection settings
     "registration_type": "VGICP",
-    "min_travel_dist": 50.0,
+    "min_travel_dist": 100.0,
     "max_neighbor_dist": 5.0,
     "min_inliear_fraction": 0.5,
     "subsample_target": 10000,
@@ -46,7 +46,7 @@
     "odom_factor_stddev": 1e-3,
     "loop_factor_stddev": 0.1,
     "loop_factor_robust_width": 1.0,
-    "loop_candidate_buffer_size": 100,
+    "loop_candidate_buffer_size": 150,
     "loop_candidate_eval_per_thread": 2,
     // Optimizer settings
     "use_isam2_dogleg": false,

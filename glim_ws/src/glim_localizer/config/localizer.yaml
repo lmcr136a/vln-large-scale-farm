@@ -1,0 +1,39 @@
+# ─── glim_localizer config ───────────────────────────────────────
+
+map_loader:
+  map_path: "/home/koala/box/maps/my_farm_map"   # GLIM saved map directory
+  points_topic: "/map_pointcloud"                 # output topic
+
+localization:
+  # Topics
+  lidar_topic:  "/livox/lidar_pointcloud2"
+  init_pose_topic: "/initial_pose"
+  output_pose_topic: "/localized_pose"
+  map_topic: "/map_pointcloud"
+
+  # NDT (coarse alignment)
+  ndt_resolution:       1.0      # [m]  voxel size for NDT target map
+  ndt_max_iterations:   30
+  ndt_epsilon:          0.01     # convergence criterion
+  ndt_step_size:        0.1
+
+  # VGICP (fine alignment)  — reuses GlobalMapping voxelmaps
+  vgicp_voxel_resolution: 1.0   # [m]  must match map_loader voxel resolution
+  vgicp_max_iterations:   20
+  vgicp_rotation_tolerance:    1e-3
+  vgicp_translation_tolerance: 1e-3
+
+  # Frames
+  lidar_frame:  "livox_frame"
+  map_frame:    "map"
+
+map_update:
+  save_interval:   30            # save updated map every N seconds (0 = disable)
+  output_map_path: ""            # if empty, overwrites input map_path
+
+init_pose_viewer:
+  # Top-down projection
+  resolution:      0.3           # [m/pixel] grid cell size
+  grid_line_every: 5.0           # [m]  grid line spacing
+  z_min:          -2.0           # clip points below this Z for projection
+  z_max:           5.0
