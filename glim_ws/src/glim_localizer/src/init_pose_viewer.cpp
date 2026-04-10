@@ -8,6 +8,7 @@
 #include <glim/util/extension_module.hpp>
 #include <glim/util/extension_module_ros2.hpp>
 #include <glim/util/logging.hpp>
+#include <glim/util/config.hpp>
 #include <glim/mapping/callbacks.hpp>
 #include <glim/mapping/sub_map.hpp>
 
@@ -25,6 +26,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/format.hpp>
 #include <fstream>
+#include <thread>
 #include <Eigen/Core>
 #include <vector>
 #include <mutex>
@@ -60,7 +62,9 @@ public:
     spdlog::info("[InitPoseViewer] loaded");
   }
 
-  ~InitPoseViewer() override = default;
+  ~InitPoseViewer() override {
+    if (load_thread_.joinable()) load_thread_.join();
+  }
 
   // GLIM node 재사용 — 자체 node 생성 없음
   virtual std::vector<glim::GenericTopicSubscription::Ptr>
@@ -106,23 +110,20 @@ private:
         spdlog::info("[InitPoseViewer] {}/{} ({} pts)", i, num_submaps, pts_world.size());
     }
 
-    auto viewer = guik::LightViewer::instance();
-    if (viewer) {
-      auto buf = std::make_shared<glk::PointCloudBuffer>(pts_world);
-      viewer->update_drawable("saved_map", buf, guik::Rainbow().set_point_scale(1.5f));
-    }
-
+    // Store points — viewer update happens in draw_ui() (main/GL thread)
     {
       std::lock_guard<std::mutex> lock(cloud_mutex_);
+      loaded_map_pts_ = std::move(pts_world);
       all_points_3d_.clear();
-      for (const auto& p : pts_world) {
+      for (const auto& p : loaded_map_pts_) {
         if (p[2] >= z_min_ && p[2] <= z_max_)
           all_points_3d_.emplace_back(p[0], p[1], p[2]);
       }
       map_dirty_ = true;
+      map_ready_ = true;  // signal draw_ui to upload to GL
     }
     map_loaded_ = true;
-    spdlog::info("[InitPoseViewer] Map loaded: {} pts", pts_world.size());
+    spdlog::info("[InitPoseViewer] Map loaded: {} pts", loaded_map_pts_.size());
   }
 
   void draw_ui() {
@@ -134,11 +135,25 @@ private:
 
     ImGui::Separator(); ImGui::Text("Saved Map");
     static char map_path_buf[512] = "";
+    // Pre-fill from config_localizer.json on first draw
+    static bool path_initialized = false;
+    if (!path_initialized) {
+      try {
+        const glim::Config cfg(glim::GlobalConfig::get_config_path("config_localizer"));
+        const std::string mp = cfg.param<std::string>("localizer", "map_path", "");
+        if (!mp.empty()) std::strncpy(map_path_buf, mp.c_str(), sizeof(map_path_buf) - 1);
+      } catch (...) {}
+      path_initialized = true;
+    }
     ImGui::SetNextItemWidth(340);
     ImGui::InputText("##map_path", map_path_buf, sizeof(map_path_buf));
     ImGui::SameLine();
     if (ImGui::Button("Load Map")) {
-      if (strlen(map_path_buf) > 0) load_saved_map(std::string(map_path_buf));
+      if (strlen(map_path_buf) > 0) {
+        load_thread_ = std::thread([this, path = std::string(map_path_buf)] {
+          load_saved_map(path);
+        });
+      }
     }
 
     ImGui::Spacing();
@@ -152,6 +167,16 @@ private:
     if (ImGui::Button("Rebuild")) map_dirty_ = true;
 
     if (map_dirty_) { build_projection(); map_dirty_ = false; }
+
+    // Upload loaded map points to GL (must happen on main/GL thread)
+    {
+      std::lock_guard<std::mutex> lock(cloud_mutex_);
+      if (map_ready_) {
+        auto buf = std::make_shared<glk::PointCloudBuffer>(loaded_map_pts_);
+        viewer->update_drawable("saved_map", buf, guik::Rainbow().set_point_scale(1.5f));
+        map_ready_ = false;
+      }
+    }
 
     if (proj_texture_ && image_w_ > 0) {
       ImVec2 cursor = ImGui::GetCursorScreenPos();
@@ -282,6 +307,7 @@ private:
   }
 
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
+  std::thread load_thread_;
 
   float resolution_, grid_every_, z_min_, z_max_;
   int image_w_, image_h_;
@@ -291,6 +317,8 @@ private:
 
   std::mutex cloud_mutex_;
   std::vector<std::tuple<double, double, float>> all_points_3d_;
+  std::vector<Eigen::Vector3f> loaded_map_pts_;  // stored for GL upload on main thread
+  bool map_ready_ = false;  // set by load thread, consumed by draw_ui
 
   double clicked_x_, clicked_y_;
   float yaw_deg_;

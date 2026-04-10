@@ -1,24 +1,23 @@
 /**
  * localizer_ext.cpp - GLIM extension module for localization against a saved map.
  *
- * Follows the gnss_global pattern:
- *   - Inherits ExtensionModuleROS2 to reuse GLIM's ROS node (no own node creation)
- *   - on_insert_submap -> VGICP(submap vs saved map) -> PriorFactor injected into GLIM
- *   - on_smoother_update -> inject factors into GLIM factor graph
- *
  * Key transform:
  *   T_savedmap_glimworld = T_savedmap_lidar * T_glimworld_lidar^-1
  *
  * mount_R_ (Rx(180deg) for upside-down LiDAR):
  *   submap->T_world_origin includes Rx(180deg) from IMU gravity correction.
- *   T_savedmap_lidar (from user click) only has yaw.
- *   Adding mount_R_ to T_savedmap_lidar makes the Rx(180deg) cancel:
- *     (R_yaw * Rx180) * Rx180^-1 = R_yaw  (pure yaw only, correct)
+ *   Adding mount_R_ to T_savedmap_lidar makes Rx(180deg) cancel:
+ *     (R_yaw * Rx180) * Rx180^-1 = R_yaw
+ *
+ * /glim_ros/entire_map publishes:
+ *   saved map pts + GLIM submap pts (via on_update_submaps) + new localized pts
+ *   all transformed into saved map world frame.
  */
 
 #include <deque>
 #include <atomic>
 #include <thread>
+#include <chrono>
 #include <fstream>
 #include <mutex>
 #include <unordered_map>
@@ -41,6 +40,8 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
 
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/geometry/Pose3.h>
@@ -66,9 +67,9 @@ public:
   : logger(glim::create_module_logger("localizer_ext")),
     initialized_(false), map_loaded_(false),
     scan_count_(0), kill_switch_(false),
-    has_glim_pose_(false), pending_init_(false) {
-
-    // --- Default parameters ---
+    has_glim_pose_(false), pending_init_(false)
+  {
+    // Default parameters
     map_path_              = "";
     output_path_           = "/tmp/dump";
     map_frame_             = "map";
@@ -76,10 +77,9 @@ public:
     vgicp_res_             = 1.0;
     prior_inf_scale_trans_ = 1e3;
     prior_inf_scale_rot_   = 1e2;
-    // Upside-down LiDAR: Rx(180deg) - cancels with submap T_world_origin rotation
     mount_R_ = Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitX()).toRotationMatrix();
 
-    // --- Load config_localizer.json ---
+    // Load config_localizer.json
     try {
       const glim::Config cfg(glim::GlobalConfig::get_config_path("config_localizer"));
       map_path_              = cfg.param<std::string>("localizer", "map_path",               map_path_);
@@ -101,27 +101,55 @@ public:
       logger->warn("config_localizer.json not found, using defaults");
     }
 
+    // ROS parameter override (highest priority)
+    // e.g. -p localizer_ext.map_path:=/path/to/map
+    // glim_rosnode passes node parameters via rclcpp global param client
+    // We read them from the ROS parameter server via environment/args
+    // Simple approach: check for GLIM node's parameter in rclcpp context
+    // glim_rosnode sets these as node params on the global node
+    {
+      // Try to get from rclcpp global context param override
+      // GLIM passes -p localizer_ext.map_path as node param
+      // We retrieve it by creating a temp node — but that crashes.
+      // Instead, use environment variable set by wrapper or direct env read.
+      // Best approach: read from /proc/self/cmdline
+      std::ifstream cmdline("/proc/self/cmdline");
+      std::string arg, prev_arg;
+      while (std::getline(cmdline, arg, '\0')) {
+        if (prev_arg == "-p" || prev_arg == "--param") {
+          // arg format: "localizer_ext.map_path:=/some/path"
+          const std::string key = "localizer_ext.map_path:=";
+          if (arg.find(key) == 0) {
+            map_path_ = arg.substr(key.size());
+            logger->info("map_path from ROS param: {}", map_path_);
+          }
+        }
+        prev_arg = arg;
+      }
+    }
+
     // Environment variable fallback
     if (map_path_.empty()) {
       const char* e = std::getenv("LOCALIZER_MAP_PATH");
       if (e) map_path_ = e;
     }
 
-    // --- GLIM callbacks (gnss_global pattern) ---
+    // Register GLIM callbacks
     using std::placeholders::_1;
     using std::placeholders::_2;
     using std::placeholders::_3;
     glim::GlobalMappingCallbacks::on_insert_submap.add(
       std::bind(&LocalizerExt::on_insert_submap_cb, this, _1));
     glim::GlobalMappingCallbacks::on_smoother_update.add(
-      std::bind(&LocalizerExt::on_smoother_update, this, _1, _2, _3));
+      std::bind(&LocalizerExt::on_smoother_update_cb, this, _1, _2, _3));
+    glim::GlobalMappingCallbacks::on_update_submaps.add(
+      std::bind(&LocalizerExt::on_update_submaps_cb, this, _1));
 
     if (map_path_.empty()) {
       logger->warn("map_path not set, localization disabled");
       return;
     }
 
-    // Load map in background thread to avoid blocking GLIM initialization
     backend_thread_ = std::thread([this] { backend_task(); });
     logger->info("Loading saved map in background: {}", map_path_);
   }
@@ -130,12 +158,15 @@ public:
     kill_switch_ = true;
     if (backend_thread_.joinable()) backend_thread_.join();
     pose_pub_.reset();
+    map_pub_.reset();
   }
 
-  // Reuse GLIM's ROS node - no own node creation to avoid rclcpp context issues
   virtual std::vector<glim::GenericTopicSubscription::Ptr>
   create_subscriptions(rclcpp::Node& node) override {
     pose_pub_ = node.create_publisher<geometry_msgs::msg::PoseStamped>("/localized_pose", 10);
+    map_pub_  = node.create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/glim_ros/entire_map", rclcpp::QoS(1).transient_local());
+
     auto sub = std::make_shared<glim::TopicSubscription<geometry_msgs::msg::PoseStamped>>(
       "/initial_pose",
       [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr& msg) {
@@ -150,7 +181,7 @@ private:
   // -----------------------------------------------------------------------
 
   void on_insert_submap_cb(const glim::SubMap::ConstPtr& submap) {
-    // Track latest GLIM pose without TF (use submap T_world_origin directly)
+    // Track latest GLIM pose without TF
     {
       std::lock_guard<std::mutex> lock(glim_pose_mutex_);
       latest_glim_pose_ = submap->T_world_origin;
@@ -158,13 +189,9 @@ private:
     }
 
     // If initial_pose arrived before any submap, recalculate T_savedmap_glimworld
-    // using the first real submap pose (which includes IMU gravity correction)
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (pending_init_) {
-        // T_savedmap_glimworld = T_savedmap_lidar(with mount_R) * T_glimworld_submap^-1
-        // mount_R cancels with the Rx(180) in T_world_origin:
-        //   (R_yaw * Rx180) * Rx180^-1 = R_yaw  (pure yaw, correct)
         T_savedmap_glimworld_ =
           T_pending_savedmap_lidar_ * submap->T_world_origin.inverse();
         initialized_ = true;
@@ -179,7 +206,7 @@ private:
     input_submap_queue_.push_back(submap);
   }
 
-  void on_smoother_update(
+  void on_smoother_update_cb(
     gtsam_points::ISAM2Ext& isam2,
     gtsam::NonlinearFactorGraph& new_factors,
     gtsam::Values& new_values)
@@ -191,15 +218,39 @@ private:
     }
   }
 
+  void on_update_submaps_cb(const std::vector<glim::SubMap::Ptr>& submaps) {
+    // Called after GLIM global optimization - rebuild GLIM pts in saved map frame
+    Eigen::Isometry3d T_sg;
+    { std::lock_guard<std::mutex> lock(mutex_); T_sg = T_savedmap_glimworld_; }
+    if (!initialized_) return;
+
+    std::vector<Eigen::Vector3f> glim_pts;
+    glim_pts.reserve(submaps.size() * 20000);
+    for (const auto& sm : submaps) {
+      if (!sm || !sm->frame || !sm->frame->has_points()) continue;
+      const Eigen::Isometry3d T_savedmap_origin = T_sg * sm->T_world_origin;
+      for (size_t j = 0; j < sm->frame->size(); j++) {
+        const Eigen::Vector4d p = T_savedmap_origin * sm->frame->points[j];
+        glim_pts.push_back({(float)p[0], (float)p[1], (float)p[2]});
+      }
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(map_pts_mutex_);
+      glim_submap_pts_ = std::move(glim_pts);
+    }
+
+    if (!kill_switch_) publish_entire_map();
+  }
+
   // -----------------------------------------------------------------------
   // Initial pose handler
   // T_savedmap_glimworld = T_savedmap_lidar * T_glimworld_lidar^-1
+  // mount_R_ is applied so it cancels with Rx(180) in submap T_world_origin
   // -----------------------------------------------------------------------
   void on_initial_pose(const geometry_msgs::msg::PoseStamped::ConstSharedPtr& msg) {
     if (!map_loaded_) { logger->warn("Map not loaded yet"); return; }
 
-    // T_savedmap_lidar: user click position in saved map frame
-    // mount_R_ (Rx180) added so it cancels with submap T_world_origin rotation
     Eigen::Isometry3d T_savedmap_lidar = Eigen::Isometry3d::Identity();
     T_savedmap_lidar.translation() = Eigen::Vector3d(
       msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
@@ -208,7 +259,6 @@ private:
       msg->pose.orientation.y, msg->pose.orientation.z).toRotationMatrix()
       * mount_R_;
 
-    // T_glimworld_lidar: GLIM pose at click time (from latest submap T_world_origin)
     Eigen::Isometry3d T_glimworld_lidar = Eigen::Isometry3d::Identity();
     bool got_glim_pose = false;
     {
@@ -231,7 +281,6 @@ private:
       logger->info("Initial pose set immediately: ({:.2f},{:.2f},{:.2f})",
         msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
     } else {
-      // Store and wait for first submap to arrive
       T_pending_savedmap_lidar_ = T_savedmap_lidar;
       pending_init_ = true;
       initialized_ = false;
@@ -253,9 +302,17 @@ private:
       return;
     }
 
+    last_map_pub_time_ = std::chrono::steady_clock::now();
+
     while (!kill_switch_) {
       const auto submaps = input_submap_queue_.get_all_and_clear();
       if (submaps.empty()) {
+        // Publish entire_map every 10 seconds even without new submaps
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_map_pub_time_).count() >= 10) {
+          if (!kill_switch_) publish_entire_map();
+          last_map_pub_time_ = now;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       }
@@ -265,7 +322,7 @@ private:
   }
 
   // -----------------------------------------------------------------------
-  // Submap processing: VGICP -> PriorFactor -> viewer update
+  // Submap processing
   // -----------------------------------------------------------------------
   void process_submap(const glim::SubMap::ConstPtr& submap) {
     if (!submap || !submap->frame || !submap->frame->has_points()) return;
@@ -273,17 +330,15 @@ private:
     Eigen::Isometry3d T_sg;
     { std::lock_guard<std::mutex> lock(mutex_); T_sg = T_savedmap_glimworld_; }
 
-    // Transform submap points from sensor local frame to GLIM world frame
-    // so we can compare directly with saved map (also in world frame)
+    // Transform submap points from sensor local to GLIM world frame
     auto cloud = submap_to_glimworld(*submap);
 
-    // VGICP: find T_savedmap_glimworld that maps GLIM world pts to saved map
+    // VGICP: find T_savedmap_glimworld
     const Eigen::Isometry3d T_result = vgicp_world(cloud, T_sg);
 
-    // Update T_savedmap_glimworld
     { std::lock_guard<std::mutex> lock(mutex_); T_savedmap_glimworld_ = T_result; }
 
-    // T_savedmap_submap: robot position in saved map frame
+    // Robot position in saved map frame
     const Eigen::Isometry3d T_savedmap_submap = T_result * submap->T_world_origin;
 
     if (scan_count_ < 5) {
@@ -298,18 +353,11 @@ private:
         T_savedmap_submap.translation().z());
     }
 
-    // Add weak PriorFactor to keep GLIM consistent with saved map
-    Eigen::Matrix<double, 6, 6> info = Eigen::Matrix<double, 6, 6>::Zero();
-    info.topLeftCorner<3, 3>()     = prior_inf_scale_rot_   * Eigen::Matrix3d::Identity();
-    info.bottomRightCorner<3, 3>() = prior_inf_scale_trans_ * Eigen::Matrix3d::Identity();
-    output_factors_.push_back(
-      gtsam::make_shared<gtsam::PriorFactor<gtsam::Pose3>>(
-        X(submap->id),
-        gtsam::Pose3(submap->T_world_origin.matrix()),
-        gtsam::noiseModel::Gaussian::Information(info)));
+    // Note: PriorFactor injection removed intentionally.
+    // GLIM runs freely for its own odometry/loop closure.
+    // T_savedmap_glimworld tracks the transform between frames independently.
 
-    // Update viewer: move saved_map drawable to align with new GLIM map
-    // model_matrix = T_glimworld_savedworld = T_savedmap_glimworld^-1
+    // Update viewer: move saved_map drawable to align with GLIM world frame
     if (!kill_switch_) {
       const Eigen::Isometry3d T_glimworld_savedworld = T_result.inverse();
       auto viewer = guik::LightViewer::instance();
@@ -324,7 +372,7 @@ private:
       }
     }
 
-    // Publish /localized_pose (robot position in saved map frame)
+    // Publish /localized_pose (robot in saved map frame)
     if (pose_pub_ && !kill_switch_) {
       const double stamp_sec = submap->frames.empty()
         ? 0.0 : submap->frames[submap->frames.size() / 2]->stamp;
@@ -343,11 +391,60 @@ private:
         pose_pub_->publish(msg);
       }
     }
+
+    // Add new submap points to entire_map
+    {
+      std::lock_guard<std::mutex> lock(map_pts_mutex_);
+      for (size_t j = 0; j < submap->frame->size(); j++) {
+        const Eigen::Vector4d p = T_savedmap_submap * submap->frame->points[j];
+        new_submap_pts_.push_back({(float)p[0], (float)p[1], (float)p[2]});
+      }
+    }
+    if (!kill_switch_) publish_entire_map();
+
     scan_count_++;
   }
 
   // -----------------------------------------------------------------------
-  // Convert submap points from sensor local frame to GLIM world frame
+  // Map publishing
+  // -----------------------------------------------------------------------
+  void publish_entire_map() {
+    if (!map_pub_) return;
+
+    std::vector<Eigen::Vector3f> all_pts;
+    {
+      std::lock_guard<std::mutex> lock(map_pts_mutex_);
+      all_pts.reserve(saved_map_pts_.size() + glim_submap_pts_.size() + new_submap_pts_.size());
+      all_pts.insert(all_pts.end(), saved_map_pts_.begin(),    saved_map_pts_.end());
+      all_pts.insert(all_pts.end(), glim_submap_pts_.begin(),  glim_submap_pts_.end());
+      all_pts.insert(all_pts.end(), new_submap_pts_.begin(),   new_submap_pts_.end());
+    }
+
+    sensor_msgs::msg::PointCloud2 msg;
+    msg.header.frame_id = map_frame_;
+    msg.height = 1;
+    msg.width  = all_pts.size();
+    msg.is_dense = false;
+
+    sensor_msgs::PointCloud2Modifier mod(msg);
+    mod.setPointCloud2Fields(3,
+      "x", 1, sensor_msgs::msg::PointField::FLOAT32,
+      "y", 1, sensor_msgs::msg::PointField::FLOAT32,
+      "z", 1, sensor_msgs::msg::PointField::FLOAT32);
+    mod.resize(all_pts.size());
+
+    sensor_msgs::PointCloud2Iterator<float> ix(msg, "x");
+    sensor_msgs::PointCloud2Iterator<float> iy(msg, "y");
+    sensor_msgs::PointCloud2Iterator<float> iz(msg, "z");
+    for (const auto& p : all_pts) {
+      *ix = p[0]; *iy = p[1]; *iz = p[2];
+      ++ix; ++iy; ++iz;
+    }
+    map_pub_->publish(msg);
+  }
+
+  // -----------------------------------------------------------------------
+  // VGICP helpers
   // -----------------------------------------------------------------------
   std::shared_ptr<gtsam_points::PointCloudCPU> submap_to_glimworld(const glim::SubMap& sm) {
     auto cloud = std::make_shared<gtsam_points::PointCloudCPU>();
@@ -360,7 +457,7 @@ private:
     return cloud;
   }
 
-  // VGICP: source = GLIM world frame points, X(0) = T_savedmap_glimworld
+  // X(0) = T_savedmap_glimworld (optimized directly)
   Eigen::Isometry3d vgicp_world(
     const std::shared_ptr<gtsam_points::PointCloudCPU>& cloud,
     const Eigen::Isometry3d& init)
@@ -384,13 +481,11 @@ private:
         return init;
       }
       return opt;
-    } catch (...) {
-      return init;
-    }
+    } catch (...) { return init; }
   }
 
   // -----------------------------------------------------------------------
-  // Load saved map: read submap binaries directly (no GlobalMapping::load)
+  // Load saved map (direct binary read, no GlobalMapping::load)
   // -----------------------------------------------------------------------
   void load_map() {
     std::ifstream ifs(map_path_ + "/graph.txt");
@@ -401,42 +496,41 @@ private:
 
     std::vector<Eigen::Vector4d> all_pts;
     all_pts.reserve(20000000);
-    const int stride = std::max(1, num_submaps / 200);
 
     for (int i = 0; i < num_submaps; i++) {
       auto sm = glim::SubMap::load((boost::format("%s/%06d") % map_path_ % i).str());
       if (!sm || !sm->frame || !sm->frame->has_points()) continue;
-
       for (size_t j = 0; j < sm->frame->size(); j++)
         all_pts.push_back(sm->T_world_origin * sm->frame->points[j]);
-
-      if (i % stride == 0) {
-        auto ds = std::dynamic_pointer_cast<gtsam_points::PointCloudCPU>(sm->frame);
-        if (!ds) {
-          ds = std::make_shared<gtsam_points::PointCloudCPU>();
-          ds->add_points(std::vector<Eigen::Vector4d>(
-            sm->frame->points, sm->frame->points + sm->frame->size()));
-        }
-        if (!ds->has_covs()) add_isotropic_covs(*ds, 0.01);
-      }
-
       if (i % 200 == 0)
         logger->info("Loading {}/{} ({} pts)", i, num_submaps, all_pts.size());
     }
 
-    // Build global merged voxelmap
+    // Build voxelmap for VGICP
     auto merged = std::make_shared<gtsam_points::PointCloudCPU>();
     merged->add_points(all_pts);
     auto ds = voxel_downsample(*merged, vgicp_res_ * 2.0);
     add_isotropic_covs(*ds, 0.01);
     map_voxelmap_ = std::make_shared<gtsam_points::GaussianVoxelMapCPU>(vgicp_res_);
     map_voxelmap_->insert(*ds);
-    logger->info("Map loaded: {} pts total, voxelmap {} pts (res={:.1f})",
+
+    // Store for entire_map publishing
+    {
+      std::lock_guard<std::mutex> lock(map_pts_mutex_);
+      saved_map_pts_.reserve(all_pts.size());
+      for (const auto& p : all_pts)
+        saved_map_pts_.push_back({(float)p[0], (float)p[1], (float)p[2]});
+    }
+
+    logger->info("Map loaded: {} pts, voxelmap {} pts (res={:.1f})",
       all_pts.size(), ds->size(), vgicp_res_);
+
+    // Publish loaded map immediately (even before any submap arrives)
+    if (!kill_switch_) publish_entire_map();
   }
 
   // -----------------------------------------------------------------------
-  // Helpers
+  // Utility
   // -----------------------------------------------------------------------
   static std::shared_ptr<gtsam_points::PointCloudCPU> voxel_downsample(
     const gtsam_points::PointCloudCPU& cloud, double leaf)
@@ -466,16 +560,23 @@ private:
   }
 
   // -----------------------------------------------------------------------
-  // Member variables
+  // Members
   // -----------------------------------------------------------------------
   std::shared_ptr<spdlog::logger> logger;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr map_pub_;
 
   std::string map_path_, output_path_, map_frame_, lidar_frame_;
   double vgicp_res_, prior_inf_scale_trans_, prior_inf_scale_rot_;
-  Eigen::Matrix3d mount_R_;  // Upside-down LiDAR correction: Rx(180deg)
+  Eigen::Matrix3d mount_R_;
 
   std::shared_ptr<gtsam_points::GaussianVoxelMapCPU> map_voxelmap_;
+
+  // Entire map point storage (all in saved map world frame)
+  std::mutex map_pts_mutex_;
+  std::vector<Eigen::Vector3f> saved_map_pts_;   // loaded saved map
+  std::vector<Eigen::Vector3f> glim_submap_pts_; // GLIM submaps after optimization
+  std::vector<Eigen::Vector3f> new_submap_pts_;  // newly localized submaps
 
   glim::ConcurrentVector<glim::SubMap::ConstPtr> input_submap_queue_;
   glim::ConcurrentVector<gtsam::NonlinearFactor::shared_ptr> output_factors_;
@@ -483,8 +584,8 @@ private:
   std::atomic<bool> kill_switch_;
   std::atomic<bool> map_loaded_;
   std::thread backend_thread_;
+  std::chrono::steady_clock::time_point last_map_pub_time_;
 
-  // Track latest GLIM pose via submap callback (no TF)
   std::mutex glim_pose_mutex_;
   Eigen::Isometry3d latest_glim_pose_ = Eigen::Isometry3d::Identity();
   bool has_glim_pose_;
@@ -492,13 +593,9 @@ private:
   std::mutex mutex_;
   bool initialized_;
   int scan_count_;
-
-  // Pending initial pose: stored when user clicks before first submap arrives
   bool pending_init_;
   Eigen::Isometry3d T_pending_savedmap_lidar_ = Eigen::Isometry3d::Identity();
-
-  // Core transform: maps GLIM world frame -> saved map world frame
-  Eigen::Isometry3d T_savedmap_glimworld_ = Eigen::Isometry3d::Identity();
+  Eigen::Isometry3d T_savedmap_glimworld_     = Eigen::Isometry3d::Identity();
 };
 
 }  // namespace glim_localizer

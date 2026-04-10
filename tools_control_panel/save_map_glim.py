@@ -8,7 +8,7 @@ import numpy as np
 import yaml
 import os
 import threading
-from scipy.ndimage import median_filter, binary_dilation
+from scipy.ndimage import uniform_filter, binary_dilation
 from PIL import Image, ImageDraw
 import tf2_ros
 from tf2_ros import TransformException
@@ -17,7 +17,7 @@ from rclpy.duration import Duration
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
 # ===== Configuration =====
-PIXEL_GRID_SIZE    = 0.5    # grid cell size (m)
+PIXEL_GRID_SIZE    = 0.2    # grid cell size (m)
 MAP_UPDATE_RATE    = 1.0    # seconds between map redraws
 TARGET_FRAME       = 'map'  # all coordinates expressed in this frame
 IMAGE_RES_MUL      = 2      # PNG pixels per grid cell
@@ -31,9 +31,13 @@ BAND_HIGH          = 1.80   # robot body / overhang threshold (m)
 MIN_POINTS_BAND    = 50     # min points in band to declare occupancy
 
 # --- Step / slope detection ---
-STEP_THRESHOLD     = 0.25   # |z_low - median(z_low)| >= this → step obstacle (m)
-MEDIAN_FILTER_SIZE = 7      # kernel size for z_low median filter (cells)
+STEP_THRESHOLD     = 0.40   # |z_low - median(z_low)| >= this → step obstacle (m)
+MEDIAN_FILTER_SIZE = 15     # kernel size for z_low median filter (cells)
 STEP_MIN_PTS       = 10     # min points for reliable step detection
+
+# --- Height colormap ---
+Z_COLOR_RANGE      = 0.05   # ±this metres mapped to full colormap (dark brown↔green)
+                            # cells beyond this range are clamped to endpoints
 
 # --- Visualization ---
 ROBOT_ACTUAL_SIZE  = 1.2                      # robot footprint diameter (m)
@@ -109,6 +113,44 @@ def extract_yaw_in_map(pose, source_frame, tf_buffer):
     return float(np.arctan2(2.0*(w*z + x*y), 1.0 - 2.0*(y**2 + z**2)))
 
 
+# ── Rotation-to-minimise-bbox helpers ─────────────────────────────────────────
+
+def _rotate_xy(pts_n3, angle_rad):
+    """Rotate XY columns of (N,3) array by angle_rad (CCW). Z untouched."""
+    c, s = np.cos(angle_rad), np.sin(angle_rad)
+    out = pts_n3.copy()
+    out[:, 0] =  c * pts_n3[:, 0] + s * pts_n3[:, 1]
+    out[:, 1] = -s * pts_n3[:, 0] + c * pts_n3[:, 1]
+    return out
+
+
+def find_best_rotation(pts, path_positions):
+    """
+    Test 8 candidate angles (0°, 45°, …, 315°) and return the angle (radians)
+    that minimises the XY bounding-box area of the combined point set.
+    """
+    combined = np.vstack([pts[:, :3], path_positions[:, :3]]) \
+        if path_positions is not None and len(path_positions) > 0 \
+        else pts[:, :3]
+
+    best_angle = 0.0
+    best_area  = np.inf
+
+    for deg in range(0, 360, 10):
+        a = np.radians(deg)
+        c, s = np.cos(a), np.sin(a)
+        rx =  c * combined[:, 0] + s * combined[:, 1]
+        ry = -s * combined[:, 0] + c * combined[:, 1]
+        area = (rx.max() - rx.min()) * (ry.max() - ry.min())
+        if area < best_area:
+            best_area  = area
+            best_angle = a
+
+    print(f'[Mapper] Best rotation: {np.degrees(best_angle):.0f}°  '
+          f'(bbox area {best_area:.1f} m²)')
+    return best_angle
+
+
 # ── Core obstacle detection ────────────────────────────────────────────────────
 
 def build_occupancy_grid(pts, iu, iv, grid_w, grid_h):
@@ -175,7 +217,7 @@ def build_occupancy_grid(pts, iu, iv, grid_w, grid_h):
 
     # ── Step 3 ─────────────────────────────────────────────────────────────────
     z_low_filled  = np.where(np.isnan(z_low), 0.0, z_low)
-    z_low_smooth  = median_filter(z_low_filled, size=MEDIAN_FILTER_SIZE, mode='nearest')
+    z_low_smooth  = uniform_filter(z_low_filled, size=MEDIAN_FILTER_SIZE, mode='nearest')
     step_reliable = (cell_count >= STEP_MIN_PTS).reshape(grid_h, grid_w)
     step_diff     = np.where(step_reliable, np.abs(z_low - z_low_smooth), 0.0)
     step_obstacle = step_reliable & (step_diff >= STEP_THRESHOLD)
@@ -198,15 +240,78 @@ def build_occupancy_grid(pts, iu, iv, grid_w, grid_h):
     grid[obs_mask] = 1
 
     # ── Step 5: free cells touching unknown → obstacle ─────────────────────────
-    unknown_dilated = binary_dilation((grid == -1), structure=np.ones((3, 3), dtype=bool))
-    grid[(grid == 0) & unknown_dilated] = 1
+    # NOTE: disabled — on large open fields nearly every cell borders unknown,
+    # causing most of the traversable area to be misclassified as obstacle.
+    # unknown_dilated = binary_dilation((grid == -1), structure=np.ones((3, 3), dtype=bool))
+    # grid[(grid == 0) & unknown_dilated] = 1
 
-    return grid
+    # ── Local relative z (slope removed) ───────────────────────────────────────
+    # z_low_smooth already removes the global slope; the signed residual gives
+    # local terrain relief regardless of overall hill inclination.
+    z_rel = np.where(hit_mask, (z_low - z_low_smooth).astype(np.float32), np.nan)
+
+    return grid, z_rel
 
 
 # ── Map rendering ──────────────────────────────────────────────────────────────
 
-def render_and_save(grid, meta, path_xyz, robot_yaw):
+def _height_colormap(z_rel_2d, observed_mask):
+    """
+    Colour observed cells by local relative z, split by grid class.
+    Call signature unchanged — grid class overlay happens in render_and_save.
+
+    z_rel_2d    : (H, W) float32
+    observed_mask: (H, W) bool
+    Returns (H, W, 3) uint8. Unknown = dark grey (30,30,30).
+    """
+    # Anchor colours  [low, mid, high]  — used for free cells (brown family)
+    ANCHORS = np.array([
+        [40,  20,   5],   # dark brown  (low)
+        [30,  80,  30],   # dark green  (mid)
+        [60, 180,  60],   # green       (high)
+    ], dtype=np.float32)
+
+    h, w = z_rel_2d.shape
+    rgb  = np.full((h, w, 3), 30, dtype=np.uint8)   # unknown = dark grey
+
+    t_full = np.clip(z_rel_2d / (2.0 * Z_COLOR_RANGE) + 0.5, 0.0, 1.0)
+    t = t_full[observed_mask]
+
+    seg   = np.where(t < 0.5, 0, 1)
+    t_seg = np.where(t < 0.5, t / 0.5, (t - 0.5) / 0.5)
+    c0 = ANCHORS[seg]
+    c1 = ANCHORS[seg + 1]
+    blended = c0 + (c1 - c0) * t_seg[:, np.newaxis]
+
+    rgb[observed_mask] = np.clip(blended, 0, 255).astype(np.uint8)
+    return rgb
+
+
+# Brown-family anchors for free ground
+_FREE_ANCHORS = np.array([
+    [20,  8,   2],   # very dark brown (low)
+    [70, 35,  10],   # mid brown
+    [110, 60, 20],   # light brown (high)
+], dtype=np.float32)
+
+# Green-family anchors for obstacles
+_OBS_ANCHORS = np.array([
+    [15, 50,  15],   # dark green (low)
+    [40, 120, 40],   # mid green
+    [80, 210, 80],   # bright green (high)
+], dtype=np.float32)
+
+
+def _interp_anchors(t, anchors):
+    """Piecewise-linear interpolation across 3 colour anchors. t in [0,1]."""
+    seg   = np.where(t < 0.5, 0, 1)
+    t_seg = np.where(t < 0.5, t / 0.5, (t - 0.5) / 0.5)
+    c0 = anchors[seg]
+    c1 = anchors[seg + 1]
+    return np.clip(c0 + (c1 - c0) * t_seg[:, np.newaxis], 0, 255).astype(np.uint8)
+
+
+def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, world_rot_angle=0.0):
     """
     Render the occupancy grid to PNG + YAML sidecar.
 
@@ -237,9 +342,23 @@ def render_and_save(grid, meta, path_xyz, robot_yaw):
         gs    = meta['grid_size']
         gh    = meta['grid_height']
 
-        arr = np.full((*grid.shape, 3), 40, dtype=np.uint8)
-        arr[grid == 0] = [0,   0,   0  ]
-        arr[grid == 1] = [255, 255, 255]
+        # ── Height-gradation rendering (class-split colormap) ───────────────────
+        # free cells  → brown family  (dark→light brown by z_rel)
+        # obstacle    → green family  (dark→bright green by z_rel)
+        # unknown     → dark grey
+        observed   = (grid >= 0)
+        z_rel_safe = np.where(observed & np.isfinite(z_rel), z_rel, 0.0)
+        t_full = np.clip(z_rel_safe / (2.0 * Z_COLOR_RANGE) + 0.5, 0.0, 1.0)
+
+        arr = np.full((*grid.shape, 3), 30, dtype=np.uint8)  # unknown = dark grey
+
+        free_mask = (grid == 0)
+        if free_mask.any():
+            arr[free_mask] = _interp_anchors(t_full[free_mask], _FREE_ANCHORS)
+
+        obs_mask_2d = (grid == 1)
+        if obs_mask_2d.any():
+            arr[obs_mask_2d] = _interp_anchors(t_full[obs_mask_2d], _OBS_ANCHORS)
 
         base = Image.fromarray(np.flipud(arr), mode='RGB')
         img  = base.resize(
@@ -292,6 +411,43 @@ def render_and_save(grid, meta, path_xyz, robot_yaw):
                 [rx - r_px, ry - r_px, rx + r_px, ry + r_px],
                 fill=COLOR_ROBOT_CIRCLE, outline=COLOR_ARROW, width=lw)
 
+        # ── World-coordinate axis indicator (bottom-right) ─────────────────────
+        # Shows where world +X (red) and +Y (green) point in the rendered image.
+        # Rotation by world_rot_angle θ maps:
+        #   world +X -> image direction (cos θ, +sin θ)   [col, row-down]
+        #   world +Y -> image direction (sin θ, -cos θ)   [col, row-down]
+        AXIS_MARGIN  = 14   # pixels from image edge to arrow origin
+        AXIS_LEN     = 40   # pixels
+        AXIS_LW      = 3
+        AXIS_TIP_R   = 4    # arrowhead dot radius
+
+        ax_ox = img.width  - AXIS_MARGIN
+        ax_oy = img.height - AXIS_MARGIN
+
+        th = world_rot_angle
+        cos_th, sin_th = float(np.cos(th)), float(np.sin(th))
+
+        # +X  (red)
+        x_tip = (ax_ox + AXIS_LEN * cos_th,
+                 ax_oy + AXIS_LEN * sin_th)
+        draw.line([(ax_ox, ax_oy), x_tip], fill=(220, 50, 50), width=AXIS_LW)
+        draw.ellipse([x_tip[0]-AXIS_TIP_R, x_tip[1]-AXIS_TIP_R,
+                      x_tip[0]+AXIS_TIP_R, x_tip[1]+AXIS_TIP_R],
+                     fill=(220, 50, 50))
+
+        # +Y  (green)
+        y_tip = (ax_ox + AXIS_LEN * sin_th,
+                 ax_oy - AXIS_LEN * cos_th)
+        draw.line([(ax_ox, ax_oy), y_tip], fill=(50, 210, 80), width=AXIS_LW)
+        draw.ellipse([y_tip[0]-AXIS_TIP_R, y_tip[1]-AXIS_TIP_R,
+                      y_tip[0]+AXIS_TIP_R, y_tip[1]+AXIS_TIP_R],
+                     fill=(50, 210, 80))
+
+        # Origin dot
+        draw.ellipse([ax_ox-AXIS_TIP_R, ax_oy-AXIS_TIP_R,
+                      ax_ox+AXIS_TIP_R, ax_oy+AXIS_TIP_R],
+                     fill=(200, 200, 200))
+
         final_res = float(gs / IMAGE_RES_MUL)
         img.save(os.path.join(OUTPUT_DIR, 'map_latest.png'))
 
@@ -341,6 +497,7 @@ class ContinuousPointCloudMapper(Node):
         self.latest_pose_frame = None
         self.last_map_time     = None
         self.map_version       = 0
+        self._best_angle       = None   # determined once on first valid map
 
         self.tf_buffer   = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -357,7 +514,7 @@ class ContinuousPointCloudMapper(Node):
             depth=10)
 
         self.pc_sub   = self.create_subscription(
-            PointCloud2, '/glim_ros/map',  self.pc_callback,   map_qos)
+            PointCloud2, '/glim_ros/entire_map',  self.pc_callback,   map_qos)
         self.odom_sub = self.create_subscription(
             Odometry,    '/glim_ros/odom', self.odom_callback, odom_qos)
 
@@ -403,8 +560,19 @@ class ContinuousPointCloudMapper(Node):
         if pts.size == 0:
             return
 
-        all_x = np.concatenate([pts[:, 0], self.path_positions[:, 0]])
-        all_y = np.concatenate([pts[:, 1], self.path_positions[:, 1]])
+        # ── Determine best rotation angle once ─────────────────────────────────
+        if self._best_angle is None:
+            self._best_angle = find_best_rotation(pts, self.path_positions)
+
+        theta = self._best_angle
+
+        # Rotate XY of point cloud and trajectory into the optimal frame
+        pts_r  = _rotate_xy(pts, theta)
+        path_r = _rotate_xy(self.path_positions, theta) \
+            if len(self.path_positions) > 0 else self.path_positions
+
+        all_x = np.concatenate([pts_r[:, 0], path_r[:, 0]])
+        all_y = np.concatenate([pts_r[:, 1], path_r[:, 1]])
         u_min  = float(np.floor(all_x.min() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
         v_min  = float(np.floor(all_y.min() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
         u_max  = float(np.ceil( all_x.max() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
@@ -412,20 +580,22 @@ class ContinuousPointCloudMapper(Node):
         grid_w = int(round((u_max - u_min) / PIXEL_GRID_SIZE))
         grid_h = int(round((v_max - v_min) / PIXEL_GRID_SIZE))
 
-        iu = np.clip(((pts[:, 0] - u_min) / PIXEL_GRID_SIZE).astype(int), 0, grid_w - 1)
-        iv = np.clip(((pts[:, 1] - v_min) / PIXEL_GRID_SIZE).astype(int), 0, grid_h - 1)
+        iu = np.clip(((pts_r[:, 0] - u_min) / PIXEL_GRID_SIZE).astype(int), 0, grid_w - 1)
+        iv = np.clip(((pts_r[:, 1] - v_min) / PIXEL_GRID_SIZE).astype(int), 0, grid_h - 1)
 
-        grid = build_occupancy_grid(pts, iu, iv, grid_w, grid_h)
+        grid, z_rel = build_occupancy_grid(pts_r, iu, iv, grid_w, grid_h)
 
         robot_yaw = extract_yaw_in_map(
             self.latest_pose, self.latest_pose_frame, self.tf_buffer)
+        robot_yaw_rotated = robot_yaw - theta
 
         meta = {
             'u_min': u_min, 'v_min': v_min,
             'grid_size': PIXEL_GRID_SIZE,
             'grid_width': grid_w, 'grid_height': grid_h,
         }
-        final_res, _, _ = render_and_save(grid, meta, self.path_positions, robot_yaw)
+        final_res, _, _ = render_and_save(
+            grid, z_rel, meta, path_r, robot_yaw_rotated, world_rot_angle=theta)
         if final_res is None:
             return
 
@@ -435,7 +605,8 @@ class ContinuousPointCloudMapper(Node):
         n_free = int((grid == 0).sum())
         print(f'[Map #{self.map_version}] {grid_w}x{grid_h}  '
               f'free={n_free}  obs={n_obs}  '
-              f'res={final_res:.3f}m/px  yaw={np.degrees(robot_yaw):.1f}°')
+              f'res={final_res:.3f}m/px  yaw={np.degrees(robot_yaw):.1f}°  '
+              f'rot={np.degrees(theta):.0f}°')
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
