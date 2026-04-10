@@ -71,7 +71,20 @@ public:
   create_subscriptions(rclcpp::Node& node) override {
     pose_pub_ = node.create_publisher<geometry_msgs::msg::PoseStamped>(
       "/initial_pose", rclcpp::QoS(1).reliable());
-    return {};  // subscriber 없음
+
+    // Subscribe to localization transform to update saved_map drawable
+    auto transform_sub = std::make_shared<glim::TopicSubscription<geometry_msgs::msg::PoseStamped>>(
+      "/localizer/T_glimworld_savedworld",
+      [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr& msg) {
+        pending_transform_ = Eigen::Isometry3d::Identity();
+        pending_transform_.translation() = Eigen::Vector3d(
+          msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+        pending_transform_.linear() = Eigen::Quaterniond(
+          msg->pose.orientation.w, msg->pose.orientation.x,
+          msg->pose.orientation.y, msg->pose.orientation.z).toRotationMatrix();
+        has_pending_transform_ = true;
+      });
+    return {transform_sub};
   }
 
 private:
@@ -165,6 +178,15 @@ private:
       map_dirty_ = true;
     ImGui::SameLine();
     if (ImGui::Button("Rebuild")) map_dirty_ = true;
+
+    // Apply localization transform to saved_map drawable (from localizer_ext)
+    if (has_pending_transform_) {
+      auto found = viewer->find_drawable("saved_map");
+      if (found.first)
+        found.first->add("model_matrix",
+          pending_transform_.matrix().cast<float>().eval());
+      has_pending_transform_ = false;
+    }
 
     if (map_dirty_) { build_projection(); map_dirty_ = false; }
 
@@ -308,6 +330,10 @@ private:
 
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
   std::thread load_thread_;
+
+  // Localization transform from localizer_ext (updated on GL thread in draw_ui)
+  Eigen::Isometry3d pending_transform_ = Eigen::Isometry3d::Identity();
+  std::atomic<bool> has_pending_transform_{false};
 
   float resolution_, grid_every_, z_min_, z_max_;
   int image_w_, image_h_;
