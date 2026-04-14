@@ -28,7 +28,7 @@ fi
 
 sleep 1
 
-# Window 1: Cartographer + Map Saver 
+# Window 1: lidar driver
 tmux new-window -t $SESSION:1 -n "slam"
 tmux send-keys -t $SESSION:1 "bash $SCRIPT_DIR/launch_slam.sh $MODE" C-m
 
