@@ -1,7 +1,7 @@
 # ─── glim_localizer config ───────────────────────────────────────
 
 map_loader:
-  map_path: "/home/koala/box/maps/my_farm_map"   # GLIM saved map directory
+  map_path: "/home/nahyeon/box/glim_map"   # GLIM saved map directory
   points_topic: "/map_pointcloud"                 # output topic
 
 localization:

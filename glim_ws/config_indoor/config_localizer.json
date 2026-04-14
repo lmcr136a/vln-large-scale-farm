@@ -1,6 +1,6 @@
 {
   "localizer": {
-    "map_path": "/home/koala/box/data/oxnard/section2/20260309_1835_Loop_Sunset/glim_20260309_1835_sunset/",
+    "map_path": "",
     "output_map_path": "/tmp/dump",
     "map_frame": "map",
     "lidar_frame": "livox_frame",

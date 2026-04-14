@@ -40,6 +40,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
+#include <nav_msgs/msg/path.hpp>
 
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/geometry/Pose3.h>
@@ -150,8 +151,10 @@ public:
     glim::GlobalMappingCallbacks::on_update_submaps.add(
       std::bind(&LocalizerExt::on_update_submaps_cb, this, _1));
 
-    if (map_path_.empty()) {
-      logger->warn("map_path not set, localization disabled");
+    localization_mode_ = !map_path_.empty();
+
+    if (!localization_mode_) {
+      logger->warn("map_path not set — new-mapping mode (no localization)");
       return;
     }
 
@@ -162,18 +165,37 @@ public:
   ~LocalizerExt() override {
     kill_switch_ = true;
     if (backend_thread_.joinable()) backend_thread_.join();
-    pose_pub_.reset();
+    curr_pose_pub_.reset();
+    traj_pub_.reset();
     map_pub_.reset();
     transform_pub_.reset();
   }
 
   virtual std::vector<glim::GenericTopicSubscription::Ptr>
   create_subscriptions(rclcpp::Node& node) override {
-    pose_pub_ = node.create_publisher<geometry_msgs::msg::PoseStamped>("/localized_pose", 10);
+    curr_pose_pub_ = node.create_publisher<geometry_msgs::msg::PoseStamped>(
+      "/glim_ros/localized_curr_pose", rclcpp::QoS(1).best_effort());
+    traj_pub_ = node.create_publisher<nav_msgs::msg::Path>(
+      "/glim_ros/localized_trajectory", rclcpp::QoS(1).reliable());
     map_pub_  = node.create_publisher<sensor_msgs::msg::PointCloud2>(
       "/glim_ros/entire_map", rclcpp::QoS(1).transient_local());
     transform_pub_ = node.create_publisher<geometry_msgs::msg::PoseStamped>(
       "/localizer/T_glimworld_savedworld", rclcpp::QoS(1).transient_local());
+
+    // 10 Hz — curr_pose with best_effort QoS for minimum latency
+    pose_timer_ = node.create_wall_timer(
+      std::chrono::milliseconds(100),
+      [this]() { publish_curr_pose(); });
+
+    // 1 Hz — full trajectory for save_map_glim.py rendering
+    traj_timer_ = node.create_wall_timer(
+      std::chrono::milliseconds(1000),
+      [this]() { publish_trajectory(); });
+
+    // dynamic-rate entire_map
+    map_pub_timer_ = node.create_wall_timer(
+      std::chrono::milliseconds(200),
+      [this]() { map_pub_tick(); });
 
     auto sub = std::make_shared<glim::TopicSubscription<geometry_msgs::msg::PoseStamped>>(
       "/initial_pose",
@@ -195,6 +217,41 @@ private:
       latest_glim_pose_ = submap->T_world_origin;
       has_glim_pose_ = true;
     }
+
+    // ── No-localization (new-mapping) mode ────────────────────────────────
+    if (!localization_mode_) {
+      // Store GLIM-frame pose in last_pose_msg_ — 5Hz timer will publish it
+      const double s = submap->frames.empty() ? 0.0
+          : submap->frames[submap->frames.size() / 2]->stamp;
+      if (s > 0.0) {
+        geometry_msgs::msg::PoseStamped msg;
+        msg.header.stamp    = rclcpp::Time(static_cast<uint64_t>(s * 1e9));
+        msg.header.frame_id = map_frame_;
+        const Eigen::Quaterniond q(submap->T_world_origin.rotation());
+        const auto& t = submap->T_world_origin.translation();
+        msg.pose.position.x    = t.x(); msg.pose.position.y    = t.y();
+        msg.pose.position.z    = t.z();
+        msg.pose.orientation.x = q.x(); msg.pose.orientation.y = q.y();
+        msg.pose.orientation.z = q.z(); msg.pose.orientation.w = q.w();
+        std::lock_guard<std::mutex> lk(last_pose_mutex_);
+        last_pose_msg_ = msg;
+        has_last_pose_ = true;
+        // Append to trajectory
+        std::lock_guard<std::mutex> tlk(traj_mutex_);
+        trajectory_.poses.push_back(msg);
+      }  // if (s > 0.0)
+      // Accumulate map points for /glim_ros/entire_map
+      {
+        std::lock_guard<std::mutex> lk(map_pts_mutex_);
+        for (size_t j = 0; j < submap->frame->size(); j++) {
+          const Eigen::Vector4d p = submap->T_world_origin * submap->frame->points[j];
+          new_submap_pts_.push_back({(float)p[0], (float)p[1], (float)p[2]});
+        }
+      }
+      if (!kill_switch_) publish_entire_map();
+      return;
+    }
+    // ── End no-localization branch ─────────────────────────────────────────
 
     // If initial_pose arrived before any submap, recalculate T_savedmap_glimworld
     {
@@ -227,6 +284,27 @@ private:
   }
 
   void on_update_submaps_cb(const std::vector<glim::SubMap::Ptr>& submaps) {
+    // ── No-localization mode: rebuild map in GLIM world frame ─────────────
+    if (!localization_mode_) {
+      std::vector<Eigen::Vector3f> pts;
+      pts.reserve(submaps.size() * 20000);
+      for (const auto& sm : submaps) {
+        if (!sm || !sm->frame || !sm->frame->has_points()) continue;
+        for (size_t j = 0; j < sm->frame->size(); j++) {
+          const Eigen::Vector4d p = sm->T_world_origin * sm->frame->points[j];
+          pts.push_back({(float)p[0], (float)p[1], (float)p[2]});
+        }
+      }
+      {
+        std::lock_guard<std::mutex> lock(map_pts_mutex_);
+        glim_submap_pts_ = std::move(pts);
+        new_submap_pts_.clear();
+      }
+      if (!kill_switch_) publish_entire_map();
+      return;
+    }
+    // ── End no-localization branch ─────────────────────────────────────────
+
     // Called after GLIM global optimization - rebuild GLIM pts in saved map frame
     Eigen::Isometry3d T_sg;
     { std::lock_guard<std::mutex> lock(mutex_); T_sg = T_savedmap_glimworld_; }
@@ -355,15 +433,8 @@ private:
         }
       }
 
-      // Periodic entire_map + localized_pose publish every 2 seconds
-      {
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_map_pub_time_).count() >= 2) {
-          if (!kill_switch_) publish_entire_map();
-          if (!kill_switch_ && initialized_) publish_last_pose();
-          last_map_pub_time_ = now;
-        }
-      }
+      // map publishing is now handled by map_pub_timer_ (dynamic rate)
+      // pose publishing is now handled by pose_timer_ (5 Hz)
 
       if (submaps.empty()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -445,10 +516,12 @@ private:
         msg.pose.orientation.y = q.y();
         msg.pose.orientation.z = q.z();
         msg.pose.orientation.w = q.w();
-        // Store for periodic 2s publish
+        // Store for 10 Hz republish + append to trajectory
         std::lock_guard<std::mutex> lock(last_pose_mutex_);
         last_pose_msg_ = msg;
         has_last_pose_ = true;
+        std::lock_guard<std::mutex> tlk(traj_mutex_);
+        trajectory_.poses.push_back(msg);
       }
     }
 
@@ -468,11 +541,55 @@ private:
   // -----------------------------------------------------------------------
   // Map publishing
   // -----------------------------------------------------------------------
-  void publish_last_pose() {
-    if (!pose_pub_) return;
+
+  // Called at 5 Hz by map_pub_timer_.
+  // Decides publish interval based on mode and total point count,
+  // so large saved maps don't flood the network.
+  void map_pub_tick() {
+    if (kill_switch_) return;
+
+    auto now = std::chrono::steady_clock::now();
+    double elapsed = std::chrono::duration<double>(now - last_map_pub_time_).count();
+
+    double interval;
+    if (!localization_mode_) {
+      interval = 1.0;   // new-mapping: 1 Hz — map grows in real time
+    } else {
+      size_t total_pts = 0;
+      {
+        std::lock_guard<std::mutex> lock(map_pts_mutex_);
+        total_pts = saved_map_pts_.size() + glim_submap_pts_.size() + new_submap_pts_.size();
+      }
+      if      (total_pts < 2000000)  interval = 2.0;   // <  2M pts → 0.5 Hz
+      else if (total_pts < 10000000) interval = 5.0;   // < 10M pts → 0.2 Hz
+      else                           interval = 10.0;  // ≥ 10M pts → 0.1 Hz
+    }
+
+    if (elapsed >= interval) {
+      publish_entire_map();
+      last_map_pub_time_ = now;
+    }
+  }
+
+  // 10 Hz: republish last known pose with best_effort QoS for minimum latency
+  void publish_curr_pose() {
+    if (!curr_pose_pub_) return;
     std::lock_guard<std::mutex> lock(last_pose_mutex_);
     if (!has_last_pose_) return;
-    pose_pub_->publish(last_pose_msg_);
+    curr_pose_pub_->publish(last_pose_msg_);
+  }
+
+  // 1 Hz: publish full trajectory for save_map_glim.py
+  void publish_trajectory() {
+    if (!traj_pub_) return;
+    nav_msgs::msg::Path path;
+    {
+      std::lock_guard<std::mutex> lock(traj_mutex_);
+      path = trajectory_;
+    }
+    if (path.poses.empty()) return;
+    path.header.frame_id = map_frame_;
+    traj_pub_->publish(path);
   }
 
   void publish_entire_map() {
@@ -641,9 +758,16 @@ private:
   // Members
   // -----------------------------------------------------------------------
   std::shared_ptr<spdlog::logger> logger;
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr map_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr curr_pose_pub_;  // /glim_ros/localized_curr_pose
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr             traj_pub_;       // /glim_ros/localized_trajectory
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr   map_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr transform_pub_;
+  rclcpp::TimerBase::SharedPtr pose_timer_;     // 10 Hz curr_pose republish
+  rclcpp::TimerBase::SharedPtr traj_timer_;     //  1 Hz trajectory publish
+  rclcpp::TimerBase::SharedPtr map_pub_timer_;  // dynamic-rate entire_map publish
+
+  std::mutex traj_mutex_;
+  nav_msgs::msg::Path trajectory_;
 
   std::string map_path_, output_path_, map_frame_, lidar_frame_;
   double vgicp_res_, prior_inf_scale_trans_, prior_inf_scale_rot_;
@@ -686,6 +810,9 @@ private:
   bool pending_init_;
   Eigen::Isometry3d T_pending_savedmap_lidar_ = Eigen::Isometry3d::Identity();
   Eigen::Isometry3d T_savedmap_glimworld_     = Eigen::Isometry3d::Identity();
+
+  // true when map_path_ is set; false = new-mapping mode (GLIM world = map frame)
+  bool localization_mode_ = false;
 };
 
 }  // namespace glim_localizer

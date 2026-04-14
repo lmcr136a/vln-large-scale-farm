@@ -135,12 +135,8 @@ class ControlServer:
         def handle_connect():
             print(f"✅ Client connected: {request.sid}")
             self.map_controller.should_update_twist = True
-            # Send map immediately on connect
             self.server_to_panel.send_map_update(force=True)
-            # Re-emit cached pose so robot marker appears immediately after refresh
-            pose = self.auto_controller.get_current_pose()
-            if pose:
-                self.socketio.emit('robot_pose', pose)
+            pass  # robot_pose emitted directly by autonomous_mode
             # Sync recording state to newly connected client
             if self.is_recording:
                 self.socketio.emit('recording_status', {

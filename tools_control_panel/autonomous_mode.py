@@ -1,28 +1,29 @@
 """
 Autonomous Mode — independent ROS2 node.
 
-Subscribes to /glim_ros/odom (~10 Hz) to maintain a high-frequency
-pose cache.  GLIM publishes odometry directly in the map frame, so no
-TF transformation is required.
+Subscribes to /localized_pose (same topic as save_map_glim.py) to maintain
+a high-frequency pose cache AND emit robot_pose directly via socketio.
 
 Architecture:
-    /glim_ros/odom  →  _odom_callback (~10 Hz)  →  _current_pose cache
-                                                          ↓
+    /localized_pose  →  _pose_callback  →  _current_pose cache
+                                        →  socketio.emit('robot_pose')  [real-time]
+
     control_server  →  start(waypoints)  →  _drive_loop (CONTROL_DT = 0.1 s)
                                                    ↓ get_current_pose()
                                              autonomous_driving.run()
                                                    ↓
                                              cmd_vel publisher
 """
+import os
 import time
 import threading
+import json
 
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
-from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, PoseStamped
 
 import autonomous_driving
 
@@ -35,7 +36,9 @@ def _quat_to_yaw(x, y, z, w):
 class AutonomousController(Node):
     """
     Independent ROS2 node for pose tracking and autonomous driving.
-    Does NOT depend on save_map_glim.py at all.
+    Subscribes to /localized_pose (published by localizer_ext in both
+    localization and new-mapping modes).
+    Emits robot_pose via socketio directly — no file I/O delay.
     """
 
     def __init__(self, publisher, socketio, config):
@@ -46,50 +49,67 @@ class AutonomousController(Node):
         self.config   = config
 
         self._pose_lock    = threading.Lock()
-        self._current_pose = None   # {x, y, z, yaw} in map frame, updated at ~10 Hz
+        self._current_pose = None   # {x, y, z, yaw} in map frame
 
         self._active     = False
         self._stop_event = threading.Event()
         self._thread     = None
 
-        # /glim_ros/odom is published with VOLATILE durability
+        # Map rotation angle (PCA from save_map_glim.py) — cached from map_state.json
+        self._rot_angle       = 0.0
+        self._rot_angle_mtime = 0.0
+        map_dir = os.path.expanduser(self.config['paths']['map_dir'])
+        self._map_yaml_path   = os.path.join(map_dir, 'map_state.json')
+
+        # /glim_ros/localized_curr_pose uses best_effort QoS for minimum latency
         qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=10)
+            depth=1)
 
-        self.odom_sub = self.create_subscription(
-            Odometry, '/glim_ros/odom', self._odom_callback, qos)
+        self.pose_sub = self.create_subscription(
+            PoseStamped, '/glim_ros/localized_curr_pose', self._pose_callback, qos)
 
-        self.get_logger().info('AutonomousController ready — listening on /glim_ros/odom')
+        self.get_logger().info('AutonomousController ready — listening on /glim_ros/localized_curr_pose')
 
-    # ── High-frequency pose update ─────────────────────────────────────────────
+    # ── Pose update + real-time socketio emit ──────────────────────────────────
 
-    def _odom_callback(self, msg: Odometry):
-        """
-        Called at ~10 Hz.
-        /glim_ros/odom is already in the map frame — no TF needed.
-        """
-        pos = msg.pose.pose.position
-        q   = msg.pose.pose.orientation
+    def _pose_callback(self, msg: PoseStamped):
+        pos = msg.pose.position
+        q   = msg.pose.orientation
         yaw = _quat_to_yaw(q.x, q.y, q.z, q.w)
 
-        pose = {
-            'x':   float(pos.x),
-            'y':   float(pos.y),
-            'z':   float(pos.z),
-            'yaw': yaw,
-        }
-
         with self._pose_lock:
-            self._current_pose = pose
+            self._current_pose = {
+                'x':   float(pos.x),
+                'y':   float(pos.y),
+                'z':   float(pos.z),
+                'yaw': yaw,
+            }
 
-        # Emit robot_pose to web at odom callback rate (~10 Hz)
+        # Refresh rot_angle from map_state.json only when the file changes
         try:
-            self.socketio.emit('robot_pose', pose)
+            mtime = os.path.getmtime(self._map_yaml_path)
+            if mtime > self._rot_angle_mtime:
+                with open(self._map_yaml_path, 'r') as f:
+                    meta = json.load(f)
+                self._rot_angle       = float(meta.get('rot_angle', 0.0))
+                self._rot_angle_mtime = mtime
         except Exception:
             pass
+
+        # Apply map rotation and emit robot_pose immediately — no file I/O delay
+        theta = self._rot_angle
+        c, s  = np.cos(theta), np.sin(theta)
+        rx    =  c * float(pos.x) + s * float(pos.y)
+        ry    = -s * float(pos.x) + c * float(pos.y)
+        self.socketio.emit('robot_pose', {
+            'x':   rx,
+            'y':   ry,
+            'z':   float(pos.z),
+            'yaw': yaw - theta,
+        }, namespace='/')
 
     def get_current_pose(self):
         """Thread-safe. Returns {x, y, z, yaw} in map frame, or None."""
@@ -134,11 +154,6 @@ class AutonomousController(Node):
     # ── Drive loop ─────────────────────────────────────────────────────────────
 
     def _drive_loop(self, waypoints):
-        """
-        Background thread.
-        autonomous_driving.run() yields one command per CONTROL_DT (0.1 s).
-        Each iteration re-reads get_current_pose() for closed-loop control.
-        """
         max_laps = self.config['autonomous'].get('max_repeat_num', 1)
         params   = self.config.get('autonomous', {})
 
@@ -181,7 +196,6 @@ class AutonomousController(Node):
                     twist.linear.x  = vt
                     twist.angular.z = vr
 
-                    # Republish at 20 Hz within the dt window
                     deadline   = time.time() + dt
                     PUB_PERIOD = 0.05
                     while time.time() < deadline:

@@ -1,0 +1,32 @@
+{
+  /*** Sensor configurations ***
+  // SE3 poses are written in the TUM format [x, y, z, qx, qy, qz, qw]
+  // Ouster OS0: [0.006, -0.012, 0.008, 0.0, 0.0, 0.0, 1.0]
+  // Livox Avia: [0, 0, 0, 0, 0, 0, 1]
+  // Realsense L515: [-0.012, 0.016, 0.001, 0, 0, 0, 1]
+  // Azure Kinect: [0.003, 0.004, -0.051, -0.476, 0.474, 0.524, 0.525]
+  // ZED2i: [-0.002, -0.023, 0.000, -0.002, -0.001, -0.002, 1.000]
+  // Newer college: [-0.006, 0.012, 0.029, 0.0, 0.0, 1.0, 0.0]
+  // rooftop: [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+  //
+  // "T_lidar_imu" transforms points in the "imu" frame into the "lidar" frame
+  // e.g., p_lidar = T_lidar_imu * p_imu, T_world_imu = T_world_lidar * T_lidar_imu
+  */
+  "sensors": {
+    // IMU config
+    "imu_acc_noise": 0.01,
+    "imu_gyro_noise": 0.0001,
+    "imu_int_noise": 0.0001,
+    // LiDAR config
+    "global_shutter_lidar": false,
+    "T_lidar_imu": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1
+    ]
+  }
+}

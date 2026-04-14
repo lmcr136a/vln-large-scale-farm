@@ -3,9 +3,10 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import PointCloud2
 from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Path
 from sensor_msgs_py import point_cloud2
 import numpy as np
-import yaml
+import json
 import os
 import threading
 from scipy.ndimage import uniform_filter, binary_dilation
@@ -16,7 +17,7 @@ from rclpy.duration import Duration
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
-PIXEL_GRID_SIZE    = 0.2
+PIXEL_GRID_SIZE    = 0.05
 MAP_UPDATE_RATE    = 1.0
 TARGET_FRAME       = 'map'
 IMAGE_RES_MUL      = 2
@@ -39,7 +40,7 @@ ROBOT_ARROW_LEN_M  = 1.5
 
 COLOR_TRAJECTORY   = (100, 255, 170)
 COLOR_ROBOT_CIRCLE = (0, 0, 255)
-COLOR_ARROW        = (100, 100, 255)
+COLOR_ARROW        = (255, 255, 0)
 
 POINT_SAMPLE_RATIO = 1.0
 
@@ -104,27 +105,17 @@ def _rotate_xy(pts_n3, angle_rad):
     return out
 
 
-def find_best_rotation(pts, path_positions):
-    combined = np.vstack([pts[:, :3], path_positions[:, :3]]) \
-        if path_positions is not None and len(path_positions) > 0 \
-        else pts[:, :3]
-
-    best_angle = 0.0
-    best_area  = np.inf
-
-    for deg in range(0, 360, 10):
-        a = np.radians(deg)
-        c, s = np.cos(a), np.sin(a)
-        rx =  c * combined[:, 0] + s * combined[:, 1]
-        ry = -s * combined[:, 0] + c * combined[:, 1]
-        area = (rx.max() - rx.min()) * (ry.max() - ry.min())
-        if area < best_area:
-            best_area  = area
-            best_angle = a
-
-    print(f'[Mapper] Best rotation: {np.degrees(best_angle):.0f}deg  '
-          f'(bbox area {best_area:.1f} m2)')
-    return best_angle
+def find_best_rotation(pts):
+    """PCA on XY plane — align longest axis of map points to horizontal."""
+    xy = pts[:, :2]
+    xy = xy - xy.mean(axis=0)
+    cov = np.cov(xy.T)
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    # largest eigenvector = principal axis (longest direction of the map)
+    principal = eigvecs[:, np.argmax(eigvals)]
+    angle = float(np.arctan2(principal[1], principal[0]))
+    print(f'[Mapper] Best rotation (PCA): {np.degrees(angle):.0f}deg')
+    return angle
 
 
 def build_occupancy_grid(pts, iu, iv, grid_w, grid_h):
@@ -246,7 +237,7 @@ def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, world_rot_angle=0.0)
 
         r_px  = ROBOT_RADIUS_M   * m
         al_px = ROBOT_ARROW_LEN_M * m
-        lw    = max(1, int(r_px * 0.25))
+        lw    = max(2, int(r_px * 0.25))
 
         if path_xyz is not None and len(path_xyz) > 1:
             pts_px = [to_px(p[0], p[1]) for p in path_xyz]
@@ -262,9 +253,6 @@ def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, world_rot_angle=0.0)
             ay = ry + al_px * dy
 
             draw.line([(rx, ry), (ax, ay)], fill=COLOR_ARROW, width=lw)
-            draw.regular_polygon(
-                (ax, ay, max(2, r_px * 0.6)), 3,
-                rotation=90 - np.degrees(robot_yaw), fill=COLOR_ARROW)
             draw.ellipse(
                 [rx - r_px, ry - r_px, rx + r_px, ry + r_px],
                 fill=COLOR_ROBOT_CIRCLE, outline=COLOR_ARROW, width=lw)
@@ -301,15 +289,6 @@ def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, world_rot_angle=0.0)
         final_res = float(gs / IMAGE_RES_MUL)
         img.save(os.path.join(OUTPUT_DIR, 'map_latest.png'))
 
-        yaml_data = {
-            'resolution':  final_res,
-            'origin':      [float(u_min), float(v_min), 0.0],
-            'grid_width':  meta['grid_width'],
-            'grid_height': meta['grid_height'],
-        }
-        with open(os.path.join(OUTPUT_DIR, 'map_latest.yaml'), 'w') as f:
-            yaml.dump(yaml_data, f, default_flow_style=False)
-
         return final_res, img.width, img.height
 
     except Exception as e:
@@ -331,6 +310,7 @@ class ContinuousPointCloudMapper(Node):
         self.last_map_time     = None
         self.map_version       = 0
         self._best_angle       = None
+        self._map_params       = None   # written to map_params.json at 5Hz
 
         self.tf_buffer   = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -347,11 +327,12 @@ class ContinuousPointCloudMapper(Node):
             depth=10)
 
         self.pc_sub   = self.create_subscription(
-            PointCloud2, '/glim_ros/entire_map',  self.pc_callback,   map_qos)
-        self.odom_sub = self.create_subscription(
-            PoseStamped, '/localized_pose', self.odom_callback, odom_qos)
+            PointCloud2, '/glim_ros/entire_map',          self.pc_callback,   map_qos)
+        self.traj_sub = self.create_subscription(
+            Path,        '/glim_ros/localized_trajectory', self.traj_callback, odom_qos)
 
-        self._status_timer = self.create_timer(5.0, self._print_status)
+        self._status_timer = self.create_timer(5.0,  self._print_status)
+        self._params_timer = self.create_timer(0.2,  self._write_map_params)  # 5 Hz
 
         print(f'[Mapper] Ready  frame="{TARGET_FRAME}"  cell={PIXEL_GRID_SIZE}m  '
               f'band=[{BAND_LOW},{BAND_HIGH}]m  step={STEP_THRESHOLD}m')
@@ -362,49 +343,57 @@ class ContinuousPointCloudMapper(Node):
         if self.latest_pose is None:
             print('[Mapper] Waiting for /localized_pose ...')
         else:
-            n_pts = len(self.path_positions)
-            print(f'[Mapper] Waiting for /glim_ros/entire_map ...  '
-                  f'(trajectory pts={n_pts}, need >=15)')
+            print('[Mapper] Waiting for /glim_ros/entire_map ...')
+
+    def _write_map_params(self):
+        """Write map_state.json at 5 Hz so autonomous_mode.py and server stay in sync."""
+        if self._map_params is None:
+            return
+        tmp = os.path.join(OUTPUT_DIR, 'map_state.json.tmp')
+        dst = os.path.join(OUTPUT_DIR, 'map_state.json')
+        try:
+            with open(tmp, 'w') as f:
+                json.dump(self._map_params, f)
+            os.replace(tmp, dst)   # atomic on POSIX
+        except Exception:
+            pass
 
     def get_current_pose(self):
         with self._pose_lock:
             return dict(self._current_pose) if self._current_pose is not None else None
 
-    def odom_callback(self, msg: PoseStamped):
-        pos = msg.pose.position
+    def traj_callback(self, msg: Path):
+        """Receive full trajectory from /glim_ros/localized_trajectory (1 Hz).
+        Poses are already in map frame — no TF needed."""
+        if not msg.poses:
+            return
 
-        try:
-            tf = self.tf_buffer.lookup_transform(
-                TARGET_FRAME, msg.header.frame_id,
-                msg.header.stamp, timeout=Duration(seconds=0.1))
-            t  = tf.transform.translation
-            r  = tf.transform.rotation
-            R  = _quat_to_rot(r.x, r.y, r.z, r.w)
-            p_map = R @ np.array([pos.x, pos.y, pos.z]) + np.array([t.x, t.y, t.z])
-        except TransformException:
-            p_map = np.array([pos.x, pos.y, pos.z])
+        # Extract XY positions directly (already in map frame)
+        pts = np.array([[p.pose.position.x,
+                         p.pose.position.y,
+                         p.pose.position.z] for p in msg.poses], dtype=np.float64)
+        self.path_positions = pts
 
-        pt = p_map.reshape(1, 3)
-
-        self.path_positions = pt if len(self.path_positions) == 0 \
-            else np.vstack([self.path_positions, pt])
-
-        self.latest_pose       = msg.pose
-        self.latest_pose_frame = msg.header.frame_id
+        # Latest pose = last element in path
+        last = msg.poses[-1]
+        self.latest_pose       = last.pose
+        self.latest_pose_frame = last.header.frame_id or msg.header.frame_id or TARGET_FRAME
 
         yaw = extract_yaw_in_map(self.latest_pose, self.latest_pose_frame, self.tf_buffer)
+        pos = last.pose.position
         with self._pose_lock:
             self._current_pose = {
-                'x': float(p_map[0]), 'y': float(p_map[1]),
-                'z': float(p_map[2]), 'yaw': yaw,
+                'x': float(pos.x), 'y': float(pos.y),
+                'z': float(pos.z), 'yaw': yaw,
             }
+
 
     def pc_callback(self, msg: PointCloud2):
         now = self.get_clock().now()
         if self.last_map_time is not None:
             if (now - self.last_map_time).nanoseconds / 1e9 < MAP_UPDATE_RATE:
                 return
-        if len(self.path_positions) < 15 or self.latest_pose is None:
+        if len(self.path_positions) < 1 or self.latest_pose is None:
             return
 
         pts = transform_cloud_to_map(msg, self.tf_buffer, self.get_logger())
@@ -421,7 +410,7 @@ class ContinuousPointCloudMapper(Node):
             pts = pts[np.random.choice(len(pts), n, replace=False)]
 
         if self._best_angle is None:
-            self._best_angle = find_best_rotation(pts, self.path_positions)
+            self._best_angle = find_best_rotation(pts)
 
         theta = self._best_angle
 
@@ -456,6 +445,16 @@ class ContinuousPointCloudMapper(Node):
             grid, z_rel, meta, path_r, robot_yaw_rotated, world_rot_angle=theta)
         if final_res is None:
             return
+
+        # Update map_params — written to disk at 5 Hz by _write_map_params timer
+        self._map_params = {
+            'rot_angle':  float(theta),
+            'origin_x':   u_min,
+            'origin_y':   v_min,
+            'resolution': float(PIXEL_GRID_SIZE / IMAGE_RES_MUL),
+            'img_width':  int(grid_w * IMAGE_RES_MUL),
+            'img_height': int(grid_h * IMAGE_RES_MUL),
+        }
 
         self.last_map_time = now
         self.map_version  += 1

@@ -49,7 +49,7 @@ target_include_directories(localizer_ext PRIVATE
   /usr/local/include
 )
 ament_target_dependencies(localizer_ext
-  rclcpp geometry_msgs sensor_msgs
+  rclcpp geometry_msgs sensor_msgs nav_msgs
 )
 target_link_libraries(localizer_ext
   glim::glim

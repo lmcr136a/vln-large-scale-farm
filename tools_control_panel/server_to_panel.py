@@ -10,7 +10,7 @@ Responsibilities:
 import os
 import time
 import shutil
-import yaml
+import json
 import psutil
 
 
@@ -32,22 +32,25 @@ class ServerToPanel:
 
     # ── Map ───────────────────────────────────────────────────────────────────
 
-    def _map_paths(self):
-        map_dir = os.path.expanduser(self.config['paths']['map_dir'])
-        return (
-            os.path.join(map_dir, 'map_latest.png'),
-            os.path.join(map_dir, 'map_latest.yaml'),
+    def _map_state_path(self):
+        return os.path.join(
+            os.path.expanduser(self.config['paths']['map_dir']),
+            'map_state.json'
         )
 
     def send_map_update(self, force=False):
         """
         Check if map_latest.png has changed (via mtime).
-        If yes, read map_latest.yaml for metadata and emit map_updated.
+        If yes, read map_state.json for metadata and emit map_updated.
         The client fetches the actual PNG via HTTP GET /map_latest.png?v=N.
         """
-        png_path, yaml_path = self._map_paths()
+        png_path = os.path.join(
+            os.path.expanduser(self.config['paths']['map_dir']),
+            'map_latest.png'
+        )
+        state_path = self._map_state_path()
 
-        if not os.path.exists(png_path) or not os.path.exists(yaml_path):
+        if not os.path.exists(png_path) or not os.path.exists(state_path):
             return
 
         mtime = os.path.getmtime(png_path)
@@ -56,14 +59,10 @@ class ServerToPanel:
         self._last_mtime = mtime
 
         try:
-            with open(yaml_path, 'r') as f:
-                meta = yaml.safe_load(f)
+            with open(state_path, 'r') as f:
+                meta = json.load(f)
         except Exception:
             return
-
-        origin = meta.get('origin', [0.0, 0.0, 0.0])
-        img_w  = int(meta.get('grid_width',  0) * 2)   # IMAGE_RES_MUL = 2
-        img_h  = int(meta.get('grid_height', 0) * 2)
 
         self._map_version += 1
 
@@ -71,12 +70,13 @@ class ServerToPanel:
             self.socketio.emit('map_updated', {
                 'version':    self._map_version,
                 'resolution': float(meta.get('resolution', 0.1)),
-                'origin_x':   float(origin[0]),
-                'origin_y':   float(origin[1]),
-                'width':      img_w,
-                'height':     img_h,
+                'origin_x':   float(meta.get('origin_x', 0.0)),
+                'origin_y':   float(meta.get('origin_y', 0.0)),
+                'width':      int(meta.get('img_width',  0)),
+                'height':     int(meta.get('img_height', 0)),
+                'rot_angle':  float(meta.get('rot_angle', 0.0)),
             })
-            print(f'[map] notified {img_w}×{img_h}')
+            print(f'[map] notified {meta.get("img_width")}×{meta.get("img_height")}')
         except Exception as e:
             print(f'[map] emit failed: {e}')
 
@@ -108,17 +108,12 @@ class ServerToPanel:
     # ── Main Loop ─────────────────────────────────────────────────────────────
 
     def monitor_loop(self, linear_speed_getter):
-        """
-        - map check:  every map.update_interval seconds (mtime-based, no re-send if unchanged)
-        - sysmon:     every monitor.update_interval seconds
-        """
         sysmon_interval = self.config['monitor']['update_interval']
         map_interval    = self.config.get('map', {}).get('update_interval', 1.0)
 
         last_sysmon = 0.0
         last_map    = 0.0
 
-        # Force-send on startup so the client gets the map immediately
         self.send_map_update(force=True)
 
         while True:
@@ -132,4 +127,4 @@ class ServerToPanel:
                 self.send_system_monitor(linear_speed_getter())
                 last_sysmon = now
 
-            time.sleep(0.2)
+            time.sleep(0.05)
