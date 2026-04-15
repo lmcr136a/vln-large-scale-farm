@@ -67,17 +67,24 @@ class SemanticReflexController:
         self.risk_profiles = risk_profiles or default_risk_profiles()
         self.stage = ReflexStage.STATUS_QUO
         self._recovery_counter = 0
+        self._persistent_stop_counter = 0
+        self._last_stop_signature: Optional[tuple[str, int]] = None
+        self._adjust_direction = 1.0
 
     def reset(self) -> None:
         self.stage = ReflexStage.STATUS_QUO
         self._recovery_counter = 0
+        self._persistent_stop_counter = 0
+        self._last_stop_signature = None
+        self._adjust_direction = 1.0
 
     def decide(self, observations: Sequence[SemanticObservation]) -> ControlCommand:
         relevant = self._filter_relevant(list(observations))
         corridor_assessment = self._assess_compliant_corridor(relevant)
-        dominant = self._select_dominant([item for item in relevant if not self._is_compliant(item.label)])
+        dominant = self._select_dominant([item for item in relevant if not self._passes_compliance_check(item)])
 
         if dominant is None and corridor_assessment is None:
+            self._clear_stop_memory()
             return self._recovery_or_go()
 
         if dominant is not None:
@@ -86,16 +93,24 @@ class SemanticReflexController:
             self.stage = ReflexStage.REACT
             self._recovery_counter = 0
 
+            # Vulnerable obstacles should force a stop when they are clearly large
+            # and centered in the scene, even if monocular/depth distance is noisy.
+            if self._should_force_stop(dominant, profile):
+                return self._command_from_profile(dominant, profile, threat_score, stop=True)
             if dominant.distance <= profile.stop_distance:
                 return self._command_from_profile(dominant, profile, threat_score, stop=True)
             if dominant.distance <= profile.caution_distance:
+                self._clear_stop_memory()
                 return self._command_from_profile(dominant, profile, threat_score, stop=False)
 
         if corridor_assessment is not None and corridor_assessment.score >= 0.18:
+            self._clear_stop_memory()
             return self._command_from_corridor(corridor_assessment)
 
         if dominant is None:
+            self._clear_stop_memory()
             return self._recovery_or_go()
+        self._clear_stop_memory()
         return self._recovery_or_go()
 
     def _filter_relevant(self, observations: List[SemanticObservation]) -> List[SemanticObservation]:
@@ -126,14 +141,49 @@ class SemanticReflexController:
         profile = self.risk_profiles.get(label, self.risk_profiles["unknown"])
         return profile.family == "compliant"
 
+    def _passes_compliance_check(self, observation: SemanticObservation) -> bool:
+        if not self._is_compliant(observation.label):
+            return False
+
+        # Compliance is not semantic label alone. A "crop"/"grass" observation only
+        # counts as traversable if it also looks sparse, narrow, and non-rigid.
+        density = max(observation.support_density, observation.depth_valid_ratio)
+        too_dense = density >= 0.55
+        too_wide = observation.bbox_width_ratio >= 0.32
+        too_tall = observation.bbox_height_ratio >= 0.45
+        too_structured = observation.structure_span_deg >= 20.0
+        too_close = observation.distance <= 0.75
+
+        return not (too_dense or too_wide or too_tall or too_structured or too_close)
+
     def _threat_score(self, observation: SemanticObservation, profile: RiskProfile) -> float:
         distance_term = max(0.0, profile.caution_distance - observation.distance) / max(profile.caution_distance, 1e-6)
         path_term = 1.0 if observation.in_path else 0.35
         bearing_term = max(0.2, 1.0 - abs(observation.bearing_deg) / max(self.frontal_fov_deg * 0.5, 1e-6))
         return profile.priority * observation.confidence * path_term * bearing_term * (0.35 + distance_term)
 
+    def _should_force_stop(self, observation: SemanticObservation, profile: RiskProfile) -> bool:
+        if self._passes_compliance_check(observation):
+            return False
+        if not observation.in_path:
+            return False
+
+        # Any non-compliant obstacle that is centered and clearly near in frame
+        # should force a stop, even if depth is noisy.
+        close_in_frame = (
+            observation.bbox_height_ratio >= 0.35
+            or observation.bbox_width_ratio >= 0.22
+        )
+        centered = abs(observation.bearing_deg) <= 20.0
+        high_conf = observation.confidence >= 0.30
+
+        # Also stop if range says it's in a close protection bubble.
+        close_in_distance = observation.distance <= max(profile.stop_distance, 1.5)
+
+        return high_conf and centered and (close_in_frame or close_in_distance)
+
     def _assess_compliant_corridor(self, observations: List[SemanticObservation]) -> Optional[CorridorAssessment]:
-        compliant = [item for item in observations if self._is_compliant(item.label) and item.in_path]
+        compliant = [item for item in observations if self._passes_compliance_check(item) and item.in_path]
         if not compliant:
             return None
 
@@ -210,9 +260,12 @@ class SemanticReflexController:
         stop: bool,
     ) -> ControlCommand:
         if stop:
+            if self._should_adjust_around(observation, profile):
+                return self._adjust_command(observation, profile, threat_score)
             action = profile.stop_action
             linear_x = 0.0
         else:
+            self._clear_stop_memory()
             action = "SLOW" if profile.nominal_speed_scale < 0.5 else "CRAWL"
             linear_x = self.nominal_linear_speed * profile.nominal_speed_scale
 
@@ -232,9 +285,64 @@ class SemanticReflexController:
             threat_score=threat_score,
         )
 
+    def _should_adjust_around(self, observation: SemanticObservation, profile: RiskProfile) -> bool:
+        signature = (profile.label, int(round(observation.bearing_deg / 5.0)))
+        if signature == self._last_stop_signature:
+            self._persistent_stop_counter += 1
+        else:
+            self._last_stop_signature = signature
+            self._persistent_stop_counter = 1
+
+        if profile.family in {"vulnerable", "machinery"}:
+            return False
+        if observation.relative_speed > 0.15:
+            return False
+        if observation.distance <= max(profile.stop_distance + 0.25, 0.9):
+            return False
+        if abs(observation.bearing_deg) > 35.0:
+            return False
+        if abs(observation.bearing_deg) < 8.0:
+            return False
+        return 3 <= self._persistent_stop_counter <= 5
+
+    def _adjust_command(
+        self,
+        observation: SemanticObservation,
+        profile: RiskProfile,
+        threat_score: float,
+    ) -> ControlCommand:
+        if abs(observation.bearing_deg) <= 4.0:
+            self._adjust_direction *= -1.0
+            angular_z = self.max_turn_rate * 0.6 * self._adjust_direction
+        else:
+            angular_z = self._steer_away_from_bearing(observation.bearing_deg)
+
+        linear_x = min(
+            self.nominal_linear_speed * max(profile.nominal_speed_scale, 0.18),
+            self.nominal_linear_speed * 0.25,
+        )
+        self._clear_stop_memory()
+
+        return ControlCommand(
+            action="ADJUST",
+            stage=self.stage.value,
+            target_linear_x=linear_x,
+            target_angular_z=angular_z,
+            stop=False,
+            reason=f"persistent_{profile.label}@{observation.distance:.2f}m",
+            dominant_label=profile.label,
+            threat_distance=observation.distance,
+            threat_score=threat_score,
+        )
+
+    def _clear_stop_memory(self) -> None:
+        self._persistent_stop_counter = 0
+        self._last_stop_signature = None
+
     def _command_from_corridor(self, assessment: CorridorAssessment) -> ControlCommand:
         self.stage = ReflexStage.REACT
         self._recovery_counter = 0
+        self._clear_stop_memory()
 
         if assessment.stop:
             return ControlCommand(

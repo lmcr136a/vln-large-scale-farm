@@ -54,7 +54,7 @@ from std_msgs.msg import String
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agro_nav.policy import SemanticReflexController  # noqa: E402
-from agro_nav.types import SemanticObservation        # noqa: E402
+from agro_nav.types import ControlCommand, SemanticObservation  # noqa: E402
 
 # ── ANSI colours ──────────────────────────────────────────────────────────────
 RESET       = "\033[0m"
@@ -102,6 +102,8 @@ MAX_STEER_CONTRIB = 0.40   # rad/s  ceiling on steer-away angular addition
 # ── LiDAR pseudo-obs (fallback when YOLO is stale) ───────────────────────────
 PSEUDO_MAX_RANGE_M = 5.0   # m  frontal points beyond this are irrelevant here
 PSEUDO_BIN_DEG     = 5.0   # deg  angular bin width for observation clustering
+PSEUDO_MIN_POINTS_PER_BIN = 6  # minimum clustered returns before we trust a pseudo-obs
+PSEUDO_IN_PATH_BEARING_DEG = 25.0  # narrower path band for LiDAR-only pseudo semantics
 
 SENSOR_QOS = QoSProfile(
     reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -309,6 +311,19 @@ class SafetyInterceptor(Node):
                 f"{BOLD_RED}[FAILSAFE] LiDAR stale ({lidar_age:.1f}s) — FULL STOP{RESET}"
             )
             self.pub_cmd.publish(out)
+            self.pub_decision.publish(String(data=json.dumps({
+                "action":          "STOP",
+                "stage":           "FAILSAFE",
+                "reason":          f"lidar_stale_{lidar_age:.1f}s",
+                "dominant_label":  None,
+                "threat_distance": None,
+                "threat_score":    1.0,
+                "sem_source":      "none",
+                "danger_front":    False,
+                "danger_rear":     False,
+                "lv_out":          0.0,
+                "av_out":          0.0,
+            })))
             return
 
         # ── Layer 1: Semantic modulation ──────────────────────────────────────
@@ -326,11 +341,28 @@ class SafetyInterceptor(Node):
         with self._reflex_lock:
             sem_cmd = self._reflex.decide(observations)
 
+        # LiDAR-only pseudo-observations are a conservative no-vision fallback.
+        # They should not trigger semantic STOP/ADJUST churn on their own;
+        # the geometric layer below already owns hard stopping from raw LiDAR.
+        if sem_source == "lidar_fallback" and sem_cmd.dominant_label == "unknown":
+            sem_cmd = ControlCommand(
+                action="GO",
+                stage=sem_cmd.stage,
+                target_linear_x=self.nominal_linear_speed if hasattr(self, "nominal_linear_speed") else NOMINAL_SPEED,
+                target_angular_z=0.0,
+                stop=False,
+                reason="lidar_fallback_deferred_to_geometry",
+                dominant_label=None,
+                threat_distance=sem_cmd.threat_distance,
+                threat_score=sem_cmd.threat_score,
+            )
+
         # Only modulate forward motion. The robot can always reverse away from
         # an obstacle; the semantic layer does not restrict backward motion.
         if lv > 0.01:
             if sem_cmd.stop:
                 lv = 0.0
+                av = 0.0
                 log_parts.append(
                     f"{BOLD_YELLOW}[SEM STOP] "
                     f"{sem_cmd.reason}  "
@@ -364,13 +396,15 @@ class SafetyInterceptor(Node):
 
         if out.linear.x > 0.01 and danger_front:
             out.linear.x = 0.0
+            out.angular.z = 0.0
             log_parts.append(
-                f"{BOLD_RED}[GEO DANGER FRONT] {front_count} pts — forward BLOCKED{RESET}"
+                f"{BOLD_RED}[GEO DANGER FRONT] {front_count} pts — FULL STOP{RESET}"
             )
         elif out.linear.x < -0.01 and danger_rear:
             out.linear.x = 0.0
+            out.angular.z = 0.0
             log_parts.append(
-                f"{BOLD_RED}[GEO DANGER REAR] {rear_count} pts — backward BLOCKED{RESET}"
+                f"{BOLD_RED}[GEO DANGER REAR] {rear_count} pts — FULL STOP{RESET}"
             )
         elif out.linear.x > 0.01 and caution_front:
             out.linear.x = min(out.linear.x, TENSION_CAP)
@@ -431,7 +465,9 @@ class SafetyInterceptor(Node):
 
         The "unknown" risk profile in agro_nav/policy.py applies:
           caution_distance=3.0 m, stop_distance=1.0 m, speed_scale=0.15
-        This is deliberately conservative for the no-vision fallback case.
+        This is deliberately conservative for the no-vision fallback case, but it
+        should still require real clustered support so sparse noise does not stop
+        the robot by itself.
         """
         if pts is None or len(pts) == 0:
             return []
@@ -456,6 +492,9 @@ class SafetyInterceptor(Node):
         observations: List[SemanticObservation] = []
         for bid in np.unique(bin_ids):
             mask     = bin_ids == bid
+            support_count = int(mask.sum())
+            if support_count < PSEUDO_MIN_POINTS_PER_BIN:
+                continue
             sub_dist = dist[mask]
             sub_bear = bearings[mask]
             idx = int(np.argmin(sub_dist))
@@ -465,9 +504,10 @@ class SafetyInterceptor(Node):
                 label="unknown",
                 distance=d,
                 bearing_deg=b,
-                confidence=1.0,
-                in_path=abs(b) < 35.0,
+                confidence=min(0.8, 0.35 + 0.05 * support_count),
+                in_path=abs(b) < PSEUDO_IN_PATH_BEARING_DEG,
                 source="lidar_fallback",
+                lidar_support_points=support_count,
             ))
         return observations
 

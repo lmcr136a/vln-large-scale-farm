@@ -24,18 +24,27 @@ LiDAR-based obstacle avoidance and does not depend on this node being active.
 """
 from __future__ import annotations
 
+from collections import deque
 import json
 from typing import List, Optional
 
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image, LaserScan
 from std_msgs.msg import String
 
-from .fusion import CameraIntrinsics, detections_to_observations
+from .fusion import CameraIntrinsics, canonicalize_label, detections_to_observations
 from .runtime import ensure_ros_log_dir
 from .types import BoundingBox2D, SemanticDetection, observations_to_payload
+
+SENSOR_QOS = QoSProfile(
+    reliability=QoSReliabilityPolicy.BEST_EFFORT,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=1,
+    durability=QoSDurabilityPolicy.VOLATILE,
+)
 
 
 class YoloSemanticNode(Node):
@@ -52,6 +61,8 @@ class YoloSemanticNode(Node):
         self.declare_parameter("confidence_threshold", 0.35)
         self.declare_parameter("max_depth_m", 20.0)
         self.declare_parameter("publish_debug_detections", False)
+        self.declare_parameter("stable_frames", 2)
+        self.declare_parameter("history_frames", 4)
 
         self.rgb_topic = str(self.get_parameter("rgb_topic").value)
         self.depth_topic = str(self.get_parameter("depth_topic").value)
@@ -63,16 +74,19 @@ class YoloSemanticNode(Node):
         self.confidence_threshold = float(self.get_parameter("confidence_threshold").value)
         self.max_depth_m = float(self.get_parameter("max_depth_m").value)
         self.publish_debug_detections = bool(self.get_parameter("publish_debug_detections").value)
+        self.stable_frames = int(self.get_parameter("stable_frames").value)
+        self.history_frames = int(self.get_parameter("history_frames").value)
 
         self.model = self._load_model(self.model_path)
         self.latest_depth: Optional[np.ndarray] = None
         self.latest_intrinsics: Optional[CameraIntrinsics] = None
         self.latest_scan: Optional[LaserScan] = None
+        self._detection_history = deque(maxlen=max(self.history_frames, 1))
 
-        self.create_subscription(Image, self.depth_topic, self.on_depth, 10)
-        self.create_subscription(CameraInfo, self.camera_info_topic, self.on_camera_info, 10)
-        self.create_subscription(LaserScan, self.scan_topic, self.on_scan, 20)
-        self.create_subscription(Image, self.rgb_topic, self.on_rgb, 10)
+        self.create_subscription(Image, self.depth_topic, self.on_depth, SENSOR_QOS)
+        self.create_subscription(CameraInfo, self.camera_info_topic, self.on_camera_info, SENSOR_QOS)
+        self.create_subscription(LaserScan, self.scan_topic, self.on_scan, SENSOR_QOS)
+        self.create_subscription(Image, self.rgb_topic, self.on_rgb, SENSOR_QOS)
 
         self.semantic_pub = self.create_publisher(String, self.output_topic, 20)
         self.debug_pub = self.create_publisher(String, f"{self.output_topic}/debug", 20)
@@ -111,11 +125,11 @@ class YoloSemanticNode(Node):
         self.latest_scan = msg
 
     def on_rgb(self, msg: Image) -> None:
-        if self.latest_depth is None or self.latest_intrinsics is None:
-            return
-
         rgb_image = self._decode_rgb(msg)
-        detections = self._run_yolo(rgb_image)
+        if self.latest_intrinsics is None:
+            self.latest_intrinsics = self._fallback_intrinsics(msg.width, msg.height)
+        raw_detections = self._run_yolo(rgb_image)
+        detections = self._stabilize_detections(raw_detections, msg.width, msg.height)
         observations = detections_to_observations(
             detections=detections,
             depth_image=self.latest_depth,
@@ -139,11 +153,101 @@ class YoloSemanticNode(Node):
                                     "bbox": item.bbox.__dict__,
                                 }
                                 for item in detections
-                            ]
+                            ],
+                            "raw_detections": [
+                                {
+                                    "label": item.label,
+                                    "confidence": item.confidence,
+                                    "bbox": item.bbox.__dict__,
+                                }
+                                for item in raw_detections
+                            ],
                         }
                     )
                 )
             )
+
+    def _stabilize_detections(
+        self,
+        detections: List[SemanticDetection],
+        image_width: int,
+        image_height: int,
+    ) -> List[SemanticDetection]:
+        if self.stable_frames <= 1:
+            self._detection_history.append(self._snapshot_detections(detections, image_width, image_height))
+            return detections
+
+        snapshot = self._snapshot_detections(detections, image_width, image_height)
+        prior_frames = list(self._detection_history)
+        self._detection_history.append(snapshot)
+
+        stable: List[SemanticDetection] = []
+        for det in detections:
+            canonical = canonicalize_label(det.label)
+            center_x = det.bbox.center_x / max(float(image_width), 1.0)
+            center_y = det.bbox.center_y / max(float(image_height), 1.0)
+            support = 1
+
+            for frame in reversed(prior_frames):
+                matched = False
+                for entry in frame:
+                    if entry["label"] != canonical:
+                        continue
+                    if abs(entry["cx"] - center_x) > 0.15:
+                        continue
+                    if abs(entry["cy"] - center_y) > 0.18:
+                        continue
+                    matched = True
+                    support += 1
+                    break
+                if support >= self.stable_frames:
+                    break
+
+            if support >= self.stable_frames or det.confidence >= 0.55:
+                stable.append(
+                    SemanticDetection(
+                        label=canonical,
+                        confidence=det.confidence,
+                        bbox=det.bbox,
+                        track_id=det.track_id,
+                        source=det.source,
+                    )
+                )
+
+        return stable
+
+    def _snapshot_detections(
+        self,
+        detections: List[SemanticDetection],
+        image_width: int,
+        image_height: int,
+    ) -> List[dict]:
+        return [
+            {
+                "label": canonicalize_label(det.label),
+                "cx": det.bbox.center_x / max(float(image_width), 1.0),
+                "cy": det.bbox.center_y / max(float(image_height), 1.0),
+            }
+            for det in detections
+        ]
+
+    def _fallback_intrinsics(self, width: int, height: int) -> CameraIntrinsics:
+        # Conservative monocular fallback when CameraInfo has not arrived yet.
+        fx = width * 0.5
+        fy = height * 0.9
+        cx = width * 0.5
+        cy = height * 0.5
+        self.get_logger().warn(
+            f"CameraInfo not received yet, using fallback intrinsics for {width}x{height}"
+        )
+        return CameraIntrinsics(
+            fx=float(fx),
+            fy=float(fy),
+            cx=float(cx),
+            cy=float(cy),
+            width=int(width),
+            height=int(height),
+        )
 
     def _run_yolo(self, rgb_image: np.ndarray) -> List[SemanticDetection]:
         results = self.model.predict(
