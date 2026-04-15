@@ -46,7 +46,18 @@ tmux send-keys -t $SESSION:4 "python3 gps_optimization_ws/pub_gps.py" C-m
 
 
 tmux new-window -t $SESSION:5 -n "safety"
-tmux send-keys -t $SESSION:5 "python3 tools_scout_control/safety_checker.py" C-m
+tmux send-keys -t $SESSION:5 "python3 tools_safety_nav/safety_checker.py" C-m
+
+# Window 7: YOLO semantic node (optional — enables per-class obstacle behaviour)
+# Requires: ultralytics installed, a YOLOv8 model, and ZED depth topic available.
+# Remap camera topics to match your ZED setup before enabling:
+#   tmux new-window -t $SESSION:7 -n "yolo"
+#   tmux send-keys -t $SESSION:7 "python3 tools_safety_nav/agro_nav/yolo_node.py \
+#     --ros-args \
+#     -p rgb_topic:=/zed/rgb_front \
+#     -p depth_topic:=/zed/depth_front \
+#     -p camera_info_topic:=/zed/camera_info_front \
+#     -p model_path:=/home/nahyeon/box/vln-large-scale-farm/models/yolov8n-seg.pt" C-m
 
 
 # Window 6: Status Info
