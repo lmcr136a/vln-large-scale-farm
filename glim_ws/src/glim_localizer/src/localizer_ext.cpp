@@ -41,6 +41,7 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/geometry/Pose3.h>
@@ -70,7 +71,7 @@ public:
   {
     // Default parameters
     map_path_              = "";
-    output_path_           = "/tmp/dump";
+    output_path_           = "~/tmp/dump";
     map_frame_             = "map";
     lidar_frame_           = "livox_frame";
     vgicp_res_             = 1.0;
@@ -202,7 +203,16 @@ public:
       [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr& msg) {
         on_initial_pose(msg);
       });
-    return {sub};
+
+    // /glim_ros/odom: LiDAR-rate (~10 Hz) odometry in GLIM world frame
+    // Used for real-time curr_pose — transforms into saved map frame when localization active
+    auto odom_sub = std::make_shared<glim::TopicSubscription<nav_msgs::msg::Odometry>>(
+      "/glim_ros/odom",
+      [this](const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {
+        on_odom(msg);
+      });
+
+    return {sub, odom_sub};
   }
 
 private:
@@ -386,6 +396,50 @@ private:
       initialized_ = false;
       logger->info("Initial pose pending (waiting for first submap): ({:.2f},{:.2f},{:.2f})",
         msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Odom callback — LiDAR rate (~10 Hz), updates curr_pose in real time
+  // -----------------------------------------------------------------------
+  void on_odom(const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {
+    // T_glimworld_lidar from /glim_ros/odom (GLIM world frame)
+    const auto& pos = msg->pose.pose.position;
+    const auto& ori = msg->pose.pose.orientation;
+    Eigen::Isometry3d T_glimworld_lidar = Eigen::Isometry3d::Identity();
+    T_glimworld_lidar.translation() = Eigen::Vector3d(pos.x, pos.y, pos.z);
+    T_glimworld_lidar.linear() = Eigen::Quaterniond(
+      ori.w, ori.x, ori.y, ori.z).toRotationMatrix();
+
+    Eigen::Isometry3d T_pose;
+    if (localization_mode_) {
+      // Transform into saved map frame: T_savedmap_lidar = T_savedmap_glimworld * T_glimworld_lidar
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!initialized_) return;
+      T_pose = T_savedmap_glimworld_ * T_glimworld_lidar;
+    } else {
+      // No localization: GLIM world frame IS the map frame
+      T_pose = T_glimworld_lidar;
+    }
+
+    geometry_msgs::msg::PoseStamped pose_msg;
+    pose_msg.header.stamp    = msg->header.stamp;
+    pose_msg.header.frame_id = map_frame_;
+    const Eigen::Quaterniond q(T_pose.rotation());
+    const auto& t = T_pose.translation();
+    pose_msg.pose.position.x    = t.x();
+    pose_msg.pose.position.y    = t.y();
+    pose_msg.pose.position.z    = t.z();
+    pose_msg.pose.orientation.x = q.x();
+    pose_msg.pose.orientation.y = q.y();
+    pose_msg.pose.orientation.z = q.z();
+    pose_msg.pose.orientation.w = q.w();
+
+    // Overwrite last_pose_msg_ — 10Hz timer will publish immediately
+    {
+      std::lock_guard<std::mutex> lock(last_pose_mutex_);
+      last_pose_msg_ = pose_msg;
+      has_last_pose_ = true;
     }
   }
 

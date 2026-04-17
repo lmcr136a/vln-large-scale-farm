@@ -80,14 +80,6 @@ class AutonomousController(Node):
         q   = msg.pose.orientation
         yaw = _quat_to_yaw(q.x, q.y, q.z, q.w)
 
-        with self._pose_lock:
-            self._current_pose = {
-                'x':   float(pos.x),
-                'y':   float(pos.y),
-                'z':   float(pos.z),
-                'yaw': yaw,
-            }
-
         # Refresh rot_angle from map_state.json only when the file changes
         try:
             mtime = os.path.getmtime(self._map_yaml_path)
@@ -99,16 +91,29 @@ class AutonomousController(Node):
         except Exception:
             pass
 
-        # Apply map rotation and emit robot_pose immediately — no file I/O delay
+        # Apply map rotation — SAME transform as frontend worldToStagePixel
         theta = self._rot_angle
         c, s  = np.cos(theta), np.sin(theta)
         rx    =  c * float(pos.x) + s * float(pos.y)
         ry    = -s * float(pos.x) + c * float(pos.y)
+        ryaw  = yaw - theta
+
+        # _current_pose in rotated frame — waypoints from JS are also in rotated frame
+        # so autonomous_driving.py compares apples-to-apples
+        with self._pose_lock:
+            self._current_pose = {
+                'x':   rx,
+                'y':   ry,
+                'z':   float(pos.z),
+                'yaw': ryaw,
+            }
+
+        # Emit same rotated coords to frontend
         self.socketio.emit('robot_pose', {
             'x':   rx,
             'y':   ry,
             'z':   float(pos.z),
-            'yaw': yaw - theta,
+            'yaw': ryaw,
         }, namespace='/')
 
     def get_current_pose(self):

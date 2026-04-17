@@ -1,7 +1,7 @@
 {
   "localizer": {
     "map_path": "",
-    "output_map_path": "/tmp/dump",
+    "output_map_path": "~/tmp/dump",
     "map_frame": "map",
     "lidar_frame": "livox_frame",
     "vgicp_voxel_resolution": 1.0,

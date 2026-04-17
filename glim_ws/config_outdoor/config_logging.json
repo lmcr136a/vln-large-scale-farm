@@ -1,7 +1,7 @@
 {
   "logging": {
     "level": "debug",
-    "log_dir": "/tmp",
+    "log_dir": "~/tmp",
     "save_logs": true,
     "rotate_logs": true,
     "max_file_size_kb": 8192,
