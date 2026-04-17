@@ -26,6 +26,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from geometry_msgs.msg import Twist, PoseStamped
 
 import autonomous_driving
+from path_utils import resolve_configured_path
 
 
 def _quat_to_yaw(x, y, z, w):
@@ -58,7 +59,10 @@ class AutonomousController(Node):
         # Map rotation angle (PCA from save_map_glim.py) — cached from map_state.json
         self._rot_angle       = 0.0
         self._rot_angle_mtime = 0.0
-        map_dir = os.path.expanduser(self.config['paths']['map_dir'])
+        map_dir = resolve_configured_path(
+            self.config['paths'].get('map_dir'),
+            os.path.join('tools_control_panel', 'output_glim'),
+        )
         self._map_yaml_path   = os.path.join(map_dir, 'map_state.json')
 
         # /glim_ros/localized_curr_pose uses best_effort QoS for minimum latency

@@ -151,8 +151,12 @@ def depth_valid_ratio_in_bbox(depth_image: Optional[np.ndarray], bbox: BoundingB
 
 
 def bearing_from_bbox(bbox: BoundingBox2D, intrinsics: CameraIntrinsics) -> float:
+    # Negate x_offset so that positive bearing = LEFT, matching LiDAR frame convention
+    # (ROS robot frame: x=forward, y=left → arctan2(y,x) > 0 means left).
+    # _steer_away_from_bearing treats positive bearing as "steer right to avoid" which
+    # is correct when positive means the obstacle is to the LEFT.
     x_offset = bbox.center_x - intrinsics.cx
-    return float(degrees(atan2(x_offset, intrinsics.fx)))
+    return float(degrees(atan2(-x_offset, intrinsics.fx)))
 
 
 def angular_width_from_bbox(bbox: BoundingBox2D, intrinsics: CameraIntrinsics) -> float:

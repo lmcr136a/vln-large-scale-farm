@@ -12,6 +12,7 @@ import time
 import shutil
 import json
 import psutil
+from path_utils import resolve_configured_path
 
 
 class ServerToPanel:
@@ -20,6 +21,14 @@ class ServerToPanel:
         self.config         = config
         self._last_mtime    = 0.0
         self._map_version   = 0
+        self.map_dir = resolve_configured_path(
+            self.config['paths'].get('map_dir'),
+            os.path.join('tools_control_panel', 'output_glim'),
+        )
+        self.data_dir = resolve_configured_path(
+            self.config['paths'].get('data_dir'),
+            'data',
+        )
 
     # ── WiFi ──────────────────────────────────────────────────────────────────
 
@@ -33,10 +42,7 @@ class ServerToPanel:
     # ── Map ───────────────────────────────────────────────────────────────────
 
     def _map_state_path(self):
-        return os.path.join(
-            os.path.expanduser(self.config['paths']['map_dir']),
-            'map_state.json'
-        )
+        return os.path.join(self.map_dir, 'map_state.json')
 
     def send_map_update(self, force=False):
         """
@@ -44,10 +50,7 @@ class ServerToPanel:
         If yes, read map_state.json for metadata and emit map_updated.
         The client fetches the actual PNG via HTTP GET /map_latest.png?v=N.
         """
-        png_path = os.path.join(
-            os.path.expanduser(self.config['paths']['map_dir']),
-            'map_latest.png'
-        )
+        png_path = os.path.join(self.map_dir, 'map_latest.png')
         state_path = self._map_state_path()
 
         if not os.path.exists(png_path) or not os.path.exists(state_path):
@@ -83,7 +86,7 @@ class ServerToPanel:
     # ── System Monitor ────────────────────────────────────────────────────────
 
     def send_system_monitor(self, linear_speed):
-        data_dir = os.path.expanduser(self.config['paths']['data_dir'])
+        data_dir = self.data_dir
         os.makedirs(data_dir, exist_ok=True)
 
         total, used, _ = shutil.disk_usage(data_dir)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dc_replace
 from typing import Dict, List, Optional, Sequence
 
 from .types import ControlCommand, ReflexStage, SemanticObservation
@@ -50,6 +50,19 @@ def default_risk_profiles() -> Dict[str, RiskProfile]:
 
 
 class SemanticReflexController:
+    # Minimum confidence required before a class triggers a safety-critical action.
+    # General detections use min_confidence (0.25).  Human/animal use a higher floor
+    # so a crouching person partially occluded by crops doesn't get misclassified as
+    # "crop" and dismissed, but also so a low-confidence ghost detection doesn't
+    # permanently block the robot.
+    _SAFETY_CRITICAL_FAMILIES   = {"vulnerable", "machinery"}
+    _SAFETY_CRITICAL_MIN_CONF   = 0.45   # must be confident before acting on human/tractor
+
+    # EMA alpha for blockage score — smooths the compliance/stop decision across frames.
+    # α=0.45 means ~3 frames to settle after a step change (at 30 Hz camera rate).
+    # Prevents a single wind-gust frame from flipping the traversal decision.
+    _BLOCKAGE_EMA_ALPHA = 0.45
+
     def __init__(
         self,
         nominal_linear_speed: float = 0.8,
@@ -70,6 +83,7 @@ class SemanticReflexController:
         self._persistent_stop_counter = 0
         self._last_stop_signature: Optional[tuple[str, int]] = None
         self._adjust_direction = 1.0
+        self._blockage_score_ema: float = 0.0  # smoothed corridor blockage score
 
     def reset(self) -> None:
         self.stage = ReflexStage.STATUS_QUO
@@ -77,6 +91,7 @@ class SemanticReflexController:
         self._persistent_stop_counter = 0
         self._last_stop_signature = None
         self._adjust_direction = 1.0
+        self._blockage_score_ema = 0.0
 
     def decide(self, observations: Sequence[SemanticObservation]) -> ControlCommand:
         relevant = self._filter_relevant(list(observations))
@@ -117,12 +132,33 @@ class SemanticReflexController:
         filtered: List[SemanticObservation] = []
         half_fov = self.frontal_fov_deg * 0.5
         for item in observations:
-            if item.confidence < self.min_confidence:
-                continue
             if item.distance <= 0.0:
                 continue
             if abs(item.bearing_deg) > half_fov:
                 continue
+
+            profile = self.risk_profiles.get(item.label, self.risk_profiles["unknown"])
+            if profile.family in self._SAFETY_CRITICAL_FAMILIES:
+                # Safety-critical classes (humans, machinery) require a higher confidence
+                # floor before driving any safety response.  A faint/ambiguous detection
+                # of a person should not be silently dismissed, but a persistent
+                # low-confidence ghost shouldn't freeze the robot either.
+                #
+                # Two-tier logic:
+                #   conf >= _SAFETY_CRITICAL_MIN_CONF  → normal processing
+                #   conf in [min_confidence, _SAFETY_CRITICAL_MIN_CONF)
+                #       → still admitted but distance is treated conservatively
+                #         (halved) so the reflex fires at longer range
+                if item.confidence < self.min_confidence:
+                    continue
+                if item.confidence < self._SAFETY_CRITICAL_MIN_CONF:
+                    # Admit with a conservative distance penalty: treat as if twice
+                    # as close so caution/stop thresholds trigger earlier.
+                    item = _dc_replace(item, distance=item.distance * 0.5)
+            else:
+                if item.confidence < self.min_confidence:
+                    continue
+
             filtered.append(item)
         return filtered
 
@@ -145,16 +181,28 @@ class SemanticReflexController:
         if not self._is_compliant(observation.label):
             return False
 
-        # Compliance is not semantic label alone. A "crop"/"grass" observation only
-        # counts as traversable if it also looks sparse, narrow, and non-rigid.
+        # In agricultural environments crops legitimately fill the entire camera FOV
+        # and have high depth-fill ratios from stem returns.  Using bbox_width_ratio
+        # or bbox_height_ratio as disqualifiers would classify every crop row as a
+        # rigid obstacle and stop the robot perpetually.
+        #
+        # Only block compliance for vegetation that shows genuine structural rigidity
+        # (angular span consistent with a solid wall) or that remains very dense
+        # even at contact distance.  Close vegetation should stay traversable when it
+        # still looks like stems/leaves rather than a rigid barrier.
+        #   structure_span_deg >= 30°  →  obstacle spans like a solid fence, not stems
+        #   density             >= 0.80 →  almost completely solid surface return
+        #   contact_rigid                  close + dense + structured, not pliable crop
         density = max(observation.support_density, observation.depth_valid_ratio)
-        too_dense = density >= 0.55
-        too_wide = observation.bbox_width_ratio >= 0.32
-        too_tall = observation.bbox_height_ratio >= 0.45
-        too_structured = observation.structure_span_deg >= 20.0
-        too_close = observation.distance <= 0.75
+        too_structured = observation.structure_span_deg >= 30.0
+        too_rigid      = density >= 0.80
+        contact_rigid  = (
+            observation.distance <= 0.25
+            and density >= 0.85
+            and observation.structure_span_deg >= 18.0
+        )
 
-        return not (too_dense or too_wide or too_tall or too_structured or too_close)
+        return not (too_structured or too_rigid or contact_rigid)
 
     def _threat_score(self, observation: SemanticObservation, profile: RiskProfile) -> float:
         distance_term = max(0.0, profile.caution_distance - observation.distance) / max(profile.caution_distance, 1e-6)
@@ -185,6 +233,9 @@ class SemanticReflexController:
     def _assess_compliant_corridor(self, observations: List[SemanticObservation]) -> Optional[CorridorAssessment]:
         compliant = [item for item in observations if self._passes_compliance_check(item) and item.in_path]
         if not compliant:
+            # No compliant vegetation visible: decay the EMA toward zero so the score
+            # doesn't stay artificially elevated after the robot exits a crop row.
+            self._blockage_score_ema *= (1.0 - self._BLOCKAGE_EMA_ALPHA)
             return None
 
         nearest_distance = min(item.distance for item in compliant)
@@ -224,23 +275,40 @@ class SemanticReflexController:
         if weighted_widths and sum(abs(value) for value in weighted_widths) > 0.0:
             centroid_bearing_deg = sum(weighted_bearings) / max(sum(weighted_widths), 1e-6)
 
-        blockage_score = (
+        raw_blockage = (
             0.35 * occupancy
             + 0.20 * density_score
             + 0.15 * structure_score
             + 0.20 * closeness
             + 0.10 * (1.0 - mean_traversability)
         )
-        blockage_score = max(0.0, min(1.0, blockage_score))
+        raw_blockage = max(0.0, min(1.0, raw_blockage))
 
-        stop = blockage_score >= 0.60 or (occupancy >= 0.60 and nearest_distance <= 1.2)
+        # EMA across frames: prevents a single wind-gust / shadow frame from flipping
+        # the traversal decision.  The smoothed score is what controls stop/speed;
+        # the raw score is included in the reason string for debugging.
+        self._blockage_score_ema = (
+            self._BLOCKAGE_EMA_ALPHA * raw_blockage
+            + (1.0 - self._BLOCKAGE_EMA_ALPHA) * self._blockage_score_ema
+        )
+        blockage_score = self._blockage_score_ema
+
+        # Compliant vegetation should usually be handled as a crawl/avoid case rather
+        # than a hard stop.  Reserve STOP for scenes that still look strongly
+        # wall-like after the compliance filter has already rejected obvious rigid
+        # structures.
+        stop = (
+            blockage_score >= 0.85
+            and density_score >= 0.75
+            and structure_score >= 0.45
+        )
         speed_scale = max(0.0, min(0.65, mean_traversability * (1.0 - 0.70 * blockage_score)))
         if stop:
             speed_scale = 0.0
 
         reason = (
-            f"compliant_blockage score={blockage_score:.2f} occ={occupancy:.2f} "
-            f"density={density_score:.2f} dist={nearest_distance:.2f}"
+            f"compliant_blockage score={blockage_score:.2f}(raw={raw_blockage:.2f}) "
+            f"occ={occupancy:.2f} density={density_score:.2f} dist={nearest_distance:.2f}"
         )
         return CorridorAssessment(
             score=blockage_score,
@@ -266,7 +334,8 @@ class SemanticReflexController:
             linear_x = 0.0
         else:
             self._clear_stop_memory()
-            action = "SLOW" if profile.nominal_speed_scale < 0.5 else "CRAWL"
+            # CRAWL = very slow (scale < 0.5); SLOW = reduced but faster (scale >= 0.5).
+            action = "CRAWL" if profile.nominal_speed_scale < 0.5 else "SLOW"
             linear_x = self.nominal_linear_speed * profile.nominal_speed_scale
 
         angular_z = 0.0
@@ -286,7 +355,11 @@ class SemanticReflexController:
         )
 
     def _should_adjust_around(self, observation: SemanticObservation, profile: RiskProfile) -> bool:
-        signature = (profile.label, int(round(observation.bearing_deg / 5.0)))
+        # Use 15° bins instead of 5° bins for the stop signature.  At 5° granularity,
+        # normal sensor vibration / plant sway shifts the bearing between adjacent bins
+        # on consecutive frames, so the counter never accumulates to the trigger
+        # threshold and ADJUST never fires in practice.
+        signature = (profile.label, int(round(observation.bearing_deg / 15.0)))
         if signature == self._last_stop_signature:
             self._persistent_stop_counter += 1
         else:
@@ -301,9 +374,11 @@ class SemanticReflexController:
             return False
         if abs(observation.bearing_deg) > 35.0:
             return False
-        if abs(observation.bearing_deg) < 8.0:
-            return False
-        return 3 <= self._persistent_stop_counter <= 5
+        # Do NOT exclude centered obstacles: _adjust_command handles bearing ≤ 4° by
+        # alternating left/right turns.  No upper bound on the counter — if the robot
+        # is still stopped after 5+ cycles it should keep trying to manoeuvre, not
+        # give up and sit indefinitely.
+        return self._persistent_stop_counter >= 3
 
     def _adjust_command(
         self,
@@ -381,7 +456,11 @@ class SemanticReflexController:
 
         if self.stage == ReflexStage.RECOVERY:
             self._recovery_counter += 1
-            speed_scale = min(1.0, 0.35 + (self._recovery_counter / max(self.recovery_cycles, 1)) * 0.65)
+            # Ramp from ~15% to 100% of nominal speed over recovery_cycles steps.
+            # Starting at 0.35 meant a 60% jump immediately after a stop (0.9 m/s at
+            # nominal 1.5 m/s).  The gentler base of 0.15 keeps the first step ≈36%
+            # so the robot eases back up smoothly rather than lurching forward.
+            speed_scale = min(1.0, 0.15 + (self._recovery_counter / max(self.recovery_cycles, 1)) * 0.85)
             if self._recovery_counter >= self.recovery_cycles:
                 self.stage = ReflexStage.STATUS_QUO
             return ControlCommand(
@@ -412,5 +491,10 @@ class SemanticReflexController:
 
     def _steer_away_from_bearing(self, bearing_deg: float) -> float:
         direction = -1.0 if bearing_deg > 0.0 else 1.0
-        magnitude = min(self.max_turn_rate, self.max_turn_rate * abs(bearing_deg) / 45.0)
+        # Apply a minimum floor so that nearly-centered obstacles still receive a
+        # meaningful correction.  With pure linear scaling a 5° offset only produces
+        # 0.044 rad/s — essentially zero.  The floor (30% of max_turn_rate) ensures
+        # the robot always makes a discernible heading adjustment when steer_away fires.
+        normalized = abs(bearing_deg) / 45.0
+        magnitude  = self.max_turn_rate * max(0.30, min(1.0, normalized))
         return direction * magnitude

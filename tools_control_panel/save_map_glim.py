@@ -21,6 +21,7 @@ PIXEL_GRID_SIZE    = 0.05
 MAP_UPDATE_RATE    = 1.0
 TARGET_FRAME       = 'map'
 IMAGE_RES_MUL      = 2
+PATH_APPEND_DIST_M = 0.10
 
 MIN_POINTS_CELL    = 1
 
@@ -325,11 +326,24 @@ class ContinuousPointCloudMapper(Node):
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10)
+        pose_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1)
 
         self.pc_sub   = self.create_subscription(
             PointCloud2, '/glim_ros/entire_map',          self.pc_callback,   map_qos)
         self.traj_sub = self.create_subscription(
             Path,        '/glim_ros/localized_trajectory', self.traj_callback, odom_qos)
+        # Accept both pose topic conventions. The localizer config in this repo
+        # publishes /localized_pose, but some launch setups mirror the pose onto
+        # /glim_ros/localized_curr_pose. Listening to both keeps the mapper alive
+        # if either naming scheme is active.
+        self.pose_sub = self.create_subscription(
+            PoseStamped, '/localized_pose', self.pose_callback, pose_qos)
+        self.pose_sub_glim = self.create_subscription(
+            PoseStamped, '/glim_ros/localized_curr_pose', self.pose_callback, pose_qos)
 
         self._status_timer = self.create_timer(5.0,  self._print_status)
         self._params_timer = self.create_timer(0.2,  self._write_map_params)  # 5 Hz
@@ -341,7 +355,7 @@ class ContinuousPointCloudMapper(Node):
         if self.map_version > 0:
             return
         if self.latest_pose is None:
-            print('[Mapper] Waiting for /localized_pose ...')
+            print('[Mapper] Waiting for /localized_pose or /glim_ros/localized_curr_pose ...')
         else:
             print('[Mapper] Waiting for /glim_ros/entire_map ...')
 
@@ -386,6 +400,29 @@ class ContinuousPointCloudMapper(Node):
                 'x': float(pos.x), 'y': float(pos.y),
                 'z': float(pos.z), 'yaw': yaw,
             }
+
+    def pose_callback(self, msg: PoseStamped):
+        """Fallback live pose stream from GLIM.
+        This keeps the mapper alive even when localized_trajectory is missing."""
+        self.latest_pose = msg.pose
+        self.latest_pose_frame = msg.header.frame_id or TARGET_FRAME
+
+        pos = msg.pose.position
+        yaw = extract_yaw_in_map(self.latest_pose, self.latest_pose_frame, self.tf_buffer)
+
+        with self._pose_lock:
+            self._current_pose = {
+                'x': float(pos.x), 'y': float(pos.y),
+                'z': float(pos.z), 'yaw': yaw,
+            }
+
+        pt = np.array([[float(pos.x), float(pos.y), float(pos.z)]], dtype=np.float64)
+        if len(self.path_positions) == 0:
+            self.path_positions = pt
+            return
+
+        if np.linalg.norm(self.path_positions[-1, :2] - pt[0, :2]) >= PATH_APPEND_DIST_M:
+            self.path_positions = np.vstack([self.path_positions, pt])
 
 
     def pc_callback(self, msg: PointCloud2):
@@ -475,7 +512,8 @@ def main():
         pass
     finally:
         mapper.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

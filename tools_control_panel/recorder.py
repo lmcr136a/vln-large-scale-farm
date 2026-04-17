@@ -17,6 +17,8 @@ from sensor_msgs.msg import Image
 stop_event = threading.Event()
 
 PUBLISH_HZ = 3.0
+DEFAULT_SEMANTIC_CAPTURE_HZ = 10.0
+DEFAULT_SEMANTIC_INPUT_HEIGHT = 360
 
 
 def _make_qos_sensor():
@@ -53,6 +55,8 @@ class ZEDSVORecorder(threading.Thread):
                  socketio=None, sample_interval_sec=300,
                  always_stream=False, publish_hz=PUBLISH_HZ,
                  stream_fps=5,        # ★ Web streaming FPS (independent from ROS publish Hz)
+                 semantic_capture_hz=DEFAULT_SEMANTIC_CAPTURE_HZ,
+                 semantic_input_height=DEFAULT_SEMANTIC_INPUT_HEIGHT,
                  frame_id=None):
         super().__init__(name=name)
         self.serial   = serial_number
@@ -73,6 +77,9 @@ class ZEDSVORecorder(threading.Thread):
         self.stream_period = 1.0 / self.stream_fps
         self._streaming_enabled = True
         self._stream_lock       = threading.Lock()
+        self.semantic_capture_hz = max(float(semantic_capture_hz), 1.0)
+        self.semantic_period     = 1.0 / self.semantic_capture_hz
+        self.semantic_input_height = int(max(120, semantic_input_height))
 
         # Web stream resolution: fixed height, width scaled to preserve aspect ratio
         self.web_rgb_height = 200         # Must match --rgb-h in styles.css
@@ -81,6 +88,10 @@ class ZEDSVORecorder(threading.Thread):
 
         self.latest_frame = None
         self.frame_lock   = threading.Lock()
+        self.latest_semantic_packet = None
+        self.semantic_lock = threading.Lock()
+        self._camera_intrinsics = None
+        self._depth_error_logged = False
 
         self.rgb_topic = f"/zed/rgb_{self.name.lower()}"
         self.rgb_pub   = self.ros_node.create_publisher(
@@ -92,6 +103,7 @@ class ZEDSVORecorder(threading.Thread):
             init      = sl.InitParameters()
             init.set_from_serial_number(serial_number)
             init.depth_mode        = sl.DEPTH_MODE.ULTRA
+            init.coordinate_units  = sl.UNIT.METER
             init.camera_resolution = sl.RESOLUTION.HD1080
             init.camera_fps        = 30
             init.sdk_verbose       = False
@@ -101,7 +113,9 @@ class ZEDSVORecorder(threading.Thread):
                 raise RuntimeError(f"ZED {serial_number} Open Failed: {status}")
 
             self.image_zed = sl.Mat()
+            self.depth_zed = sl.Mat()
             self.runtime   = sl.RuntimeParameters()
+            self._camera_intrinsics = self._load_camera_intrinsics()
         except Exception as e:
             print(f"[{self.name}] Camera init error: {e}")
             self.cam = None
@@ -116,6 +130,20 @@ class ZEDSVORecorder(threading.Thread):
         with self.frame_lock:
             return self.latest_frame
 
+    def get_latest_semantic_packet(self):
+        with self.semantic_lock:
+            packet = self.latest_semantic_packet
+            if packet is None:
+                return None
+            return {
+                'rgb': packet['rgb'].copy(),
+                'depth': None if packet['depth'] is None else packet['depth'].copy(),
+                'intrinsics': dict(packet['intrinsics']),
+                'timestamp_ns': packet['timestamp_ns'],
+                'frame_width': packet['frame_width'],
+                'frame_height': packet['frame_height'],
+            }
+
     # ── Main Loop ─────────────────────────────────────────────────────────
 
     def run(self):
@@ -126,6 +154,7 @@ class ZEDSVORecorder(threading.Thread):
         print(f"[{self.name}] Thread started. ROS:{self.publish_hz}Hz  Stream:{self.stream_fps}Hz")
         next_pub_time    = time.time()
         next_stream_time = time.time()
+        next_semantic_time = time.time()
         next_sample_time = time.time()
 
         while self.running and not stop_event.is_set():
@@ -158,6 +187,14 @@ class ZEDSVORecorder(threading.Thread):
                     print(f"[{self.name}] ROS Pub Error: {e}")
 
                 next_pub_time = now + self.publish_period
+
+            # ── Semantic capture cache (independent from stream toggle) ────
+            if now >= next_semantic_time:
+                self.cam.retrieve_image(self.image_zed, sl.VIEW.LEFT)
+                rgba_np = self.image_zed.get_data()
+                zed_ts = self.cam.get_timestamp(sl.TIME_REFERENCE.IMAGE)
+                self._update_semantic_packet(rgba_np, zed_ts.get_nanoseconds())
+                next_semantic_time = now + self.semantic_period
 
             # ── Web streaming push (independent Hz) ───────────────────────
             if now >= next_stream_time:
@@ -199,6 +236,80 @@ class ZEDSVORecorder(threading.Thread):
                 next_sample_time = now + self.sample_interval_sec
 
         self.cam.close()
+
+    def _load_camera_intrinsics(self):
+        if self.cam is None:
+            return None
+        try:
+            calib = self.cam.get_camera_information().camera_configuration.calibration_parameters.left_cam
+            return {
+                'fx': float(calib.fx),
+                'fy': float(calib.fy),
+                'cx': float(calib.cx),
+                'cy': float(calib.cy),
+            }
+        except Exception as e:
+            print(f"[{self.name}] Failed to read camera intrinsics: {e}")
+            return None
+
+    def _scaled_intrinsics(self, src_w, src_h, target_w, target_h):
+        if self._camera_intrinsics is not None:
+            scale_x = float(target_w) / max(float(src_w), 1.0)
+            scale_y = float(target_h) / max(float(src_h), 1.0)
+            return {
+                'fx': self._camera_intrinsics['fx'] * scale_x,
+                'fy': self._camera_intrinsics['fy'] * scale_y,
+                'cx': self._camera_intrinsics['cx'] * scale_x,
+                'cy': self._camera_intrinsics['cy'] * scale_y,
+            }
+
+        return {
+            'fx': float(target_w) * 0.5,
+            'fy': float(target_h) * 0.9,
+            'cx': float(target_w) * 0.5,
+            'cy': float(target_h) * 0.5,
+        }
+
+    def _update_semantic_packet(self, rgba_np, timestamp_ns):
+        if rgba_np is None:
+            return
+
+        src_h, src_w = rgba_np.shape[:2]
+        target_h = int(min(max(self.semantic_input_height, 120), src_h))
+        target_w = max(1, int(round(src_w * target_h / max(float(src_h), 1.0))))
+
+        rgb = cv2.cvtColor(
+            cv2.resize(rgba_np, (target_w, target_h), interpolation=cv2.INTER_LINEAR),
+            cv2.COLOR_RGBA2RGB,
+        )
+
+        depth = None
+        try:
+            depth_status = self.cam.retrieve_measure(self.depth_zed, sl.MEASURE.DEPTH)
+            if depth_status != sl.ERROR_CODE.SUCCESS:
+                raise RuntimeError(f"retrieve_measure failed: {depth_status}")
+            depth_np = np.asarray(self.depth_zed.get_data())
+            if depth_np.ndim == 3:
+                depth_np = depth_np[..., 0]
+            if depth_np.shape[:2] != (target_h, target_w):
+                depth_np = cv2.resize(depth_np, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+            depth = np.array(depth_np, dtype=np.float32, copy=True)
+            self._depth_error_logged = False
+        except Exception as e:
+            if not self._depth_error_logged:
+                print(f"[{self.name}] Depth retrieval unavailable for semantics: {e}")
+                self._depth_error_logged = True
+
+        packet = {
+            'rgb': np.array(rgb, copy=True),
+            'depth': depth,
+            'intrinsics': self._scaled_intrinsics(src_w, src_h, target_w, target_h),
+            'timestamp_ns': int(timestamp_ns),
+            'frame_width': int(target_w),
+            'frame_height': int(target_h),
+        }
+        with self.semantic_lock:
+            self.latest_semantic_packet = packet
 
     def stop(self):
         self.running = False

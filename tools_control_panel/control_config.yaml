@@ -1,7 +1,7 @@
 # File Paths
 paths:
-  map_dir: '~/box/vln-large-scale-farm/tools_control_panel/output_glim'
-  data_dir: '~/box/vln-large-scale-farm/data'
+  map_dir: '~/vln-large-scale-farm/tools_control_panel/output_glim'
+  data_dir: '~/vln-large-scale-farm/data'
 
 # Robot Control Configuration
 robot:
@@ -31,8 +31,25 @@ server:
 
 # ROS2 Settings
 ros2:
-  cmd_vel_topic: '/cmd_vel'
+  cmd_vel_topic: '/cmd_vel_raw'
   node_name: 'web_control_node'
+
+# Semantic Perception
+semantics:
+  enabled: true
+  rgb_topic: '/zed/rgb_front'
+  depth_topic: ''
+  camera_info_topic: ''
+  scan_topic: ''
+  model_path: '~/box/vln-large-scale-farm/models/yolov8n-seg.pt'
+  device: 'cuda:0'
+  inference_hz: 8.0
+  capture_hz: 12.0
+  capture_height: 360
+  hold_sec: 0.6
+  match_distance: 0.18
+  confidence_threshold: 0.25
+  publish_debug_detections: false
 
 # Autonomous Driving
 autonomous:
@@ -42,13 +59,13 @@ autonomous:
   position_tolerance: 0.3     # m   - waypoint reached within this distance
   orientation_tolerance: 10   # deg - start moving forward within this angle
 
-  # Rotation stages: [time(s), vel(rad/s), range(deg upper bound)]
+  # Rotation stages: [vel(rad/s), range(deg upper bound)]
   # r1 = slowest/closest, r3 = fastest/farthest
   r1: [0.2, 15]
   r2: [0.5, 60]
   r3: [0.7, 360]
 
-  # Translation stages: [time(s), vel(m/s), range(m upper bound)]
+  # Translation stages: [vel(m/s), range(m upper bound)]
   # t1 = slowest/closest, t3 = fastest/farthest
   t1: [0.2, 1.5]
   t2: [0.5, 3.0]

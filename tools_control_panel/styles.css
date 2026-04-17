@@ -76,9 +76,20 @@ body {
 
 /* ── Column 2: Front camera ────────────────────────────────── */
 #col-front {
+  flex: 0 0 auto;
   padding: 0;
   justify-content: center;
   align-items: center;
+}
+
+#front-cam-wrap {
+  position: relative;
+  display: inline-block;
+  height: var(--rgb-h);
+  overflow: hidden;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255,255,255,0.14);
 }
 
 #rgb-image {
@@ -89,7 +100,41 @@ body {
   background: black;
 }
 
-/* ── Column 3: System status ───────────────────────────────── */
+/* ── Column 3: Semantic front camera ───────────────────────── */
+#col-semantic {
+  flex: 0 0 auto;
+  padding: 0;
+  justify-content: center;
+  align-items: center;
+}
+
+#semantic-front-wrap {
+  position: relative;
+  display: inline-block;
+  height: var(--rgb-h);
+  overflow: hidden;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255,255,255,0.14);
+}
+
+#semantic-front-image {
+  display: block;
+  height: var(--rgb-h);
+  width: auto;
+  object-fit: contain;
+  background: black;
+}
+
+#front-semantic-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* ── Column 4: System status ───────────────────────────────── */
 #col-sysmon {
   min-width: 150px;
 }
@@ -113,7 +158,7 @@ body {
   color: white;
 }
 
-/* ── Column 4: Recording ───────────────────────────────────── */
+/* ── Column 5: Recording ───────────────────────────────────── */
 #col-recording {
   min-width: 200px;
 }
@@ -146,7 +191,7 @@ body {
 }
 #dirnameInput::placeholder { color: rgba(255,255,255,0.35); }
 
-/* ── Column 5: Navigation buttons ─────────────────────────── */
+/* ── Column 6: Navigation buttons ─────────────────────────── */
 #col-buttons {
   gap: 6px;
   min-width: 120px;

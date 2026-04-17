@@ -52,9 +52,9 @@ class YoloSemanticNode(Node):
         super().__init__("yolo_semantic_node")
 
         self.declare_parameter("rgb_topic", "/camera/rgb/image_raw")
-        self.declare_parameter("depth_topic", "/camera/depth/image_raw")
-        self.declare_parameter("camera_info_topic", "/camera/rgb/camera_info")
-        self.declare_parameter("scan_topic", "/scan")
+        self.declare_parameter("depth_topic", "")
+        self.declare_parameter("camera_info_topic", "")
+        self.declare_parameter("scan_topic", "")
         self.declare_parameter("output_topic", "/semantic_observations")
         self.declare_parameter("model_path", "yolov8n-seg.pt")
         self.declare_parameter("device", "cuda:0")
@@ -83,9 +83,14 @@ class YoloSemanticNode(Node):
         self.latest_scan: Optional[LaserScan] = None
         self._detection_history = deque(maxlen=max(self.history_frames, 1))
 
-        self.create_subscription(Image, self.depth_topic, self.on_depth, SENSOR_QOS)
-        self.create_subscription(CameraInfo, self.camera_info_topic, self.on_camera_info, SENSOR_QOS)
-        self.create_subscription(LaserScan, self.scan_topic, self.on_scan, SENSOR_QOS)
+        if self.depth_topic:
+            self.create_subscription(Image, self.depth_topic, self.on_depth, SENSOR_QOS)
+        if self.camera_info_topic:
+            self.create_subscription(CameraInfo, self.camera_info_topic, self.on_camera_info, SENSOR_QOS)
+        if self.scan_topic:
+            self.create_subscription(LaserScan, self.scan_topic, self.on_scan, SENSOR_QOS)
+        if not self.rgb_topic:
+            raise RuntimeError("rgb_topic must be configured for semantic perception")
         self.create_subscription(Image, self.rgb_topic, self.on_rgb, SENSOR_QOS)
 
         self.semantic_pub = self.create_publisher(String, self.output_topic, 20)

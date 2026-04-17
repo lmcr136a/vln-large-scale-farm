@@ -19,6 +19,7 @@ let followRobot   = false;
 let currentMapMeta = null;   // { resolution, origin_x, origin_y, width, height }
 let isFirstMap     = true;   // center stage on first map load
 let robotPose      = null;   // { x, y, yaw }
+let frontSemantics = null;
 
 // ── Konva Stage / Layer Initialization ───────────────────────
 // Declared here, initialized in DOMContentLoaded to ensure container has real dimensions
@@ -178,10 +179,28 @@ window.addEventListener('keyup', (e) => {
 
 // ── RGB Camera Frames ─────────────────────────────────────────
 socket.on('front_frame', (data) => {
-  document.getElementById('rgb-image').src = 'data:image/jpeg;base64,' + data.data;
+  const src = 'data:image/jpeg;base64,' + data.data;
+  const frontEl = document.getElementById('rgb-image');
+  if (frontEl) frontEl.src = src;
+
+  const semanticEl = document.getElementById('semantic-front-image');
+  if (semanticEl) {
+    if (!semanticEl.dataset.overlayBound) {
+      semanticEl.addEventListener('load', drawFrontSemanticOverlay);
+      window.addEventListener('resize', drawFrontSemanticOverlay);
+      semanticEl.dataset.overlayBound = 'true';
+    }
+    semanticEl.src = src;
+    requestAnimationFrame(drawFrontSemanticOverlay);
+  }
 });
 socket.on('back_frame', (data) => {
   document.getElementById('back-rgb-image').src = 'data:image/jpeg;base64,' + data.data;
+});
+
+socket.on('front_semantics', (data) => {
+  frontSemantics = data;
+  drawFrontSemanticOverlay();
 });
 
 // ── Map Image (server pushes only when changed) ──────────────
@@ -247,8 +266,8 @@ socket.on('robot_pose', (data) => {
     if (p) {
       const sc = stage.scaleX();
       stage.position({
-        x: stageW / 2 - p.x * sc,
-        y: stageH / 2 - p.y * sc,
+        x: stage.width() / 2 - p.x * sc,
+        y: stage.height() / 2 - p.y * sc,
       });
     }
   }
@@ -474,3 +493,204 @@ function stopRecording() {
 socket.on('recording_status', (data) => {
   setRecordingState(data.active, data.dirname);
 });
+
+function ensureFrontSemanticCanvas() {
+  const imageEl = document.getElementById('semantic-front-image');
+  const canvasEl = document.getElementById('front-semantic-canvas');
+  if (!imageEl || !canvasEl) return null;
+
+  const width = imageEl.clientWidth || imageEl.naturalWidth || 0;
+  const height = imageEl.clientHeight || imageEl.naturalHeight || 0;
+  if (!width || !height) return null;
+
+  if (canvasEl.width !== width || canvasEl.height !== height) {
+    canvasEl.width = width;
+    canvasEl.height = height;
+  }
+
+  return {
+    canvasEl,
+    ctx: canvasEl.getContext('2d'),
+    width,
+    height,
+  };
+}
+
+function drawDetectionLabel(ctx, text, x, y, color) {
+  ctx.font = '600 11px sans-serif';
+  const textWidth = Math.ceil(ctx.measureText(text).width);
+  const labelHeight = 20;
+  const labelWidth = textWidth + 14;
+  const drawX = Math.max(4, Math.min(x, ctx.canvas.width - labelWidth - 4));
+  const drawY = Math.max(4, y - labelHeight - 6);
+
+  ctx.fillStyle = color;
+  ctx.fillRect(drawX, drawY, labelWidth, labelHeight);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(text, drawX + 7, drawY + 13);
+}
+
+function drawFrontSemanticOverlay() {
+  const bundle = ensureFrontSemanticCanvas();
+  if (!bundle) return;
+
+  const { ctx, width, height } = bundle;
+  ctx.clearRect(0, 0, width, height);
+
+  if (!frontSemantics || !Array.isArray(frontSemantics.detections)) return;
+
+  const frameWidth = Number(frontSemantics.frame_width) || width;
+  const frameHeight = Number(frontSemantics.frame_height) || height;
+  const scaleX = width / Math.max(frameWidth, 1);
+  const scaleY = height / Math.max(frameHeight, 1);
+
+  frontSemantics.detections.forEach((det) => {
+    if (!det || !det.bbox) return;
+    const color = det.compliance === 'compliant' ? '#22c55e' : '#ef4444';
+    const x = Number(det.bbox.x_min) * scaleX;
+    const y = Number(det.bbox.y_min) * scaleY;
+    const w = Math.max(2, (Number(det.bbox.x_max) - Number(det.bbox.x_min)) * scaleX);
+    const h = Math.max(2, (Number(det.bbox.y_max) - Number(det.bbox.y_min)) * scaleY);
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = det.persisted ? 1.5 : 2.5;
+    ctx.setLineDash(det.persisted ? [6, 4] : []);
+    ctx.strokeRect(x, y, w, h);
+    ctx.restore();
+
+    const complianceLabel = det.compliance === 'compliant' ? 'COMPLIANT' : 'NON COMPLIANT';
+    const labelParts = [String(det.label || 'unknown').toUpperCase(), complianceLabel];
+    if (det.distance != null) labelParts.push(`${Number(det.distance).toFixed(1)}m`);
+    if (det.persisted) labelParts.push('HOLD');
+    drawDetectionLabel(ctx, labelParts.join(' • '), x, y, color);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Obstacle Detection Overlay
+// ═══════════════════════════════════════════════════════════════
+const ACTION_COLORS = {
+  GO:          '#22c55e',
+  SLOW:        '#f59e0b',
+  CRAWL:       '#f59e0b',
+  CAUTION_CAP: '#f59e0b',
+  STOP:        '#ef4444',
+  YIELD:       '#ef4444',
+  GAP_STEER:   '#06b6d4',
+  FAILSAFE:    '#dc2626',
+};
+const COMPLIANCE_COLORS = {
+  compliant:     '#22c55e',
+  semi_compliant:'#f59e0b',
+  non_compliant: '#ef4444',
+  none:          '#4b5563',
+};
+
+socket.on('obstacle_decision', (rawJson) => {
+  try {
+    const d = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
+    updateObstacleOverlay(d);
+  } catch (e) {}
+});
+
+function updateObstacleOverlay(d) {
+  const compliance = d.primary_semantic_compliance || d.compliance || 'none';
+  const action = d.action || 'GO';
+  const badgeEl = document.getElementById('obs-compliance-badge');
+  const actionEl = document.getElementById('obs-action');
+  const layerEl = document.getElementById('obs-layer');
+  const priorityEl = document.getElementById('obs-priority');
+  const summaryCardEl = document.getElementById('obs-summary-card');
+  const seenEl = document.getElementById('obs-seen');
+  const streamEl = document.getElementById('obs-stream');
+  const reactionEl = document.getElementById('obs-reaction');
+  const detailEl = document.getElementById('obs-detail');
+  if (!badgeEl || !actionEl || !seenEl || !reactionEl || !detailEl) return;
+
+  const seenLabel = d.primary_semantic_label || d.dominant_label || null;
+  const seenDistance = d.primary_semantic_distance ?? d.threat_distance;
+  const seenConf = d.primary_semantic_confidence;
+  const reactionMs = d.reaction_latency_ms;
+  const semanticAgeMs = d.semantic_age_ms;
+  const semanticStatus = d.semantic_status || 'offline';
+  const semanticCount = d.semantic_detection_count ?? 0;
+  const lidarAgeMs = d.lidar_age_ms;
+  const source = d.sem_source || 'none';
+  const layer = d.decision_layer || 'semantic';
+
+  badgeEl.textContent = compliance === 'none' ? 'NONE' : compliance.replace('_', ' ').toUpperCase();
+  badgeEl.style.background = COMPLIANCE_COLORS[compliance] || '#4b5563';
+
+  actionEl.textContent = action;
+  actionEl.style.background = ACTION_COLORS[action] || '#4b5563';
+  actionEl.style.color = '#ffffff';
+
+  if (layerEl) {
+    layerEl.textContent = layer.toUpperCase();
+    layerEl.classList.toggle('neutral', layer === 'semantic');
+  }
+  if (priorityEl) {
+    const priorityStop = Boolean(d.priority_stop_active);
+    priorityEl.classList.toggle('hidden', !priorityStop);
+    if (priorityStop) {
+      priorityEl.textContent = 'Priority Stop';
+      priorityEl.style.background = '#991b1b';
+      priorityEl.style.color = '#ffffff';
+    } else {
+      priorityEl.style.background = '';
+      priorityEl.style.color = '';
+    }
+  }
+  if (summaryCardEl) {
+    summaryCardEl.style.borderColor = ACTION_COLORS[action] || 'rgba(255,255,255,0.16)';
+    summaryCardEl.style.boxShadow = action === 'GO'
+      ? 'none'
+      : `0 0 0 1px ${ACTION_COLORS[action] || '#4b5563'} inset`;
+  }
+
+  if (seenLabel) {
+    let text = seenLabel;
+    if (seenDistance != null) text += ` @ ${Number(seenDistance).toFixed(1)} m`;
+    if (seenConf != null) text += ` (${Math.round(Number(seenConf) * 100)}%)`;
+    seenEl.textContent = text;
+  } else {
+    if (semanticStatus === 'offline') {
+      seenEl.textContent = 'Semantic stream offline';
+    } else if (semanticStatus === 'stale') {
+      seenEl.textContent = 'Waiting for fresh semantic frame';
+    } else if (source === 'lidar_fallback') {
+      seenEl.textContent = 'LiDAR fallback only';
+    } else {
+      seenEl.textContent = 'Clear';
+    }
+  }
+  seenEl.classList.toggle('alert', compliance === 'non_compliant' || Boolean(d.priority_stop_active));
+
+  if (streamEl) {
+    streamEl.textContent = semanticStatus === 'live'
+      ? `LIVE (${semanticCount})`
+      : semanticStatus.toUpperCase();
+    streamEl.classList.toggle('neutral', semanticStatus !== 'live');
+  }
+
+  reactionEl.textContent = reactionMs != null ? `${Math.round(Number(reactionMs))} ms` : '—';
+  reactionEl.classList.toggle('neutral', reactionMs == null);
+
+  const parts = [];
+  if (semanticStatus === 'offline') {
+    parts.push('No semantic stream detected');
+  } else if (semanticStatus === 'stale') {
+    parts.push('Waiting for fresh semantic detections');
+  } else if (source === 'yolo') {
+    parts.push('YOLO live');
+  } else if (source === 'lidar_fallback') {
+    parts.push('LiDAR fallback');
+  }
+  if (d.priority_stop_active) parts.push('Priority stop');
+  if (d.reason) parts.push(d.reason);
+  if (d.cmd_age_ms != null) parts.push(`cmd ${Math.round(Number(d.cmd_age_ms))} ms`);
+  if (semanticAgeMs != null) parts.push(`sem ${Math.round(Number(semanticAgeMs))} ms`);
+  if (lidarAgeMs != null) parts.push(`lidar ${Math.round(Number(lidarAgeMs))} ms`);
+  detailEl.textContent = parts.length ? parts.join(' • ') : 'Waiting for navigation decision...';
+}

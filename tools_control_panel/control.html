@@ -23,13 +23,26 @@
 
     <!-- 2. Front camera (main) -->
     <div class="panel-col" id="col-front">
-      <img id="rgb-image" alt="Front camera" />
+      <div id="front-cam-wrap">
+        <img id="rgb-image" alt="Front camera" />
+      </div>
     </div>
 
     <!-- divider -->
     <div class="col-divider"></div>
 
-    <!-- 3. System status -->
+    <!-- 3. Front camera with semantic overlay -->
+    <div class="panel-col" id="col-semantic">
+      <div id="semantic-front-wrap">
+        <img id="semantic-front-image" alt="Semantic front camera" />
+        <canvas id="front-semantic-canvas" aria-hidden="true"></canvas>
+      </div>
+    </div>
+
+    <!-- divider -->
+    <div class="col-divider"></div>
+
+    <!-- 4. System status -->
     <div class="panel-col" id="col-sysmon">
       <div class="sysmon-row"><span class="sysmon-label">WiFi</span><span id="info-wifi">—</span></div>
       <div class="sysmon-row"><span class="sysmon-label">CPU</span><span id="info-cpu">—</span></div>
@@ -39,7 +52,7 @@
     <!-- divider -->
     <div class="col-divider"></div>
 
-    <!-- 4. Recording -->
+    <!-- 5. Recording -->
     <div class="panel-col" id="col-recording">
       <div class="rec-row">
         <span class="sysmon-label">Recording</span>
@@ -59,7 +72,7 @@
     <!-- divider -->
     <div class="col-divider"></div>
 
-    <!-- 5. Navigation buttons -->
+    <!-- 6. Navigation buttons -->
     <div class="panel-col" id="col-buttons">
       <button onclick="resetMapZoom()" class="util-btn">Reset Zoom</button>
       <button id="followBtn" onclick="toggleFollowRobot()" class="util-btn">Follow: OFF</button>

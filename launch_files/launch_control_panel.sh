@@ -34,7 +34,6 @@ source /opt/ros/humble/setup.bash
 source "$WORKSPACE_DIR/tools_scout_control/ros2_ws/install/setup.bash"
 ros2 launch scout_base scout_base.launch.py &
 ROS_PID=$!
-just for now!!
 
 sleep 1
 
