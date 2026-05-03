@@ -22,8 +22,10 @@ tmux new-session -d -s $SESSION -n "lidar"
 if [ "$MODE" = "sim" ]; then
     tmux send-keys -t $SESSION:0 "echo '⚠️  Start Isaac Sim manually, then run:'" C-m
 else
-    tmux send-keys -t $SESSION:0 "source livox_driver2_ws/install/setup.bash" C-m
+    tmux send-keys -t $SESSION:0 "source ros2_ws/livox_driver2_ws/install/setup.bash" C-m
     tmux send-keys -t $SESSION:0 "ros2 launch livox_ros_driver2 msg_MID360_launch.py" C-m
+    #tmux send-keys -t $SESSION:0 "source ros2_ws/robosense_ws/install/setup.bash" C-m
+    #tmux send-keys -t $SESSION:0 "ros2 launch rslidar_sdk start.py" C-m
 fi
 
 sleep 1

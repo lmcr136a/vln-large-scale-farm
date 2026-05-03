@@ -2,8 +2,9 @@
 """
 Control Server - Main Entry Point
 """
-import os
-import sys
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import yaml
 import threading
 import signal
@@ -15,11 +16,11 @@ from flask_socketio import SocketIO
 import rclpy
 from geometry_msgs.msg import Twist
 
-from server_to_panel import ServerToPanel
-from map_creation import MapCreationController
-from get_path import PathPlanner
-from autonomous_mode import AutonomousController
-from recorder import MultiSensorRecorder
+from comm.server_to_panel import ServerToPanel
+from mapping.map_creation import MapCreationController
+from autonomous.get_path import PathPlanner
+from autonomous.autonomous_mode import AutonomousController
+from sensor.recorder import MultiSensorRecorder
 import logging
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
@@ -104,15 +105,15 @@ class ControlServer:
         @self.app.route('/')
         @self.app.route('/control.html')
         def serve_control():
-            return send_file('control.html')
+            return send_file('web/control.html')
 
         @self.app.route('/control.js')
         def serve_js():
-            return send_file('control.js', mimetype='application/javascript')
+            return send_file('web/control.js', mimetype='application/javascript')
 
         @self.app.route('/styles.css')
         def serve_css():
-            return send_file('styles.css', mimetype='text/css')
+            return send_file('web/styles.css', mimetype='text/css')
 
         @self.app.route('/map_latest.png')
         def serve_map():
@@ -294,5 +295,5 @@ class ControlServer:
 if __name__ == '__main__':
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
-    server = ControlServer('control_config.yaml')
+    server = ControlServer('config/control_config.yaml')
     server.run()

@@ -4,7 +4,7 @@ WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
 
 MODE="${1:-real}"
 
-echo "[launch_livox_driver.sh] Mode: $MODE"
+echo "[launch_robosense.sh] Mode: $MODE"
 
 if [ "$MODE" = "sim" ]; then
     echo "Isaac Sim mode: Livox driver is not used."
@@ -12,6 +12,6 @@ if [ "$MODE" = "sim" ]; then
     exit 0
 else
     echo "Starting Real Robot mode - Livox LiDAR..."
-    source "$WORKSPACE_DIR/ros2_ws/livox_driver2_ws/install/setup.bash"
-    ros2 launch livox_ros_driver2 msg_MID360_launch.py
+    source "$WORKSPACE_DIR/ros2_ws/robosense_ws/install/setup.bash"
+    ros2 launch rslidar_sdk start.py
 fi

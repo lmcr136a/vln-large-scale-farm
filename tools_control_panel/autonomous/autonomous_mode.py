@@ -25,7 +25,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist, PoseStamped
 
-import autonomous_driving
+from . import autonomous_driving
 
 
 def _quat_to_yaw(x, y, z, w):

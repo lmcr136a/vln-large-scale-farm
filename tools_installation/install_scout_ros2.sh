@@ -56,16 +56,16 @@ source /opt/ros/humble/setup.bash
 colcon build
 
 # 8. Add workspace sourcing to bashrc
-if grep -q "source ~/box/vln-large-scale-farm/tools_scout_control/ros2_ws/install/setup.bash" ~/.bashrc; then
+if grep -q "source ~/box/vln-large-scale-farm/ros2_ws/scout_ws/install/setup.bash" ~/.bashrc; then
     echo -e "${YELLOW}Workspace sourcing already in .bashrc. Skipping.${RESET}"
 else
     echo -e "${GREEN}Adding workspace sourcing to .bashrc...${RESET}"
-    echo "source ~/box/vln-large-scale-farm/tools_scout_control/ros2_ws/install/setup.bash" >> ~/.bashrc
+    echo "source ~/box/vln-large-scale-farm/ros2_ws/scout_ws/install/setup.bash" >> ~/.bashrc
 fi
 
 # Immediately source it
 echo -e "${GREEN}Sourcing workspace for current shell...${RESET}"
-source ~/box/vln-large-scale-farm/tools_scout_control/ros2_ws/install/setup.bash
+source ~/box/vln-large-scale-farm/ros2_ws/scout_ws/install/setup.bash
 
 # 9. Install gs_usb kernel module using jetson-gs_usb-kernel-builder
 echo -e "${GREEN}Installing gs_usb kernel module for current kernel...${RESET}"

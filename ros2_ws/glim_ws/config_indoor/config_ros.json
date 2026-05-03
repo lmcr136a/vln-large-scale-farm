@@ -73,7 +73,7 @@
     ],
     // Topics
     "imu_topic": "/livox/imu",
-    "points_topic": "/livox/lidar_pointcloud2",
+    "points_topic": "/rslidar_points", // testing out robosense
     "image_topic": "/image",
     // QoS options
     "imu_qos": {

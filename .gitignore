@@ -3,9 +3,9 @@ build/
 install/
 log/
 *.egg-info/
-
-fast_lio_sam_ws/ 
-glim_ws/config/config_ros.json
+~/
+tmp/
+ros2_ws/glim_ws/config/config_ros.json
 
 # Python
 __pycache__/
@@ -68,17 +68,18 @@ cartographer_ws/config/build/
 tools_scout_control/gs_usb.ko
 tools_scout_control/36.4.3/
 tools_rgbd_cameras/output/
-glim_ws/src/glim/
-glim_ws/src/glim_ext/
-glim_ws/src/glim_ros2/
-glim_ws/src/pointcloud_to_2dmap/
-glim_ws/build/
-glim_ws/install/
-glim_ws/log/
-glim_ws/src/glim/
-glim_ws/src/glim_ext/
-glim_ws/src/glim_ros2/
-glim_ws/src/pointcloud_to_2dmap/
-glim_ws/build/
-glim_ws/install/
-glim_ws/log/
+ros2_ws/glim_ws/src/glim/
+ros2_ws/glim_ws/src/glim_ext/
+ros2_ws/glim_ws/src/glim_ros2/
+ros2_ws/glim_ws/src/pointcloud_to_2dmap/
+ros2_ws/glim_ws/build/
+ros2_ws/glim_ws/install/
+ros2_ws/glim_ws/log/
+ros2_ws/glim_ws/src/glim/
+ros2_ws/glim_ws/src/glim_ext/
+ros2_ws/glim_ws/src/glim_ros2/
+ros2_ws/glim_ws/src/pointcloud_to_2dmap/
+ros2_ws/glim_ws/build/
+ros2_ws/glim_ws/install/
+ros2_ws/glim_ws/log/
+ros2_ws/robosense_ws/src/rslidar_msg/

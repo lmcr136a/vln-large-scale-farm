@@ -18,7 +18,7 @@ source ~/.bashrc
 sudo ldconfig
 
 # Clone & build
-cd ~/box/vln-large-scale-farm/glim_ws/src
+cd ~/box/vln-large-scale-farm/ros2_ws/glim_ws/src
 git clone https://github.com/koide3/glim_ext
 cd ~/box/vln-large-scale-farm/glim_ws
 source /opt/ros/humble/setup.bash
@@ -46,7 +46,7 @@ source ~/.bashrc
 sudo ldconfig
 
 # Clone & build
-cd ~/box/vln-large-scale-farm/glim_ws/src
+cd ~/box/vln-large-scale-farm/ros2_ws/glim_ws/src
 git clone https://github.com/koide3/glim_ros2
 git clone https://github.com/koide3/glim_ext
 cd ~/box/vln-large-scale-farm/glim_ws
@@ -61,13 +61,13 @@ source install/setup.bash
 
 ```bash
 # Terminal 1: converters (Livox CustomMsg -> PointCloud2, NavSatFix -> Pose, map QoS bridge)
-source ~/box/vln-large-scale-farm/glim_ws/install/setup.bash
+source ~/box/vln-large-scale-farm/ros2_ws/glim_ws/install/setup.bash
 ros2 run glim_converters glim_converters
 
 # Terminal 2: GLIM
-source ~/box/vln-large-scale-farm/glim_ws/install/setup.bash
+source ~/box/vln-large-scale-farm/ros2_ws/glim_ws/install/setup.bash
 ros2 run glim_ros glim_rosnode --ros-args \
-  -p config_path:=~/box/vln-large-scale-farm/glim_ws/config
+  -p config_path:=~/box/vln-large-scale-farm/ros2_ws/glim_ws/config
 
 # Terminal 3: rosbag (if needed)
 ros2 bag play <bag_path> --rate 0.5

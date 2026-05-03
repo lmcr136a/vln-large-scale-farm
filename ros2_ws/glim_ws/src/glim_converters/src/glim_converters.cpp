@@ -51,8 +51,8 @@ class GlimConverters : public rclcpp::Node
 public:
   GlimConverters() : Node("glim_converters"), gps_origin_set_(false)
   {
-    declare_parameter("lidar_input_topic",  "/livox/lidar");
-    declare_parameter("lidar_output_topic", "/livox/lidar_pointcloud2");
+    declare_parameter("lidar_input_topic",  "/livox/lidar"); //robosense is /rslidar_points
+    declare_parameter("lidar_output_topic", "/livox/lidar_pointcloud2"); 
     declare_parameter("gps_input_topic",    "/gps/fix");
     declare_parameter("gps_output_topic",   "/gps/fix_pose");
     declare_parameter("gps_enu_yaw_deg",    214.8);

@@ -64,6 +64,7 @@ class GlimConverters(Node):
 
         # --- Parameters ---
         self.declare_parameter('lidar_input_topic',  '/livox/lidar')
+        #self.declare_parameter('lidar_input_topic',  '/rslidar_points')
         self.declare_parameter('lidar_output_topic', '/livox/lidar_pointcloud2')
         self.declare_parameter('gps_input_topic',    '/gps/fix')
         self.declare_parameter('gps_output_topic',   '/gps/fix_pose')

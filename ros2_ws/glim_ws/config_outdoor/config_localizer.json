@@ -1,6 +1,6 @@
 {
   "localizer": {
-    "map_path": "/home/nahyeon/box/glim_map/",
+    "map_path": "", //"/home/nahyeon/box/glim_map/",
     "output_map_path": "~/tmp/dump",
     "map_frame": "map",
     "lidar_frame": "livox_frame",

@@ -20,7 +20,7 @@ colcon build --packages-select glim_localizer --symlink-install
 
 ## init_pose_viewer 등록
 
-`glim_ws/config/config_ros.json` 의 `extension_modules` 에 추가:
+`ros2_ws/glim_ws/config/config_ros.json` 의 `extension_modules` 에 추가:
 
 ```json
 "extension_modules": [
@@ -33,7 +33,7 @@ colcon build --packages-select glim_localizer --symlink-install
 
 빌드 후 .so 위치 확인:
 ```bash
-find glim_ws/install -name "libinit_pose_viewer.so"
+find ros2_ws/glim_ws/install -name "libinit_pose_viewer.so"
 ```
 → `LD_LIBRARY_PATH` 에 해당 경로가 있어야 GLIM이 로드할 수 있음.
 
@@ -41,14 +41,14 @@ find glim_ws/install -name "libinit_pose_viewer.so"
 
 ### 1. GLIM (map + init_pose_viewer UI 포함)
 ```bash
-source glim_ws/install/setup.bash
+source ros2_ws/glim_ws/install/setup.bash
 ros2 run glim_ros glim_rosnode \
-  --ros-args -p config_path:=/home/koala/box/vln-large-scale-farm/glim_ws/config
+  --ros-args -p config_path:=/home/koala/box/vln-large-scale-farm/ros2_ws/glim_ws/config
 ```
 
 ### 2. localizer stack
 ```bash
-source glim_ws/install/setup.bash
+source ros2_ws/glim_ws/install/setup.bash
 ros2 launch glim_localizer localizer.launch.py \
   map_path:=/path/to/your/saved_map
 ```
@@ -89,7 +89,7 @@ auto f = make_shared<IntegratedVGICPFactor>(X(0), vmap, scan);
 gtsam_points include 디렉토리에서 헤더 확인:
 ```bash
 grep -r "IntegratedVGICPFactor" \
-  ~/box/vln-large-scale-farm/glim_ws/src/*/include --include="*.hpp" | head -5
+  ~/box/vln-large-scale-farm/ros2_ws/glim_ws/src/*/include --include="*.hpp" | head -5
 ```
 
 ### SubMap 필드

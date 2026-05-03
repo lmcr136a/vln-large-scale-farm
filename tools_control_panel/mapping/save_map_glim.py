@@ -15,7 +15,7 @@ import tf2_ros
 from tf2_ros import TransformException
 from rclpy.duration import Duration
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
+current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 PIXEL_GRID_SIZE    = 0.05
 MAP_UPDATE_RATE    = 1.0
