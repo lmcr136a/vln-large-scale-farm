@@ -57,10 +57,6 @@ Thumbs.db
 *.svo
 
 # Specific files
-tools_scout_control/gs_usb.ko
-tools_scout_control/36.4.3/
-tools_rgbd_cameras/output/
 ros2_ws/glim_ws/build/
 ros2_ws/glim_ws/install/
 ros2_ws/glim_ws/log/
-ros2_ws/robosense_ws/src/rslidar_msg/
