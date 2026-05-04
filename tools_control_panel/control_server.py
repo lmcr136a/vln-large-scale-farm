@@ -16,7 +16,7 @@ from flask_socketio import SocketIO
 import rclpy
 from geometry_msgs.msg import Twist
 
-from comm.server_to_panel import ServerToPanel
+from tools_control_panel.lab_pc.server_to_panel import ServerToPanel
 from mapping.map_creation import MapCreationController
 from autonomous.get_path import PathPlanner
 from autonomous.autonomous_mode import AutonomousController

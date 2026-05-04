@@ -59,9 +59,10 @@ class AutonomousController(Node):
         self._rot_angle       = 0.0
         self._rot_angle_mtime = 0.0
         map_dir = os.path.expanduser(self.config['paths']['map_dir'])
-        self._map_yaml_path   = os.path.join(map_dir, 'map_state.json')
+        map_state_file = self.config['paths'].get('map_state', 'map_state.json')
+        self._map_yaml_path   = os.path.join(map_dir, map_state_file)
 
-        # /glim_ros/localized_curr_pose uses best_effort QoS for minimum latency
+        pose_topic = self.config['ros2']['topics']['pose']
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
@@ -69,9 +70,9 @@ class AutonomousController(Node):
             depth=1)
 
         self.pose_sub = self.create_subscription(
-            PoseStamped, '/glim_ros/localized_curr_pose', self._pose_callback, qos)
+            PoseStamped, pose_topic, self._pose_callback, qos)
 
-        self.get_logger().info('AutonomousController ready — listening on /glim_ros/localized_curr_pose')
+        self.get_logger().info(f'AutonomousController ready — listening on {pose_topic}')
 
     # ── Pose update + real-time socketio emit ──────────────────────────────────
 

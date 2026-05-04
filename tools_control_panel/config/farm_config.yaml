@@ -1,43 +1,89 @@
 # ── Paths ─────────────────────────────────────────────────────────────────────
 paths:
-  map_dir:  '~/box/vln-large-scale-farm/tools_control_panel/output_glim'
-  data_dir: '~/box/vln-large-scale-farm/data'
+  map_dir:    '~/box/vln-large-scale-farm/tools_control_panel/output_glim'
+  data_dir:   '~/box/vln-large-scale-farm/data'
+  map_image:  'map_latest.png'
+  map_state:  'map_state.json'
+  paths_file: 'paths.json'        # relative to config dir
 
 # ── Radio (Jetson <-> Local PC serial) ────────────────────────────────────────
 radio:
   serial_port: '/dev/ttyTHS1'
   baud_rate: 57600
 
-# ── Internet (Tailscale) ──────────────────────────────────────────────────────
+# ── Internet (Tailscale, Jetson -> Lab PC) ────────────────────────────────────
 internet:
-  # Lab PC Tailscale IP — update to match your network
-  lab_ws_url: 'ws://100.x.x.x:8000'
+  lab_ws_url:          'http://100.x.x.x:8000'
+  pointcloud_topic:    '/glim_ros/globalmap'
+  pointcloud_interval: 5.0
 
-# ── Autonomous Schedule ───────────────────────────────────────────────────────
+# ── Server (Lab PC web panel) ─────────────────────────────────────────────────
+server:
+  host:  '0.0.0.0'
+  port:   8000
+  ping_interval:        10
+  ping_timeout:         20
+  max_http_buffer_size: 100000000
+
+# ── ROS2 ──────────────────────────────────────────────────────────────────────
+ros2:
+  node_name:     'jetson_agent'
+  cmd_vel_topic: '/cmd_vel'
+  topics:
+    pose:        '/glim_ros/localized_curr_pose'
+    battery:     '/battery_state'
+    lidar:       '/livox/lidar'
+    zed_front:   '/zed_front/rgb/image_raw'
+    zed_back:    '/zed_back/rgb/image_raw'
+    imu:         '/imu/data'
+    entire_map:  '/glim_ros/entire_map'
+    trajectory:  '/glim_ros/localized_trajectory'
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1. SCHEDULE CONFIG
+# ══════════════════════════════════════════════════════════════════════════════
 schedule:
   enabled: true
   times:
     - '11:00'
     - '16:00'
-  off_days:
-    # - '2025-12-25'
-  waypoints: []  # Set via path editor in control panel
+  off_days: []
 
-# ── Robot ─────────────────────────────────────────────────────────────────────
-robot:
-  linear_speed:   1.0
-  angular_speed:  0.5
+# ══════════════════════════════════════════════════════════════════════════════
+# 2. AUTO-UPLOAD CONFIG
+# ══════════════════════════════════════════════════════════════════════════════
+upload:
+  enabled: true
+  ssh_user:    'evelyn'
+  ssh_key:     '~/.ssh/id_rsa'
+  host:        '100.x.x.x'
+  remote_path: '/home/evelyn/farm_uploads/'
+  sources:
+    - '~/box/vln-large-scale-farm/data/'
+    - '~/box/vln-large-scale-farm/tools_control_panel/output_glim/'
+  station_pose:   [0.0, 0.0]
+  station_radius: 1.5
+  cooldown_sec:   300
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 3. AUTONOMOUS DRIVING CONFIG
+# ══════════════════════════════════════════════════════════════════════════════
+autonomous:
+  waypoints: []
+
+  max_repeat_num:  1
+  min_waypoints:   2
+
+  position_tolerance:    0.3
+  orientation_tolerance: 10
+
   max_linear_speed:  1.5
   min_linear_speed:  0.1
   max_angular_speed: 1.0
   min_angular_speed: 0.1
+  linear_speed:      1.0
+  angular_speed:     0.5
 
-# ── Autonomous Driving Parameters ─────────────────────────────────────────────
-autonomous:
-  max_repeat_num:  1
-  min_waypoints:   2
-  position_tolerance:    0.3   # m
-  orientation_tolerance: 10    # deg
   r1: [0.2, 15]
   r2: [0.5, 60]
   r3: [0.7, 360]
@@ -47,25 +93,12 @@ autonomous:
 
 # ── Recording ─────────────────────────────────────────────────────────────────
 recording:
-  zed_hz:              30
-  lidar_hz:            10
-  imu_hz:             100
-  pairing_threshold_ms: 50
-  web_stream_hz:        10
-  sample_interval_sec: 300
-
-# ── Server (Lab PC) ───────────────────────────────────────────────────────────
-server:
-  host:  '0.0.0.0'
-  port:   8000
-  ping_interval:        10
-  ping_timeout:         20
-  max_http_buffer_size: 100000000
-
-# ── ROS2 (Jetson) ─────────────────────────────────────────────────────────────
-ros2:
-  cmd_vel_topic: '/cmd_vel'
-  node_name:     'jetson_agent'
+  zed_hz:               30
+  lidar_hz:             10
+  imu_hz:              100
+  pairing_threshold_ms:  50
+  web_stream_hz:         10
+  sample_interval_sec:  300
 
 # ── System Monitor ────────────────────────────────────────────────────────────
 monitor:

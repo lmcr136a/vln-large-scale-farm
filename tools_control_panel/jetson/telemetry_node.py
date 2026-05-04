@@ -11,7 +11,7 @@ from sensor_msgs.msg import BatteryState, PointCloud2, Image, Imu
 
 log = logging.getLogger(__name__)
 
-SENSOR_TIMEOUT = 2.0  # seconds before marking sensor offline
+SENSOR_TIMEOUT = 2.0
 
 BEST_EFFORT = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -22,40 +22,24 @@ BEST_EFFORT = QoSProfile(
 
 
 class TelemetryNode(Node):
-    """
-    Subscribes to ROS2 topics and exposes snapshot() for telemetry dispatch.
-    Sensor health is determined by topic heartbeat (SENSOR_TIMEOUT).
-    """
-
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, topics: dict):
         super().__init__("telemetry_node")
         self._data_dir = data_dir
         self._lock = threading.Lock()
-
-        self._pose = [0.0] * 7  # x y z qx qy qz qw
+        self._pose    = [0.0] * 7
         self._battery = -1.0
-        self._last_ts: dict[str, float] = {
-            "lidar": 0.0, "zed_front": 0.0, "zed_back": 0.0, "imu": 0.0
-        }
+        self._last_ts: dict[str, float] = {}
 
-        self.create_subscription(
-            PoseStamped, "/glim_ros/localized_curr_pose", self._cb_pose, BEST_EFFORT
-        )
-        self.create_subscription(
-            BatteryState, "/battery_state", self._cb_battery, 10
-        )
-        self.create_subscription(
-            PointCloud2, "/livox/lidar", self._heartbeat("lidar"), BEST_EFFORT
-        )
-        self.create_subscription(
-            Image, "/zed_front/rgb/image_raw", self._heartbeat("zed_front"), BEST_EFFORT
-        )
-        self.create_subscription(
-            Image, "/zed_back/rgb/image_raw", self._heartbeat("zed_back"), BEST_EFFORT
-        )
-        self.create_subscription(
-            Imu, "/imu/data", self._heartbeat("imu"), BEST_EFFORT
-        )
+        t = topics
+        self.create_subscription(PoseStamped,    t["pose"],      self._cb_pose,            BEST_EFFORT)
+        self.create_subscription(BatteryState,   t["battery"],   self._cb_battery,         10)
+        self.create_subscription(PointCloud2,    t["lidar"],     self._heartbeat("lidar"),  BEST_EFFORT)
+        self.create_subscription(Image,          t["zed_front"], self._heartbeat("zed_front"), BEST_EFFORT)
+        self.create_subscription(Image,          t["zed_back"],  self._heartbeat("zed_back"),  BEST_EFFORT)
+        self.create_subscription(Imu,            t["imu"],       self._heartbeat("imu"),    BEST_EFFORT)
+
+        for key in ("lidar", "zed_front", "zed_back", "imu"):
+            self._last_ts[key] = 0.0
 
     def _cb_pose(self, msg: PoseStamped):
         p, q = msg.pose.position, msg.pose.orientation
@@ -86,9 +70,9 @@ class TelemetryNode(Node):
         except Exception:
             storage_pct = -1.0
         return {
-            "t": round(now, 2),
-            "pose": pose,
-            "batt": batt,
-            "sensors": sensors,
+            "t":           round(now, 2),
+            "pose":        pose,
+            "batt":        batt,
+            "sensors":     sensors,
             "storage_pct": storage_pct,
         }

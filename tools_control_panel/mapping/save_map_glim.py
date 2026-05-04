@@ -8,6 +8,7 @@ from sensor_msgs_py import point_cloud2
 import numpy as np
 import json
 import os
+import yaml
 import threading
 from scipy.ndimage import uniform_filter, binary_dilation
 from PIL import Image, ImageDraw
@@ -16,8 +17,6 @@ from tf2_ros import TransformException
 from rclpy.duration import Duration
 
 current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-PIXEL_GRID_SIZE    = 0.05
 MAP_UPDATE_RATE    = 1.0
 TARGET_FRAME       = 'map'
 IMAGE_RES_MUL      = 2
@@ -44,8 +43,7 @@ COLOR_ARROW        = (255, 255, 0)
 
 POINT_SAMPLE_RATIO = 1.0
 
-OUTPUT_DIR = os.path.join(current_dir, 'output_glim')
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+
 
 
 def _quat_to_rot(qx, qy, qz, qw):
@@ -287,7 +285,7 @@ def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, world_rot_angle=0.0)
                      fill=(200, 200, 200))
 
         final_res = float(gs / IMAGE_RES_MUL)
-        img.save(os.path.join(OUTPUT_DIR, 'map_latest.png'))
+        img.save(os.path.join(self._output_dir, self._map_image))
 
         return final_res, img.width, img.height
 
@@ -298,8 +296,15 @@ def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, world_rot_angle=0.0)
 
 class ContinuousPointCloudMapper(Node):
 
-    def __init__(self):
+    def __init__(self, cfg: dict):
         super().__init__('continuous_mapper_high_res')
+
+        p = cfg['paths']
+        t = cfg['ros2']['topics']
+        self._output_dir  = os.path.expanduser(p['map_dir'])
+        self._map_image   = p.get('map_image',  'map_latest.png')
+        self._map_state   = p.get('map_state',  'map_state.json')
+        os.makedirs(self._output_dir, exist_ok=True)
 
         self._pose_lock    = threading.Lock()
         self._current_pose = None
@@ -310,7 +315,7 @@ class ContinuousPointCloudMapper(Node):
         self.last_map_time     = None
         self.map_version       = 0
         self._best_angle       = None
-        self._map_params       = None   # written to map_params.json at 5Hz
+        self._map_params       = None
 
         self.tf_buffer   = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -327,12 +332,12 @@ class ContinuousPointCloudMapper(Node):
             depth=10)
 
         self.pc_sub   = self.create_subscription(
-            PointCloud2, '/glim_ros/entire_map',          self.pc_callback,   map_qos)
+            PointCloud2, t['entire_map'],  self.pc_callback,   map_qos)
         self.traj_sub = self.create_subscription(
-            Path,        '/glim_ros/localized_trajectory', self.traj_callback, odom_qos)
+            Path,        t['trajectory'],  self.traj_callback, odom_qos)
 
         self._status_timer = self.create_timer(5.0,  self._print_status)
-        self._params_timer = self.create_timer(0.2,  self._write_map_params)  # 5 Hz
+        self._params_timer = self.create_timer(0.2,  self._write_map_params)
 
         print(f'[Mapper] Ready  frame="{TARGET_FRAME}"  cell={PIXEL_GRID_SIZE}m  '
               f'band=[{BAND_LOW},{BAND_HIGH}]m  step={STEP_THRESHOLD}m')
@@ -349,8 +354,8 @@ class ContinuousPointCloudMapper(Node):
         """Write map_state.json at 5 Hz so autonomous_mode.py and server stay in sync."""
         if self._map_params is None:
             return
-        tmp = os.path.join(OUTPUT_DIR, 'map_state.json.tmp')
-        dst = os.path.join(OUTPUT_DIR, 'map_state.json')
+        tmp = os.path.join(self._output_dir, self._map_state + '.tmp')
+        dst = os.path.join(self._output_dir, self._map_state)
         try:
             with open(tmp, 'w') as f:
                 json.dump(self._map_params, f)
@@ -467,8 +472,15 @@ class ContinuousPointCloudMapper(Node):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', default='~/farm_config.yaml')
+    args, _ = parser.parse_known_args()
+    with open(os.path.expanduser(args.config)) as f:
+        cfg = yaml.safe_load(f)
+
     rclpy.init()
-    mapper = ContinuousPointCloudMapper()
+    mapper = ContinuousPointCloudMapper(cfg)
     try:
         rclpy.spin(mapper)
     except KeyboardInterrupt:

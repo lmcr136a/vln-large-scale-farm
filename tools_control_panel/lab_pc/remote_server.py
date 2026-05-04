@@ -16,6 +16,8 @@ import yaml
 from flask import Flask, request, send_file
 from flask_socketio import SocketIO, emit
 
+from server_to_panel import ServerToPanel
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("remote_server")
 
@@ -31,7 +33,9 @@ class RemoteServer:
     def __init__(self, config_path=CFG_PATH):
         self.cfg = load_config(config_path)
         self._config_path = os.path.expanduser(config_path)
-        self._path_nodes = []
+        cfg_dir = os.path.dirname(self._config_path)
+        self._paths_file = os.path.join(cfg_dir, self.cfg["paths"].get("paths_file", "paths.json"))
+        self._path_nodes = self._load_paths()
         self._path_mode = False
 
         self.app = Flask(__name__, template_folder="../lab_pc")
@@ -46,9 +50,11 @@ class RemoteServer:
         )
 
         self._register_routes()
-        self._register_panel_events()   # namespace /
-        self._register_bridge_events()  # namespace /bridge (Local PC)
-        self._register_internet_events()  # namespace /internet (Jetson direct)
+        self._register_panel_events()
+        self._register_bridge_events()
+        self._register_internet_events()
+
+        self._monitor = ServerToPanel(self.sio, self.cfg)
 
     # ── HTTP ──────────────────────────────────────────────────────────────────
 
@@ -70,7 +76,8 @@ class RemoteServer:
 
         @self.app.route("/map_latest.png")
         def serve_map():
-            path = os.path.join(os.path.expanduser(self.cfg["paths"]["map_dir"]), "map_latest.png")
+            fname = self.cfg["paths"].get("map_image", "map_latest.png")
+            path  = os.path.join(os.path.expanduser(self.cfg["paths"]["map_dir"]), fname)
             if not os.path.exists(path):
                 return ("Map not found", 404)
             return send_file(path, mimetype="image/png", max_age=0, conditional=False)
@@ -93,6 +100,8 @@ class RemoteServer:
         @sio.on("connect")
         def on_connect():
             log.info(f"Panel connected: {request.sid}")
+            if self._path_nodes:
+                sio.emit("path_loaded", {"waypoints": self._path_nodes}, to=request.sid)
 
         @sio.on("disconnect")
         def on_disconnect():
@@ -146,7 +155,8 @@ class RemoteServer:
 
         @sio.on("save_path")
         def on_save_path():
-            self._push_config_update({"schedule": {"waypoints": self._path_nodes}})
+            self._save_paths(self._path_nodes)
+            self._push_config_update({"autonomous": {"waypoints": self._path_nodes}})
             sio.emit("path_saved", {"count": len(self._path_nodes)})
 
         @sio.on("set_quality")
@@ -215,6 +225,23 @@ class RemoteServer:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    def _load_paths(self) -> list:
+        try:
+            with open(self._paths_file) as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return []
+        except Exception as e:
+            log.error(f"paths.json read error: {e}")
+            return []
+
+    def _save_paths(self, waypoints: list):
+        try:
+            with open(self._paths_file, "w") as f:
+                json.dump(waypoints, f, indent=2)
+        except Exception as e:
+            log.error(f"paths.json write error: {e}")
+
     def _forward_telemetry(self, data: dict):
         """Unpack telemetry dict and emit individual events to panel clients."""
         self.sio.emit("robot_pose", {
@@ -266,6 +293,8 @@ class RemoteServer:
                 base[k] = v
 
     def run(self):
+        import threading
+        threading.Thread(target=self._monitor.monitor_loop, daemon=True).start()
         log.info(f"Remote server on :{self.cfg['server']['port']}")
         self.sio.run(
             self.app,

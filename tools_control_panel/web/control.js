@@ -503,6 +503,11 @@ function savePath() {
   socket.emit('save_path');
 }
 
+socket.on('path_loaded', (data) => {
+  pathNodes = data.waypoints.map(w => ({ worldX: w.x, worldY: w.y, reached: false }));
+  redrawDynLayer();
+});
+
 socket.on('path_saved', (data) => {
   alert(`Path saved (${data.count} waypoints). Jetson will use this on next scheduled run.`);
 });

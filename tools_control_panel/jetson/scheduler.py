@@ -29,31 +29,31 @@ class Scheduler:
     def _loop(self):
         while True:
             now = datetime.datetime.now()
-            date_str = now.strftime("%Y-%m-%d")
             time_str = now.strftime("%H:%M")
+            date_str = now.strftime("%Y-%m-%d")
 
-            # Reset fired set at midnight
             if time_str == "00:00":
                 self._fired_today.clear()
 
-            cfg = self._load_schedule()
-            if cfg.get("enabled", True):
-                today = now.strftime("%Y-%m-%d")
-                if today not in cfg.get("off_days", []):
-                    for t in cfg.get("times", []):
-                        key = f"{date_str}_{t}"
-                        if time_str == t and key not in self._fired_today:
-                            self._fired_today.add(key)
-                            log.info(f"Scheduled run at {t}")
-                            self._start_cb(cfg.get("waypoints", []))
+            try:
+                with open(self._cfg_path) as f:
+                    cfg = yaml.safe_load(f)
+                sched     = cfg.get("schedule", {})
+                waypoints = cfg.get("autonomous", {}).get("waypoints", [])
+            except Exception as e:
+                log.error(f"Config read error: {e}")
+                time.sleep(30)
+                continue
+
+            if sched.get("enabled", True) and date_str not in sched.get("off_days", []):
+                for t in sched.get("times", []):
+                    key = f"{date_str}_{t}"
+                    if time_str == t and key not in self._fired_today:
+                        self._fired_today.add(key)
+                        if len(waypoints) >= 2:
+                            log.info(f"Scheduled run at {t} ({len(waypoints)} waypoints)")
+                            self._start_cb(waypoints)
+                        else:
+                            log.warning(f"Scheduled run at {t} skipped — no waypoints set")
 
             time.sleep(30)
-
-    def _load_schedule(self) -> dict:
-        try:
-            with open(self._cfg_path) as f:
-                cfg = yaml.safe_load(f)
-            return cfg.get("schedule", {})
-        except Exception as e:
-            log.error(f"Config read error: {e}")
-            return {}
