@@ -283,6 +283,24 @@ socket.on('robot_status', (data) => {
   else             { div.style.display = 'none'; }
 });
 
+socket.on('robot_telemetry', (data) => {
+  const battEl    = document.getElementById('info-battery');
+  const modeEl    = document.getElementById('info-mode');
+  const estopEl   = document.getElementById('estop-indicator');
+  const sensorsEl = document.getElementById('info-sensors');
+
+  if (battEl)  battEl.textContent  = data.battery >= 0 ? `${data.battery.toFixed(1)}%` : '—';
+  if (modeEl)  modeEl.textContent  = data.mode || '—';
+  if (estopEl) {
+    estopEl.textContent = data.estop ? '🔴 E-STOP' : '🟢 OK';
+    estopEl.style.color = data.estop ? '#ff4444' : '#44ff88';
+  }
+  if (sensorsEl && data.sensors) {
+    sensorsEl.textContent = Object.entries(data.sensors)
+      .map(([k, v]) => `${k}:${v ? '✓' : '✗'}`).join('  ');
+  }
+});
+
 socket.on('waypoint_reached', (data) => {
   const idx = data.index;
   if (idx >= 0 && idx < pathNodes.length) {
@@ -474,3 +492,43 @@ function stopRecording() {
 socket.on('recording_status', (data) => {
   setRecordingState(data.active, data.dirname);
 });
+
+function emergencyStop() {
+  socket.emit('estop');
+  if (isAutoMode) { isAutoMode = false; updateAutoButton(); }
+}
+
+function savePath() {
+  if (pathNodes.length < 2) { alert('Need at least 2 waypoints to save.'); return; }
+  socket.emit('save_path');
+}
+
+socket.on('path_saved', (data) => {
+  alert(`Path saved (${data.count} waypoints). Jetson will use this on next scheduled run.`);
+});
+
+function setQuality(level) {
+  socket.emit('set_quality', { level });
+}
+
+function updateSchedule() {
+  const timesRaw = document.getElementById('sched-times').value.trim();
+  const offRaw   = document.getElementById('sched-offdays').value.trim();
+  const enabled  = document.getElementById('sched-enabled').checked;
+  fetch('/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ schedule: {
+      enabled,
+      times:    timesRaw ? timesRaw.split(',').map(t => t.trim()) : [],
+      off_days: offRaw   ? offRaw.split(',').map(d => d.trim())  : [],
+    }}),
+  }).then(r => r.json()).then(() => alert('Schedule updated.'));
+}
+
+function updateAutoButton() {
+  const btn = document.getElementById('autoButton');
+  if (!btn) return;
+  btn.textContent = isAutoMode ? 'Stop Autonomous' : 'Start Autonomous';
+  btn.classList.toggle('active-auto', isAutoMode);
+}
