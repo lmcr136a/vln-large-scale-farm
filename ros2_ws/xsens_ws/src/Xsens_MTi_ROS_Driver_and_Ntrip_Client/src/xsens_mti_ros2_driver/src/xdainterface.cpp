@@ -295,26 +295,24 @@ bool XdaInterface::prepare()
 	if (!m_device->gotoConfig())
 		return handleError("Could not go to config");
 
-	// read EMTS and device config stored in .mtb file header.
-	if (!m_device->readEmtsAndDeviceConfiguration())
-        // Set output configuration - evelyn
-        XsOutputConfigurationArray configArray;
-        configArray.push_back(XsOutputConfiguration(XDI_PacketCounter,     100));
-        configArray.push_back(XsOutputConfiguration(XDI_SampleTimeFine,    100));
-        configArray.push_back(XsOutputConfiguration(XDI_Quaternion,        100));
-        configArray.push_back(XsOutputConfiguration(XDI_Acceleration,      100));
-        configArray.push_back(XsOutputConfiguration(XDI_RateOfTurn,        100));
-        configArray.push_back(XsOutputConfiguration(XDI_MagneticField,     100));
-        configArray.push_back(XsOutputConfiguration(XDI_StatusWord,        100));
-        configArray.push_back(XsOutputConfiguration(XDI_LatLon,            1));
-        configArray.push_back(XsOutputConfiguration(XDI_AltitudeEllipsoid, 1));
-        configArray.push_back(XsOutputConfiguration(XDI_VelocityXYZ,       1));
-        if (!m_device->setOutputConfiguration(configArray))
-            return handleError("Could not set output configuration");
-        RCLCPP_INFO(get_logger(), "Output configuration set successfully");
+    if (!m_device->readEmtsAndDeviceConfiguration())
+        return handleError("Could not read device configuration");
 
-		return handleError("Could not read device configuration");
-
+    // Set output configuration - evelyn
+    XsOutputConfigurationArray configArray;
+    configArray.push_back(XsOutputConfiguration(XDI_PacketCounter,     100));
+    configArray.push_back(XsOutputConfiguration(XDI_SampleTimeFine,    100));
+    configArray.push_back(XsOutputConfiguration(XDI_Quaternion,        100));
+    configArray.push_back(XsOutputConfiguration(XDI_Acceleration,      100));
+    configArray.push_back(XsOutputConfiguration(XDI_RateOfTurn,        100));
+    configArray.push_back(XsOutputConfiguration(XDI_MagneticField,     100));
+    configArray.push_back(XsOutputConfiguration(XDI_StatusWord,        100));
+    configArray.push_back(XsOutputConfiguration(XDI_LatLon,            1));
+    configArray.push_back(XsOutputConfiguration(XDI_AltitudeEllipsoid, 1));
+    configArray.push_back(XsOutputConfiguration(XDI_VelocityXYZ,       1));
+    if (!m_device->setOutputConfiguration(configArray))
+        return handleError("Could not set output configuration");
+    RCLCPP_INFO(get_logger(), "Output configuration set successfully");
 	RCLCPP_INFO(get_logger(), "Measuring ...");
 	if (!m_device->gotoMeasurement())
 		return handleError("Could not put device into measurement mode");
