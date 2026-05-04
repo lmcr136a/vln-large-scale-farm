@@ -13,6 +13,9 @@ import sys
 import threading
 import yaml
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from config_loader import load_config
+
 from flask import Flask, request, send_file
 from flask_socketio import SocketIO, emit
 
@@ -21,12 +24,7 @@ from server_to_panel import ServerToPanel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("remote_server")
 
-CFG_PATH = os.path.join(os.path.dirname(__file__), "../config/farm_config.yaml")
-
-
-def load_config(path=CFG_PATH):
-    with open(os.path.expanduser(path)) as f:
-        return yaml.safe_load(f)
+CFG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../config/farm_config.yaml"))
 
 
 class RemoteServer:
@@ -77,7 +75,7 @@ class RemoteServer:
         @self.app.route("/map_latest.png")
         def serve_map():
             fname = self.cfg["paths"].get("map_image", "map_latest.png")
-            path  = os.path.join(os.path.expanduser(self.cfg["paths"]["map_dir"]), fname)
+            path  = os.path.join(self.cfg["paths"]["map_dir"], fname)
             if not os.path.exists(path):
                 return ("Map not found", 404)
             return send_file(path, mimetype="image/png", max_age=0, conditional=False)
@@ -86,8 +84,7 @@ class RemoteServer:
         def handle_config():
             from flask import jsonify, request as req
             if req.method == "GET":
-                with open(self._config_path) as f:
-                    return jsonify(yaml.safe_load(f))
+                return jsonify(load_config(self._config_path))
             updates = req.get_json(force=True)
             self._push_config_update(updates)
             return jsonify({"ok": True})
@@ -118,12 +115,12 @@ class RemoteServer:
         # control.js emits socket.emit('keydown', key) — key is a raw string
         @sio.on("keydown")
         def on_keydown(key: str):
-            VEL = self.cfg["robot"]
+            VEL = self.cfg["autonomous"]
             vx, vz = 0.0, 0.0
-            if key == "ArrowUp":     vx =  VEL["linear_speed"]
-            elif key == "ArrowDown": vx = -VEL["linear_speed"]
-            elif key == "ArrowLeft": vz =  VEL["angular_speed"]
-            elif key == "ArrowRight":vz = -VEL["angular_speed"]
+            if key == "ArrowUp":      vx =  VEL["linear_speed"]
+            elif key == "ArrowDown":  vx = -VEL["linear_speed"]
+            elif key == "ArrowLeft":  vz =  VEL["angular_speed"]
+            elif key == "ArrowRight": vz = -VEL["angular_speed"]
             if vx or vz:
                 self._to_robot({"cmd": "velocity", "vx": vx, "vz": vz})
 
@@ -199,6 +196,10 @@ class RemoteServer:
         def inet_disconnect():
             log.warning("Jetson internet disconnected")
 
+        @sio.on("ping_rtt", namespace="/internet")
+        def inet_ping(data):
+            sio.emit("pong_rtt", {}, to=request.sid, namespace="/internet")
+
         # Events emitted by internet_comm.py
         @sio.on("telemetry", namespace="/internet")
         def inet_telemetry(data):
@@ -259,8 +260,9 @@ class RemoteServer:
         }, namespace="/")
 
     def _to_robot(self, cmd: dict):
-        """Send command via radio bridge."""
+        """Send command via radio bridge AND internet (whichever is connected)."""
         self.sio.emit("to_robot", cmd, namespace="/bridge")
+        self.sio.emit("command", cmd, namespace="/internet")
 
     def _to_robot_internet(self, msg: dict):
         """Send command to Jetson via direct internet connection."""
@@ -271,17 +273,15 @@ class RemoteServer:
             self.sio.emit("command", msg, namespace="/internet")
 
     def _push_config_update(self, updates: dict):
-        """Write config locally and push to Jetson."""
         try:
             with open(self._config_path) as f:
-                cfg = yaml.safe_load(f)
+                cfg = yaml.safe_load(f)    # raw read — preserve relative paths on disk
             self._deep_update(cfg, updates)
             with open(self._config_path, "w") as f:
                 yaml.dump(cfg, f)
             log.info(f"Config saved: {list(updates.keys())}")
         except Exception as e:
             log.error(f"Config save error: {e}")
-        # Also push to Jetson via radio so it picks up immediately
         self._to_robot({"cmd": "config_update", "config": updates})
 
     @staticmethod

@@ -71,13 +71,6 @@
         <input type="checkbox" id="streamToggle" checked onchange="toggleStreaming(this.checked)" />
         RGB Stream
       </label>
-      <label class="util-btn">Stream quality:
-        <select onchange="setQuality(this.value)">
-          <option value="low">Low (0.1Hz / 8%)</option>
-          <option value="medium">Med (1Hz / 20%)</option>
-          <option value="high">High (5Hz / 40%)</option>
-        </select>
-      </label>
       <button onclick="savePath()" class="util-btn">💾 Save Path</button>
       <div style="flex:1;"></div>
       <button id="autoButton" onclick="toggleAutoMode()">Start Autonomous</button>
