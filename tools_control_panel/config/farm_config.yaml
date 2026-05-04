@@ -1,10 +1,10 @@
 # ── Paths ─────────────────────────────────────────────────────────────────────
 paths:
-  map_dir:    '~/box/vln-large-scale-farm/tools_control_panel/output_glim'
-  data_dir:   '~/box/vln-large-scale-farm/data'
+  map_dir:    '../output_glim'
+  data_dir:   '../data'
   map_image:  'map_latest.png'
   map_state:  'map_state.json'
-  paths_file: 'paths.json'        # relative to config dir
+  paths_file: 'paths.json'
 
 # ── Radio (Jetson <-> Local PC serial) ────────────────────────────────────────
 radio:
@@ -59,8 +59,8 @@ upload:
   host:        '100.x.x.x'
   remote_path: '/home/evelyn/farm_uploads/'
   sources:
-    - '~/box/vln-large-scale-farm/data/'
-    - '~/box/vln-large-scale-farm/tools_control_panel/output_glim/'
+    - '../data/'
+    - '../output_glim/'
   station_pose:   [0.0, 0.0]
   station_radius: 1.5
   cooldown_sec:   300
