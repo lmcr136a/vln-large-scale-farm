@@ -4,7 +4,7 @@ import threading
 import time
 
 import numpy as np
-import socketio  # pip install "python-socketio[client]"
+import socketio
 
 log = logging.getLogger(__name__)
 
@@ -14,29 +14,27 @@ QUALITY = {
     "high":   {"rgb_hz": 5.0, "pc_ratio": 0.40},
 }
 
+# RTT thresholds (seconds)
+RTT_HIGH   = 0.08   # < 80ms  → high
+RTT_MEDIUM = 0.25   # < 250ms → medium, else low
+QUALITY_CHECK_INTERVAL = 15.0
+
 
 class InternetComm:
-    """
-    Socket.IO client connecting to Lab PC remote_server (/internet namespace).
-    Works over Tailscale — no Local PC bridge needed.
-    Sends: telemetry, RGB frames (adaptive Hz), point cloud (adaptive sampling).
-    Receives: quality level changes, commands.
-    """
-
     def __init__(self, lab_url: str, on_command=None):
-        # lab_url: http(s)://100.x.x.x:8000
-        self._url = lab_url
+        self._url        = lab_url
         self._on_command = on_command
-        self._quality = "low"
+        self._quality    = "low"
         self._last_rgb: dict[str, float] = {}
-        self._sio = socketio.Client(reconnection=True, reconnection_delay=5, logger=False)
+        self._sio        = socketio.Client(reconnection=True, reconnection_delay=5, logger=False)
+        self._connected  = False
         self._setup_events()
 
     @property
     def connected(self) -> bool:
-        return self._sio.connected
+        return self._connected
 
-    # ── Public send API ───────────────────────────────────────────────────────
+    # ── Send API ──────────────────────────────────────────────────────────────
 
     def send_telemetry(self, payload: dict):
         self._emit("telemetry", payload)
@@ -52,38 +50,39 @@ class InternetComm:
         self._last_rgb[camera] = time.time()
         self._emit("rgb_frame", {
             "camera": camera,
-            "data": base64.b64encode(frame_jpeg).decode(),
+            "data":   base64.b64encode(frame_jpeg).decode(),
         })
 
     def send_pointcloud(self, points: np.ndarray):
         ratio = QUALITY[self._quality]["pc_ratio"]
-        n = max(1, int(len(points) * ratio))
-        idx = np.random.choice(len(points), n, replace=False)
-        sampled = points[idx].astype(np.float32)
+        n     = max(1, int(len(points) * ratio))
+        idx   = np.random.choice(len(points), n, replace=False)
         self._emit("pointcloud", {
-            "n": n,
-            "data": base64.b64encode(sampled.tobytes()).decode(),
+            "n":    n,
+            "data": base64.b64encode(points[idx].astype(np.float32).tobytes()).decode(),
         })
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _emit(self, event: str, data):
-        if not self._sio.connected:
+        if not self._connected:
             return
         try:
             self._sio.emit(event, data, namespace="/internet")
         except Exception as e:
-            log.error(f"Internet emit {event}: {e}")
+            log.error(f"emit {event}: {e}")
 
     def _setup_events(self):
         sio = self._sio
 
         @sio.on("connect", namespace="/internet")
         def on_connect():
-            log.info(f"Internet connected to {self._url}")
+            self._connected = True
+            log.info(f"Internet connected: {self._url}")
 
         @sio.on("disconnect", namespace="/internet")
         def on_disconnect():
+            self._connected = False
             log.warning("Internet disconnected")
 
         @sio.on("quality", namespace="/internet")
@@ -91,22 +90,67 @@ class InternetComm:
             level = data.get("level", "low")
             if level in QUALITY:
                 self._quality = level
-                log.info(f"Quality: {level}")
+                log.info(f"Quality override: {level}")
 
         @sio.on("command", namespace="/internet")
         def on_command(data):
             if self._on_command:
                 self._on_command(data)
 
+        @sio.on("pong_rtt", namespace="/internet")
+        def on_pong(data):
+            pass  # handled inline in _measure_rtt
+
     def start(self):
         threading.Thread(target=self._connect_loop, daemon=True).start()
 
     def _connect_loop(self):
         while True:
-            if not self._sio.connected:
+            if not self._connected:
                 try:
                     self._sio.connect(self._url, namespaces=["/internet"])
+                    threading.Thread(target=self._quality_loop, daemon=True).start()
                     self._sio.wait()
                 except Exception as e:
                     log.warning(f"Internet connect failed: {e}, retry in 10s")
                     time.sleep(10)
+
+    def _quality_loop(self):
+        """Periodically measure RTT and auto-select quality level."""
+        time.sleep(2.0)  # wait for connection to stabilize
+        while self._connected:
+            rtt = self._measure_rtt()
+            if rtt is None:
+                level = "low"
+            elif rtt < RTT_HIGH:
+                level = "high"
+            elif rtt < RTT_MEDIUM:
+                level = "medium"
+            else:
+                level = "low"
+
+            if level != self._quality:
+                self._quality = level
+                log.info(f"Quality auto: {level} (RTT {rtt*1000:.0f}ms)" if rtt else f"Quality auto: {level} (no response)")
+
+            time.sleep(QUALITY_CHECK_INTERVAL)
+
+    def _measure_rtt(self) -> float | None:
+        """Send a ping event and measure round-trip time. Returns seconds or None."""
+        result = [None]
+        done   = threading.Event()
+
+        def handle_pong(data):
+            result[0] = time.time()
+            done.set()
+
+        try:
+            self._sio.on("pong_rtt", handle_pong, namespace="/internet")
+            t0 = time.time()
+            self._sio.emit("ping_rtt", {}, namespace="/internet")
+            done.wait(timeout=3.0)
+            if result[0] is not None:
+                return result[0] - t0
+            return None
+        except Exception:
+            return None

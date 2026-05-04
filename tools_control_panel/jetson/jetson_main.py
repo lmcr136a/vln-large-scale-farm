@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import signal
 import struct
 import sys
 import threading
@@ -12,7 +13,7 @@ import rclpy
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -37,7 +38,20 @@ BEST_EFFORT_QOS = QoSProfile(
 )
 
 
-class SocketIOProxy:
+class RecorderProxy:
+    """Captures front_frame/back_frame emits from recorder and sends via internet."""
+    def __init__(self, internet: "InternetComm"):
+        self._internet = internet
+
+    def emit(self, event: str, data=None, namespace=None):
+        if event in ("front_frame", "back_frame") and data:
+            camera = "front" if event == "front_frame" else "back"
+            raw = data.get("data", "")
+            if raw:
+                import base64
+                self._internet.send_rgb(base64.b64decode(raw), camera)
+
+    def start_background_task(self, *a, **kw): pass  # no-op shim
     def __init__(self, radio, internet, uploader, telemetry):
         self._radio     = radio
         self._internet  = internet
@@ -126,6 +140,26 @@ def main():
 
     threading.Thread(target=pointcloud_loop, daemon=True).start()
 
+    # ZED cameras via recorder
+    recorder = None
+    try:
+        from sensor.recorder import MultiSensorRecorder
+        rec_cfg  = cfg["recording"]
+        recorder = MultiSensorRecorder(base_node, output_base_dir=cfg["paths"]["data_dir"])
+        rec_proxy = RecorderProxy(internet)
+        for cam in rec_cfg.get("zed_cameras", []):
+            recorder.add_zed_camera(
+                serial_number=cam["serial"],
+                name=cam["name"],
+                socketio=rec_proxy,
+                sample_interval_sec=rec_cfg.get("sample_interval_sec", 300),
+                always_stream=True,
+                stream_fps=rec_cfg.get("web_stream_hz", 5),
+            )
+        log.info(f"ZED cameras initialized: {[c['name'] for c in rec_cfg.get('zed_cameras', [])]}")
+    except Exception as e:
+        log.warning(f"ZED recorder init failed: {e}")
+
     def telemetry_loop():
         interval = 1.0 / TELEMETRY_HZ
         while True:
@@ -147,15 +181,24 @@ def main():
     executor.add_node(auto_ctrl)
     executor.add_node(base_node)
 
+    shutdown = threading.Event()
+
+    def handle_signal(sig, frame):
+        log.info("Shutdown signal received")
+        shutdown.set()
+
+    signal.signal(signal.SIGINT,  handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    threading.Thread(target=executor.spin, daemon=True).start()
+
     log.info(f"Jetson agent running (config: {cfg_path})")
-    try:
-        executor.spin()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        log.info("Shutting down")
-        radio.stop()
-        rclpy.shutdown()
+    shutdown.wait()
+
+    log.info("Shutting down")
+    executor.shutdown()
+    radio.stop()
+    rclpy.shutdown()
 
 
 if __name__ == "__main__":

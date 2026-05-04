@@ -31,13 +31,14 @@ body {
   position: fixed;
   top: 0; left: 0;
   width: 100%;
-  height: var(--rgb-h);
+  min-height: var(--rgb-h);
+  height: auto;
   display: flex;
   flex-direction: row;
   align-items: stretch;
   background: rgba(0, 0, 0, 0.55);
   z-index: 10;
-  overflow: hidden;
+  overflow: visible;
 }
 
 /* ── Generic column ────────────────────────────────────────── */

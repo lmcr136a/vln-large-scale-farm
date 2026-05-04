@@ -12,8 +12,11 @@ radio:
   baud_rate: 57600
 
 # ── Internet (Tailscale, Jetson -> Lab PC) ────────────────────────────────────
+# jetson1: 100.78.219.75        jetson2: 100.86.199.73        office-koala: 100.81.132.24
+# hp-dragonfly: 100.90.113.122  thomas-desktop: 100.95.80.39  mx16: 100.85.157.116
+# joshuas-macbook-pro: 100.126.106.37  thomass-macbook-pro: 100.110.245.111
 internet:
-  lab_ws_url:          'http://100.x.x.x:8000'
+  lab_ws_url:          'http://100.81.132.24:8000'
   pointcloud_topic:    '/glim_ros/globalmap'
   pointcloud_interval: 5.0
 
@@ -99,6 +102,11 @@ recording:
   pairing_threshold_ms:  50
   web_stream_hz:         10
   sample_interval_sec:  300
+  zed_cameras:
+    - serial: 48335070
+      name: front
+    - serial: 49537850
+      name: back
 
 # ── System Monitor ────────────────────────────────────────────────────────────
 monitor:
