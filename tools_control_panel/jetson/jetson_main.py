@@ -53,9 +53,7 @@ class SocketIOProxy:
             self._uploader.notify_run_completed(pose)
 
 
-def load_config(path: str) -> dict:
-    with open(os.path.expanduser(path)) as f:
-        return yaml.safe_load(f)
+from config_loader import load_config
 
 
 def pc2_to_numpy(msg: PointCloud2) -> np.ndarray:
@@ -75,9 +73,10 @@ def pc2_to_numpy(msg: PointCloud2) -> np.ndarray:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="~/farm_config.yaml")
+    default_cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../config/farm_config.yaml")
+    parser.add_argument("--config", default=default_cfg)
     args = parser.parse_args()
-    cfg_path = os.path.expanduser(args.config)
+    cfg_path = os.path.abspath(args.config)
 
     cfg = load_config(cfg_path)
     rclpy.init()
@@ -86,7 +85,7 @@ def main():
     cmd_vel_pub = base_node.create_publisher(Twist, cfg["ros2"]["cmd_vel_topic"], 10)
 
     telemetry = TelemetryNode(
-        data_dir=os.path.expanduser(cfg["paths"]["data_dir"]),
+        data_dir=cfg["paths"]["data_dir"],
         topics=cfg["ros2"]["topics"],
     )
     uploader  = StationUploader(cfg_path)
