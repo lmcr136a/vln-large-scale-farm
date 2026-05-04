@@ -18,9 +18,11 @@ export LD_LIBRARY_PATH=/home/nahyeon/box/vln-large-scale-farm/ros2_ws/glim_ws/in
 
 source "$WORKSPACE_DIR/ros2_ws/glim_ws/install/setup.bash"
 
-ros2 run glim_converters glim_converters &
-CONVERTER_PID=$!
-sleep 1
+# # For LIVOX 
+# ros2 run glim_converters glim_converters &
+# CONVERTER_PID=$!
+# sleep 1
+
 # ros2 run glim_ros glim_rosnode --ros-args -p config_path:=/home/nahyeon/box/vln-large-scale-farm/ros2_ws/glim_ws/config
 ros2 run glim_ros glim_rosnode \
   --ros-args \
