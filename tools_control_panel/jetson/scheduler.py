@@ -36,7 +36,7 @@ class Scheduler:
                 self._fired_today.clear()
 
             try:
-                with open(self._cfg_path) as f:
+                with open(self._cfg_path, encoding='utf-8') as f:
                     cfg = yaml.safe_load(f)
                 sched     = cfg.get("schedule", {})
                 waypoints = cfg.get("autonomous", {}).get("waypoints", [])
