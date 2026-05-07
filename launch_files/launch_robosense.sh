@@ -7,7 +7,6 @@ MODE="${1:-real}"
 echo "[launch_robosense.sh] Mode: $MODE"
 
 if [ "$MODE" = "sim" ]; then
-    echo "Isaac Sim mode: Livox driver is not used."
     echo "Please start Isaac Sim manually and run the simulation"
     exit 0
 else

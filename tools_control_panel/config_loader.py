@@ -4,7 +4,7 @@ import yaml
 
 def load_config(path: str) -> dict:
     path = os.path.abspath(os.path.expanduser(path))
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     _resolve(cfg, os.path.dirname(path))
     return cfg

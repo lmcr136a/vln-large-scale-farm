@@ -40,18 +40,20 @@ BEST_EFFORT_QOS = QoSProfile(
 
 class RecorderProxy:
     """Captures front_frame/back_frame emits from recorder and sends via internet."""
-    def __init__(self, internet: "InternetComm"):
+    def __init__(self, internet):
         self._internet = internet
 
     def emit(self, event: str, data=None, namespace=None):
         if event in ("front_frame", "back_frame") and data:
             camera = "front" if event == "front_frame" else "back"
-            raw = data.get("data", "")
-            if raw:
-                import base64
-                self._internet.send_rgb(base64.b64decode(raw), camera)
+            b64 = data.get("data", "")
+            if b64:
+                self._internet.send_rgb_b64(b64, camera)
 
-    def start_background_task(self, *a, **kw): pass  # no-op shim
+    def start_background_task(self, *a, **kw): pass
+
+
+class SocketIOProxy:
     def __init__(self, radio, internet, uploader, telemetry):
         self._radio     = radio
         self._internet  = internet
@@ -196,7 +198,14 @@ def main():
     shutdown.wait()
 
     log.info("Shutting down")
-    executor.shutdown()
+    # Stop recorder threads before ROS2 context is destroyed
+    if recorder:
+        try:
+            recorder.stop_recording()
+            recorder.shutdown()
+        except Exception:
+            pass
+    executor.shutdown(timeout_sec=2.0)
     radio.stop()
     rclpy.shutdown()
 

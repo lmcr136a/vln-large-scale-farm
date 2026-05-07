@@ -35,6 +35,8 @@ class RadioComm:
         self._ser.close()
 
     def send(self, payload: dict) -> bool:
+        if not self._running:
+            return False
         data = (json.dumps(payload, separators=(',', ':')) + '\n').encode()
         if len(data) > MAX_BYTES:
             log.warning(f"Packet too large ({len(data)}B), dropping")
@@ -44,7 +46,8 @@ class RadioComm:
                 self._ser.write(data)
                 return True
             except Exception as e:
-                log.error(f"Radio TX: {e}")
+                if self._running:
+                    log.error(f"Radio TX: {e}")
                 return False
 
     def _rx_loop(self):

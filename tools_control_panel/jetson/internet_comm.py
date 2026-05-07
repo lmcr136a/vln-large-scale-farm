@@ -24,7 +24,7 @@ class InternetComm:
     def __init__(self, lab_url: str, on_command=None):
         self._url        = lab_url
         self._on_command = on_command
-        self._quality    = "low"
+        self._quality    = "medium"
         self._last_rgb: dict[str, float] = {}
         self._sio        = socketio.Client(reconnection=True, reconnection_delay=5, logger=False)
         self._connected  = False
@@ -43,15 +43,18 @@ class InternetComm:
         self._emit("robot_event", {"event": event, "data": data})
 
     def send_rgb(self, frame_jpeg: bytes, camera: str):
+        self._send_rgb_internal(base64.b64encode(frame_jpeg).decode(), camera)
+
+    def send_rgb_b64(self, b64: str, camera: str):
+        self._send_rgb_internal(b64, camera)
+
+    def _send_rgb_internal(self, b64: str, camera: str):
         q = QUALITY[self._quality]
         interval = 1.0 / q["rgb_hz"] if q["rgb_hz"] > 0 else float("inf")
         if time.time() - self._last_rgb.get(camera, 0.0) < interval:
             return
         self._last_rgb[camera] = time.time()
-        self._emit("rgb_frame", {
-            "camera": camera,
-            "data":   base64.b64encode(frame_jpeg).decode(),
-        })
+        self._emit("rgb_frame", {"camera": camera, "data": b64})
 
     def send_pointcloud(self, points: np.ndarray):
         ratio = QUALITY[self._quality]["pc_ratio"]
