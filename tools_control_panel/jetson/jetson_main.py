@@ -144,6 +144,8 @@ def main():
     threading.Thread(target=pointcloud_loop, daemon=True).start()
 
     # Map direct-push loop: sends map_latest.png via internet when quality == "high"
+    shutdown = threading.Event()
+
     def map_watch_loop():
         # Read map_dir from raw yaml — load_config resolves the relative path against
         # the config dir, giving tools_control_panel/output_glim instead of root/output_glim.
@@ -158,14 +160,19 @@ def main():
         png_path   = os.path.join(map_dir, cfg["paths"].get("map_image",  "map_latest.png"))
         state_path = os.path.join(map_dir, cfg["paths"].get("map_state",  "map_state.json"))
         interval   = cfg.get("map", {}).get("update_interval", 1.0)
-        last_mtime = 0.0
+        last_mtime    = 0.0
+        map_not_found = False
         log.info(f"Map watch: {png_path}")
-        while True:
-            time.sleep(interval)
+        while not shutdown.is_set():
+            if shutdown.wait(timeout=interval):
+                break
             if not internet.connected:
                 continue
             try:
                 mtime = os.path.getmtime(png_path)
+                if map_not_found:
+                    log.info("Map watch: map found, starting to send")
+                    map_not_found = False
                 if mtime <= last_mtime:
                     continue
                 last_mtime = mtime
@@ -173,10 +180,32 @@ def main():
                     meta = json.load(f)
                 internet.send_map(png_path, meta)
                 log.info(f"Map sent ({int(os.path.getsize(png_path)/1024)}KB)")
-            except FileNotFoundError as e:
-                log.warning(f"Map watch: {e}")
+            except FileNotFoundError:
+                if not map_not_found:
+                    log.info("Map watch: no map yet, will send once available")
+                    map_not_found = True
             except Exception as e:
                 log.error(f"Map watch: {e}")
+
+    from geometry_msgs.msg import PoseStamped
+    import math as _math
+
+    def pose_callback(msg: PoseStamped):
+        if not internet.connected:
+            return
+        p = msg.pose.position
+        q = msg.pose.orientation
+        yaw = _math.atan2(2.0*(q.w*q.z + q.x*q.y), 1.0 - 2.0*(q.y**2 + q.z**2))
+        internet.send_pose(p.x, p.y, yaw)
+
+    pose_qos = QoSProfile(
+        reliability=ReliabilityPolicy.BEST_EFFORT,
+        durability=DurabilityPolicy.VOLATILE,
+        history=HistoryPolicy.KEEP_LAST, depth=1,
+    )
+    base_node.create_subscription(
+        PoseStamped, cfg["ros2"]["topics"]["pose"], pose_callback, pose_qos)
+    log.info(f"Pose stream: {cfg['ros2']['topics']['pose']}")
 
     threading.Thread(target=map_watch_loop, daemon=True).start()
 
@@ -221,11 +250,13 @@ def main():
     executor.add_node(auto_ctrl)
     executor.add_node(base_node)
 
-    shutdown = threading.Event()
-
     def handle_signal(sig, frame):
+        if shutdown.is_set():
+            return
         log.info("Shutdown signal received")
         shutdown.set()
+        signal.signal(signal.SIGINT,  signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
     signal.signal(signal.SIGINT,  handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)

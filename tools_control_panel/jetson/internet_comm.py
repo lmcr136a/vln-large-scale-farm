@@ -69,10 +69,11 @@ class InternetComm:
             "data": base64.b64encode(points[idx].astype(np.float32).tobytes()).decode(),
         })
 
+    def send_pose(self, x: float, y: float, yaw: float):
+        self._emit("pose", {"x": x, "y": y, "yaw": yaw})
+
     def send_map(self, png_path: str, meta: dict):
-        """Send map image directly to lab PC. Only active when quality == 'high'."""
-        if self._quality != "high":
-            return
+        """Send map image directly to lab PC whenever internet is connected."""
         try:
             with open(png_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode()

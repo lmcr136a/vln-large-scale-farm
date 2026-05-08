@@ -8,7 +8,6 @@ Data sources:
 """
 import json
 import logging
-import math
 import os
 import sys
 import threading
@@ -99,6 +98,7 @@ class RemoteServer:
             log.info(f"Panel connected: {request.sid}")
             if self._path_nodes:
                 sio.emit("path_loaded", {"waypoints": self._path_nodes}, to=request.sid)
+            self._send_map_to_client(request.sid)
 
         @sio.on("disconnect")
         def on_disconnect():
@@ -215,6 +215,10 @@ class RemoteServer:
             event = "front_frame" if cam == "front" else "back_frame"
             sio.emit(event, {"data": data["data"]}, namespace="/")
 
+        @sio.on("pose", namespace="/internet")
+        def inet_pose(data):
+            sio.emit("robot_pose", data, namespace="/")
+
         @sio.on("pointcloud", namespace="/internet")
         def inet_pointcloud(data):
             sio.emit("pointcloud_update", data, namespace="/")
@@ -253,6 +257,33 @@ class RemoteServer:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    def _send_map_to_client(self, sid: str):
+        """Send the latest saved map directly to a single client (e.g. on reconnect)."""
+        import base64
+        save_dir   = self._monitor._saved_map_dir
+        png_path   = os.path.join(save_dir, "saved_map.png")
+        state_path = os.path.join(save_dir, "saved_map_state.json")
+        if not os.path.exists(png_path) or not os.path.exists(state_path):
+            return
+        try:
+            with open(png_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            with open(state_path) as f:
+                meta = json.load(f)
+            self._monitor._map_version += 1
+            self.sio.emit("map_updated", {
+                "version":    self._monitor._map_version,
+                "resolution": float(meta.get("resolution", 0.1)),
+                "origin_x":   float(meta.get("origin_x",  0.0)),
+                "origin_y":   float(meta.get("origin_y",  0.0)),
+                "width":      int(meta.get("img_width",   0)),
+                "height":     int(meta.get("img_height",  0)),
+                "rot_angle":  float(meta.get("rot_angle", 0.0)),
+                "image_data": b64,
+            }, to=sid, namespace="/")
+        except Exception as e:
+            log.error(f"send map on connect: {e}")
+
     def _load_paths(self) -> list:
         try:
             with open(self._paths_file) as f:
@@ -271,15 +302,7 @@ class RemoteServer:
             log.error(f"paths.json write error: {e}")
 
     def _forward_telemetry(self, data: dict):
-        """Unpack telemetry dict and emit individual events to panel clients."""
-        pose = data["pose"]
-        qx, qy, qz, qw = pose[3], pose[4], pose[5], pose[6]
-        yaw = math.atan2(2.0 * (qw*qz + qx*qy), 1.0 - 2.0 * (qy**2 + qz**2))
-        self.sio.emit("robot_pose", {
-            "x": pose[0], "y": pose[1], "yaw": yaw,
-        }, namespace="/")
-        # robot_status is reserved by control.js for autonomous text messages.
-        # Use robot_telemetry for battery/sensors/mode so they don't collide.
+        """Unpack telemetry dict and emit status fields to panel clients."""
         self.sio.emit("robot_telemetry", {
             "battery":     data.get("batt", -1),
             "sensors":     data.get("sensors", {}),
