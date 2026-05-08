@@ -42,6 +42,7 @@ ros2:
     imu:         '/xsens/imu/data'
     entire_map:  '/glim_ros/entire_map'
     trajectory:  '/glim_ros/localized_trajectory'
+    aligned_points:  '/glim_ros/aligned_points'
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. SCHEDULE CONFIG

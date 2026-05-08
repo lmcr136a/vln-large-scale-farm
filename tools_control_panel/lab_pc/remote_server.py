@@ -8,6 +8,7 @@ Data sources:
 """
 import json
 import logging
+import math
 import os
 import sys
 import threading
@@ -271,9 +272,11 @@ class RemoteServer:
 
     def _forward_telemetry(self, data: dict):
         """Unpack telemetry dict and emit individual events to panel clients."""
+        pose = data["pose"]
+        qx, qy, qz, qw = pose[3], pose[4], pose[5], pose[6]
+        yaw = math.atan2(2.0 * (qw*qz + qx*qy), 1.0 - 2.0 * (qy**2 + qz**2))
         self.sio.emit("robot_pose", {
-            "x": data["pose"][0], "y": data["pose"][1],
-            "z": data["pose"][2], "yaw": data["pose"][6],
+            "x": pose[0], "y": pose[1], "yaw": yaw,
         }, namespace="/")
         # robot_status is reserved by control.js for autonomous text messages.
         # Use robot_telemetry for battery/sensors/mode so they don't collide.

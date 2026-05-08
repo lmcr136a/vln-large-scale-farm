@@ -98,9 +98,13 @@ initStage();
 //   py = height - (wy - origin_y) / resolution   ← Y flip
 function worldToStagePixel(wx, wy) {
   if (!currentMapMeta) return null;
-  const { resolution, origin_x, origin_y, height } = currentMapMeta;
-  const px = (wx - origin_x) / resolution;
-  const py = height - (wy - origin_y) / resolution;
+  const { resolution, origin_x, origin_y, height, rot_angle } = currentMapMeta;
+  // Apply same PCA rotation as save_map_glim._rotate_xy
+  const c =  Math.cos(rot_angle), s = Math.sin(rot_angle);
+  const rx =  c * wx + s * wy;
+  const ry = -s * wx + c * wy;
+  const px = (rx - origin_x) / resolution;
+  const py = height - (ry - origin_y) / resolution;
   return { x: px, y: py };
 }
 
@@ -192,6 +196,7 @@ socket.on('map_updated', (data) => {
     origin_y:   data.origin_y,
     width:      data.width,
     height:     data.height,
+    rot_angle:  data.rot_angle || 0,
   };
 
   if (!mapImage) {
@@ -377,9 +382,8 @@ function redrawDynLayer() {
   if (robotPose && currentMapMeta) {
     const p = worldToStagePixel(robotPose.x, robotPose.y);
     if (p) {
-      // yaw: ROS convention CCW positive. Canvas Y is flipped vs world Y.
-      // world +Y = canvas up → negate sin component.
-      const yawRad = robotPose.yaw;
+      // yaw: subtract map rotation to get heading in rotated (image) frame
+      const yawRad = robotPose.yaw - currentMapMeta.rot_angle;
       const headLen = 6;
       const dx =  Math.cos(yawRad) * headLen;
       const dy = -Math.sin(yawRad) * headLen;

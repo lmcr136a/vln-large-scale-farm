@@ -145,18 +145,24 @@ def main():
 
     # Map direct-push loop: sends map_latest.png via internet when quality == "high"
     def map_watch_loop():
-        _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        raw_map_dir = os.path.expanduser(cfg["paths"]["map_dir"])
+        # Read map_dir from raw yaml — load_config resolves the relative path against
+        # the config dir, giving tools_control_panel/output_glim instead of root/output_glim.
+        # save_map_glim.py uses raw yaml.safe_load + __file__ anchor, so we match it.
+        with open(cfg_path) as _f:
+            _raw = yaml.safe_load(_f)
+        proj_dir    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        raw_map_dir = os.path.expanduser(_raw["paths"]["map_dir"])
         if not os.path.isabs(raw_map_dir):
-            raw_map_dir = os.path.join(_base, raw_map_dir)
+            raw_map_dir = os.path.join(proj_dir, raw_map_dir)
         map_dir    = os.path.normpath(raw_map_dir)
         png_path   = os.path.join(map_dir, cfg["paths"].get("map_image",  "map_latest.png"))
         state_path = os.path.join(map_dir, cfg["paths"].get("map_state",  "map_state.json"))
         interval   = cfg.get("map", {}).get("update_interval", 1.0)
         last_mtime = 0.0
+        log.info(f"Map watch: {png_path}")
         while True:
             time.sleep(interval)
-            if not internet.connected or internet.quality != "high":
+            if not internet.connected:
                 continue
             try:
                 mtime = os.path.getmtime(png_path)
@@ -166,8 +172,11 @@ def main():
                 with open(state_path) as f:
                     meta = json.load(f)
                 internet.send_map(png_path, meta)
-            except Exception:
-                pass
+                log.info(f"Map sent ({int(os.path.getsize(png_path)/1024)}KB)")
+            except FileNotFoundError as e:
+                log.warning(f"Map watch: {e}")
+            except Exception as e:
+                log.error(f"Map watch: {e}")
 
     threading.Thread(target=map_watch_loop, daemon=True).start()
 
