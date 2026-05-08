@@ -34,6 +34,10 @@ class InternetComm:
     def connected(self) -> bool:
         return self._connected
 
+    @property
+    def quality(self) -> str:
+        return self._quality
+
     # ── Send API ──────────────────────────────────────────────────────────────
 
     def send_telemetry(self, payload: dict):
@@ -64,6 +68,17 @@ class InternetComm:
             "n":    n,
             "data": base64.b64encode(points[idx].astype(np.float32).tobytes()).decode(),
         })
+
+    def send_map(self, png_path: str, meta: dict):
+        """Send map image directly to lab PC. Only active when quality == 'high'."""
+        if self._quality != "high":
+            return
+        try:
+            with open(png_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            self._emit("map_frame", {"data": b64, "meta": meta})
+        except Exception as e:
+            log.error(f"send_map: {e}")
 
     # ── Internal ──────────────────────────────────────────────────────────────
 

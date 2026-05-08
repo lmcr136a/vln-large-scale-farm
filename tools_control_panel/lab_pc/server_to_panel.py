@@ -5,26 +5,37 @@ import time
 
 import psutil
 
+_JETSON_MAP_TIMEOUT = 5.0   # seconds without a Jetson frame before falling back to saved map
+
 
 class ServerToPanel:
     def __init__(self, socketio, config):
-        self.socketio    = socketio
-        self.config      = config
-        self._last_mtime = 0.0
-        self._map_version = 0
+        self.socketio = socketio
+        self.config   = config
+        self._map_version     = 0
+        self._last_mtime      = 0.0
+        self._last_jetson_map = 0.0
 
-    def _map_dir(self):
-        return os.path.expanduser(self.config['paths']['map_dir'])
+        cfg_dir = os.path.dirname(os.path.abspath(__file__))
+        proj_root = os.path.dirname(cfg_dir)
+        raw = config['paths'].get('saved_map_dir', 'lab_pc/maps')
+        self._saved_map_dir = os.path.normpath(os.path.join(proj_root, raw))
+        os.makedirs(self._saved_map_dir, exist_ok=True)
 
-    def _map_image_path(self):
-        return os.path.join(self._map_dir(), self.config['paths'].get('map_image', 'map_latest.png'))
+    def notify_jetson_map(self):
+        """Called by RemoteServer each time a live map_frame arrives from Jetson."""
+        self._last_jetson_map = time.time()
 
-    def _map_state_path(self):
-        return os.path.join(self._map_dir(), self.config['paths'].get('map_state', 'map_state.json'))
+    @property
+    def _jetson_active(self) -> bool:
+        return time.time() - self._last_jetson_map < _JETSON_MAP_TIMEOUT
 
-    def send_map_update(self, force=False):
-        png_path   = self._map_image_path()
-        state_path = self._map_state_path()
+    def send_saved_map(self, force=False):
+        """Emit map_updated pointing to saved_map.png — used when Jetson is offline."""
+        if self._jetson_active and not force:
+            return
+        png_path   = os.path.join(self._saved_map_dir, 'saved_map.png')
+        state_path = os.path.join(self._saved_map_dir, 'saved_map_state.json')
         if not os.path.exists(png_path) or not os.path.exists(state_path):
             return
         mtime = os.path.getmtime(png_path)
@@ -46,6 +57,7 @@ class ServerToPanel:
                 'width':      int(meta.get('img_width',   0)),
                 'height':     int(meta.get('img_height',  0)),
                 'rot_angle':  float(meta.get('rot_angle', 0.0)),
+                # no image_data → browser fetches /saved_map.png via HTTP
             })
         except Exception as e:
             print(f'[map] emit failed: {e}')
@@ -75,11 +87,11 @@ class ServerToPanel:
         sysmon_interval = self.config['monitor']['update_interval']
         map_interval    = self.config.get('map', {}).get('update_interval', 1.0)
         last_sysmon = last_map = 0.0
-        self.send_map_update(force=True)
+        self.send_saved_map(force=True)   # send whatever we have on startup
         while True:
             now = time.time()
             if now - last_map >= map_interval:
-                self.send_map_update()
+                self.send_saved_map()
                 last_map = now
             if now - last_sysmon >= sysmon_interval:
                 self.send_sysmon()

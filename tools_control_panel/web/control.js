@@ -186,7 +186,6 @@ socket.on('back_frame', (data) => {
 
 // ── Map Image (server pushes only when changed) ──────────────
 socket.on('map_updated', (data) => {
-  // Store metadata from socket notification
   currentMapMeta = {
     resolution: data.resolution,
     origin_x:   data.origin_x,
@@ -200,21 +199,18 @@ socket.on('map_updated', (data) => {
     return;
   }
 
-  // Fetch image via HTTP GET (avoids sending large blobs through socket.io polling)
-  const img = new window.Image();
-  img.onload = () => {
+  const applyImage = (img) => {
     mapImage.image(img);
     mapImage.width(data.width);
     mapImage.height(data.height);
     mapLayer.batchDraw();
 
-    // 첫 로드 시 맵을 화면 중앙에 배치
     if (isFirstMap) {
       isFirstMap = false;
       const scale = Math.min(
         stage.width()  / data.width,
         stage.height() / data.height,
-      ) * 0.9;  // 90% so there's a small margin
+      ) * 0.9;
       stage.scale({ x: scale, y: scale });
       stage.position({
         x: (stage.width()  - data.width  * scale) / 2,
@@ -225,10 +221,19 @@ socket.on('map_updated', (data) => {
 
     redrawDynLayer();
   };
-  // Cache-bust with version token so browser doesn't serve stale PNG
-  img.src = `/map_latest.png?v=${data.version}`;
 
-  console.log(`[map] received ${data.width}\u00d7${data.height}`);
+  const img = new window.Image();
+  img.onload = () => applyImage(img);
+
+  if (data.image_data) {
+    // Jetson online: image embedded directly in the socket event
+    img.src = 'data:image/png;base64,' + data.image_data;
+  } else {
+    // Jetson offline: fetch cached saved_map.png from lab PC
+    img.src = `/saved_map.png?v=${data.version}`;
+  }
+
+  console.log(`[map] ${data.width}\u00d7${data.height} ${data.image_data ? '(live)' : '(saved)'}`);
 });
 
 // ── Robot Pose (10Hz) ─────────────────────────────────────────

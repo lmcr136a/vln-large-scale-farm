@@ -1,10 +1,11 @@
 # ── Paths ─────────────────────────────────────────────────────────────────────
 paths:
-  map_dir:    '../output_glim'
-  data_dir:   '../data'
-  map_image:  'map_latest.png'
-  map_state:  'map_state.json'
-  paths_file: 'paths.json'
+  map_dir:       '../output_glim'
+  data_dir:      '../data'
+  map_image:     'map_latest.png'
+  map_state:     'map_state.json'
+  paths_file:    'paths.json'
+  saved_map_dir: 'lab_pc/maps'     # lab PC only — cached copy of last received map
 
 # ── Radio (Jetson <-> Local PC serial) ────────────────────────────────────────
 radio:
@@ -35,10 +36,10 @@ ros2:
   topics:
     pose:        '/glim_ros/localized_curr_pose'
     battery:     '/battery_state'
-    lidar:       '/livox/lidar'
+    lidar:       '/rslidar_points'
     zed_front:   '/zed_front/rgb/image_raw'
     zed_back:    '/zed_back/rgb/image_raw'
-    imu:         '/imu/data'
+    imu:         '/xsens/imu/data'
     entire_map:  '/glim_ros/entire_map'
     trajectory:  '/glim_ros/localized_trajectory'
 

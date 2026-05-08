@@ -42,7 +42,7 @@ COLOR_ROBOT_CIRCLE = (0, 0, 255)
 COLOR_ARROW        = (255, 255, 0)
 
 POINT_SAMPLE_RATIO = 1.0
-
+PIXEL_GRID_SIZE = 0.05
 
 
 
@@ -62,14 +62,16 @@ def _apply_tf(pts_n3, tf_stamped):
 
 
 def transform_cloud_to_map(pc_msg, tf_buffer, logger):
+    gen = point_cloud2.read_points(pc_msg, field_names=('x', 'y', 'z'), skip_nans=True)
+    pts = np.array([(p[0], p[1], p[2]) for p in gen])
+    if pts.size == 0:
+        return None
+    if pc_msg.header.frame_id == TARGET_FRAME:
+        return pts
     try:
         tf = tf_buffer.lookup_transform(
             TARGET_FRAME, pc_msg.header.frame_id,
             pc_msg.header.stamp, timeout=Duration(seconds=0.5))
-        gen = point_cloud2.read_points(pc_msg, field_names=('x', 'y', 'z'), skip_nans=True)
-        pts = np.array([(p[0], p[1], p[2]) for p in gen])
-        if pts.size == 0:
-            return None
         return _apply_tf(pts, tf)
     except TransformException as ex:
         logger.warn(f'Cloud TF failed: {ex}')
@@ -199,7 +201,7 @@ def _interp_anchors(t, anchors):
     return np.clip(c0 + (c1 - c0) * t_seg[:, np.newaxis], 0, 255).astype(np.uint8)
 
 
-def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, world_rot_angle=0.0):
+def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, output_path, world_rot_angle=0.0):
     try:
         u_min = meta['u_min']
         v_min = meta['v_min']
@@ -285,7 +287,7 @@ def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, world_rot_angle=0.0)
                      fill=(200, 200, 200))
 
         final_res = float(gs / IMAGE_RES_MUL)
-        img.save(os.path.join(self._output_dir, self._map_image))
+        img.save(output_path)
 
         return final_res, img.width, img.height
 
@@ -301,10 +303,14 @@ class ContinuousPointCloudMapper(Node):
 
         p = cfg['paths']
         t = cfg['ros2']['topics']
-        self._output_dir  = os.path.expanduser(p['map_dir'])
+        raw_map_dir = os.path.expanduser(p['map_dir'])
+        if not os.path.isabs(raw_map_dir):
+            raw_map_dir = os.path.join(current_dir, raw_map_dir)
+        self._output_dir  = os.path.normpath(raw_map_dir)
         self._map_image   = p.get('map_image',  'map_latest.png')
         self._map_state   = p.get('map_state',  'map_state.json')
         os.makedirs(self._output_dir, exist_ok=True)
+        print(f'[Mapper] Output dir: {self._output_dir}')
 
         self._pose_lock    = threading.Lock()
         self._current_pose = None
@@ -316,6 +322,7 @@ class ContinuousPointCloudMapper(Node):
         self.map_version       = 0
         self._best_angle       = None
         self._map_params       = None
+        self._use_aligned      = False   # True when entire_map is empty → fall back to aligned_points
 
         self.tf_buffer   = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -331,10 +338,26 @@ class ContinuousPointCloudMapper(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=10)
 
-        self.pc_sub   = self.create_subscription(
-            PointCloud2, t['entire_map'],  self.pc_callback,   map_qos)
-        self.traj_sub = self.create_subscription(
-            Path,        t['trajectory'],  self.traj_callback, odom_qos)
+        curr_pose_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1)
+
+        aligned_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10)
+
+        self.pc_sub        = self.create_subscription(
+            PointCloud2,  t['entire_map'],     self.pc_callback,        map_qos)
+        self.aligned_sub   = self.create_subscription(
+            PointCloud2,  t['aligned_points'], self.aligned_callback,   aligned_qos)
+        self.traj_sub      = self.create_subscription(
+            Path,         t['trajectory'],  self.traj_callback,      odom_qos)
+        self.curr_pose_sub = self.create_subscription(
+            PoseStamped,  t['pose'],        self.curr_pose_callback, curr_pose_qos)
 
         self._status_timer = self.create_timer(5.0,  self._print_status)
         self._params_timer = self.create_timer(0.2,  self._write_map_params)
@@ -348,7 +371,8 @@ class ContinuousPointCloudMapper(Node):
         if self.latest_pose is None:
             print('[Mapper] Waiting for /localized_pose ...')
         else:
-            print('[Mapper] Waiting for /glim_ros/entire_map ...')
+            src = 'aligned_points (fallback)' if self._use_aligned else 'entire_map'
+            print(f'[Mapper] Waiting for /glim_ros/{src} ...')
 
     def _write_map_params(self):
         """Write map_state.json at 5 Hz so autonomous_mode.py and server stay in sync."""
@@ -369,23 +393,21 @@ class ContinuousPointCloudMapper(Node):
 
     def traj_callback(self, msg: Path):
         """Receive full trajectory from /glim_ros/localized_trajectory (1 Hz).
-        Poses are already in map frame — no TF needed."""
+        Poses are already in map frame — only update path_positions for drawing."""
         if not msg.poses:
             return
+        self.path_positions = np.array([[p.pose.position.x,
+                                         p.pose.position.y,
+                                         p.pose.position.z] for p in msg.poses], dtype=np.float64)
 
-        # Extract XY positions directly (already in map frame)
-        pts = np.array([[p.pose.position.x,
-                         p.pose.position.y,
-                         p.pose.position.z] for p in msg.poses], dtype=np.float64)
-        self.path_positions = pts
-
-        # Latest pose = last element in path
-        last = msg.poses[-1]
-        self.latest_pose       = last.pose
-        self.latest_pose_frame = last.header.frame_id or msg.header.frame_id or TARGET_FRAME
+    def curr_pose_callback(self, msg: PoseStamped):
+        """Receive current robot pose from /glim_ros/localized_curr_pose (10 Hz).
+        Used for robot drawing and current pose tracking."""
+        self.latest_pose       = msg.pose
+        self.latest_pose_frame = msg.header.frame_id or TARGET_FRAME
 
         yaw = extract_yaw_in_map(self.latest_pose, self.latest_pose_frame, self.tf_buffer)
-        pos = last.pose.position
+        pos = msg.pose.position
         with self._pose_lock:
             self._current_pose = {
                 'x': float(pos.x), 'y': float(pos.y),
@@ -394,16 +416,37 @@ class ContinuousPointCloudMapper(Node):
 
 
     def pc_callback(self, msg: PointCloud2):
+        pts = transform_cloud_to_map(msg, self.tf_buffer, self.get_logger())
+
+        if pts is None or pts.size == 0:
+            if not self._use_aligned:
+                self._use_aligned = True
+                print('[Mapper] entire_map has no points — switching to aligned_points fallback')
+            return
+
+        # entire_map has real data; make sure fallback is off
+        if self._use_aligned:
+            self._use_aligned = False
+            print('[Mapper] entire_map restored — disabling aligned_points fallback')
+
+        self._process_cloud(pts)
+
+    def aligned_callback(self, msg: PointCloud2):
+        if not self._use_aligned:
+            return
+        pts = transform_cloud_to_map(msg, self.tf_buffer, self.get_logger())
+        if pts is None or pts.size == 0:
+            return
+        self._process_cloud(pts)
+
+    def _process_cloud(self, pts: np.ndarray):
         now = self.get_clock().now()
         if self.last_map_time is not None:
             if (now - self.last_map_time).nanoseconds / 1e9 < MAP_UPDATE_RATE:
                 return
-        if len(self.path_positions) < 1 or self.latest_pose is None:
+        if self.latest_pose is None:
             return
 
-        pts = transform_cloud_to_map(msg, self.tf_buffer, self.get_logger())
-        if pts is None or pts.size == 0:
-            return
         pts = pts[np.isfinite(pts).all(axis=1)]
         if pts.size == 0:
             return
@@ -447,11 +490,12 @@ class ContinuousPointCloudMapper(Node):
             'grid_width': grid_w, 'grid_height': grid_h,
         }
         final_res, _, _ = render_and_save(
-            grid, z_rel, meta, path_r, robot_yaw_rotated, world_rot_angle=theta)
+            grid, z_rel, meta, path_r, robot_yaw_rotated,
+            os.path.join(self._output_dir, self._map_image),
+            world_rot_angle=theta)
         if final_res is None:
             return
 
-        # Update map_params — written to disk at 5 Hz by _write_map_params timer
         self._map_params = {
             'rot_angle':  float(theta),
             'origin_x':   u_min,
@@ -463,18 +507,24 @@ class ContinuousPointCloudMapper(Node):
 
         self.last_map_time = now
         self.map_version  += 1
+        if self.map_version == 1:
+            print(f'[Mapper] Saving map to: {os.path.join(self._output_dir, self._map_image)}')
         n_obs  = int((grid == 1).sum())
         n_free = int((grid == 0).sum())
+        src_label = 'aligned' if self._use_aligned else 'entire'
         print(f'[Map #{self.map_version}] {grid_w}x{grid_h}  '
               f'free={n_free}  obs={n_obs}  '
               f'res={final_res:.3f}m/px  yaw={np.degrees(robot_yaw):.1f}deg  '
-              f'rot={np.degrees(theta):.0f}deg')
+              f'rot={np.degrees(theta):.0f}deg  src={src_label}')
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default='~/farm_config.yaml')
+    
+    default_cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../config/farm_config.yaml")
+    
+    parser.add_argument('--config', default=default_cfg)
     args, _ = parser.parse_known_args()
     with open(os.path.expanduser(args.config)) as f:
         cfg = yaml.safe_load(f)

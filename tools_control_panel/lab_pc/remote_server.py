@@ -72,12 +72,11 @@ class RemoteServer:
         def serve_css():
             return send_file(os.path.join(web_dir, "styles.css"), mimetype="text/css")
 
-        @self.app.route("/map_latest.png")
-        def serve_map():
-            fname = self.cfg["paths"].get("map_image", "map_latest.png")
-            path  = os.path.join(self.cfg["paths"]["map_dir"], fname)
+        @self.app.route("/saved_map.png")
+        def serve_saved_map():
+            path = os.path.join(self._monitor._saved_map_dir, "saved_map.png")
             if not os.path.exists(path):
-                return ("Map not found", 404)
+                return ("No saved map yet", 404)
             return send_file(path, mimetype="image/png", max_age=0, conditional=False)
 
         @self.app.route("/config", methods=["GET", "POST"])
@@ -218,6 +217,33 @@ class RemoteServer:
         @sio.on("pointcloud", namespace="/internet")
         def inet_pointcloud(data):
             sio.emit("pointcloud_update", data, namespace="/")
+
+        @sio.on("map_frame", namespace="/internet")
+        def inet_map_frame(data):
+            import base64
+            meta = data.get("meta", {})
+            # Persist to disk so the fallback path has an up-to-date saved map
+            try:
+                png_bytes = base64.b64decode(data.get("data", ""))
+                save_dir  = self._monitor._saved_map_dir
+                with open(os.path.join(save_dir, "saved_map.png"), "wb") as f:
+                    f.write(png_bytes)
+                with open(os.path.join(save_dir, "saved_map_state.json"), "w") as f:
+                    json.dump(meta, f)
+            except Exception as e:
+                log.error(f"map_frame save: {e}")
+            self._monitor.notify_jetson_map()
+            self._monitor._map_version += 1
+            sio.emit("map_updated", {
+                "version":    self._monitor._map_version,
+                "resolution": float(meta.get("resolution", 0.1)),
+                "origin_x":   float(meta.get("origin_x",  0.0)),
+                "origin_y":   float(meta.get("origin_y",  0.0)),
+                "width":      int(meta.get("img_width",   0)),
+                "height":     int(meta.get("img_height",  0)),
+                "rot_angle":  float(meta.get("rot_angle", 0.0)),
+                "image_data": data.get("data", ""),
+            }, namespace="/")
 
         # Commands from panel → Jetson via internet
         @sio.on("to_robot", namespace="/internet")

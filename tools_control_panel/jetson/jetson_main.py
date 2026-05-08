@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import os
 import signal
@@ -141,6 +142,34 @@ def main():
                 internet.send_pointcloud(pts)
 
     threading.Thread(target=pointcloud_loop, daemon=True).start()
+
+    # Map direct-push loop: sends map_latest.png via internet when quality == "high"
+    def map_watch_loop():
+        _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        raw_map_dir = os.path.expanduser(cfg["paths"]["map_dir"])
+        if not os.path.isabs(raw_map_dir):
+            raw_map_dir = os.path.join(_base, raw_map_dir)
+        map_dir    = os.path.normpath(raw_map_dir)
+        png_path   = os.path.join(map_dir, cfg["paths"].get("map_image",  "map_latest.png"))
+        state_path = os.path.join(map_dir, cfg["paths"].get("map_state",  "map_state.json"))
+        interval   = cfg.get("map", {}).get("update_interval", 1.0)
+        last_mtime = 0.0
+        while True:
+            time.sleep(interval)
+            if not internet.connected or internet.quality != "high":
+                continue
+            try:
+                mtime = os.path.getmtime(png_path)
+                if mtime <= last_mtime:
+                    continue
+                last_mtime = mtime
+                with open(state_path) as f:
+                    meta = json.load(f)
+                internet.send_map(png_path, meta)
+            except Exception:
+                pass
+
+    threading.Thread(target=map_watch_loop, daemon=True).start()
 
     # ZED cameras via recorder
     recorder = None

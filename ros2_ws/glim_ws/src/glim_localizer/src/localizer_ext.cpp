@@ -230,26 +230,29 @@ private:
 
     // ── No-localization (new-mapping) mode ────────────────────────────────
     if (!localization_mode_) {
-      // Store GLIM-frame pose in last_pose_msg_ — 5Hz timer will publish it
       const double s = submap->frames.empty() ? 0.0
           : submap->frames[submap->frames.size() / 2]->stamp;
-      if (s > 0.0) {
-        geometry_msgs::msg::PoseStamped msg;
-        msg.header.stamp    = rclcpp::Time(static_cast<uint64_t>(s * 1e9));
-        msg.header.frame_id = map_frame_;
-        const Eigen::Quaterniond q(submap->T_world_origin.rotation());
-        const auto& t = submap->T_world_origin.translation();
-        msg.pose.position.x    = t.x(); msg.pose.position.y    = t.y();
-        msg.pose.position.z    = t.z();
-        msg.pose.orientation.x = q.x(); msg.pose.orientation.y = q.y();
-        msg.pose.orientation.z = q.z(); msg.pose.orientation.w = q.w();
+      
+      geometry_msgs::msg::PoseStamped msg;
+      msg.header.stamp    = (s > 0.0)
+          ? rclcpp::Time(static_cast<uint64_t>(s * 1e9))
+          : rclcpp::Clock().now();
+      msg.header.frame_id = map_frame_;
+      const Eigen::Quaterniond q(submap->T_world_origin.rotation());
+      const auto& t = submap->T_world_origin.translation();
+      msg.pose.position.x    = t.x(); msg.pose.position.y    = t.y();
+      msg.pose.position.z    = t.z();
+      msg.pose.orientation.x = q.x(); msg.pose.orientation.y = q.y();
+      msg.pose.orientation.z = q.z(); msg.pose.orientation.w = q.w();
+      {
         std::lock_guard<std::mutex> lk(last_pose_mutex_);
         last_pose_msg_ = msg;
         has_last_pose_ = true;
-        // Append to trajectory
+      }
+      {
         std::lock_guard<std::mutex> tlk(traj_mutex_);
         trajectory_.poses.push_back(msg);
-      }  // if (s > 0.0)
+      }
       // Accumulate map points for /glim_ros/entire_map
       {
         std::lock_guard<std::mutex> lk(map_pts_mutex_);
