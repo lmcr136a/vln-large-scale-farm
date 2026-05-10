@@ -122,4 +122,4 @@ monitor:
   update_interval: 1.0
 
 map:
-  update_interval: 0.5
+  update_interval: 60

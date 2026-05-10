@@ -7,7 +7,7 @@
 
 const host   = window.location.hostname;
 const socket = io(`http://${host}:8000`, {
-  transports: ['websocket', 'polling'],  // WebSocket for localhost; fallback to polling
+  transports: ['polling'],
 });
 
 // ── State ─────────────────────────────────────────────────────

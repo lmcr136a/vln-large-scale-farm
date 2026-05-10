@@ -50,7 +50,7 @@ class RemoteServer:
             ping_interval=self.cfg["server"]["ping_interval"],
             ping_timeout=self.cfg["server"]["ping_timeout"],
             max_http_buffer_size=self.cfg["server"].get("max_http_buffer_size", 10_000_000),
-            allow_upgrades=True,   # browser clients (localhost) use WebSocket; Jetson stays on polling
+            allow_upgrades=False,  # werkzeug does not support WebSocket upgrade
         )
 
         self._register_routes()
@@ -182,6 +182,23 @@ class RemoteServer:
         @sio.on("start_autonomous")
         def on_start(data):
             waypoints = data.get("waypoints", [])
+            if not waypoints:
+                # Browser pathNodes empty — load from saved mission file
+                try:
+                    with open(self._mission_file) as f:
+                        mission = json.load(f)
+                    start   = mission.get("start")
+                    wps     = mission.get("waypoints", [])
+                    is_loop = mission.get("isLoop", False)
+                    waypoints = ([start] if start else []) + wps
+                    if is_loop and start:
+                        waypoints.append(start)
+                    log.info(f"start_autonomous: loaded {len(waypoints)} waypoints from mission file")
+                except Exception as e:
+                    log.warning(f"start_autonomous: no waypoints and mission load failed: {e}")
+            if not waypoints:
+                log.warning("start_autonomous: no waypoints available, ignoring")
+                return
             self._to_robot({"cmd": "continue", "waypoints": waypoints})
 
         @sio.on("stop_autonomous")
