@@ -36,7 +36,9 @@ function initStage() {
 
   // Use DOM-level mousedown/mouseup instead of stage.on('click') —
   // Konva swallows click events on draggable stages in some versions.
-  let _downPos = null;
+  let _downPos      = null;
+  let _downOnMarker = false;   // set when mousedown lands on an existing marker
+
   stage.container().addEventListener('mousedown', e => {
     _downPos = { x: e.clientX, y: e.clientY };
   });
@@ -46,6 +48,7 @@ function initStage() {
     const dy = e.clientY - _downPos.y;
     _downPos = null;
     if (Math.sqrt(dx * dx + dy * dy) > 5) return;  // drag, not click
+    if (_downOnMarker) { _downOnMarker = false; return; }  // marker handled by Konva
     onMapClick(e);
   });
   window.addEventListener('resize', () => {
@@ -111,10 +114,6 @@ function setMode(m) {
 // ── Map click ─────────────────────────────────────────────────
 function onMapClick(e) {
   if (!currentMapMeta) return;
-
-  // Skip if cursor is over an existing marker (Konva handles removal)
-  const pointer = stage.getPointerPosition();
-  if (pointer && stage.getIntersection(pointer)) return;
 
   // Compute image-space coordinates explicitly
   const rect  = stage.container().getBoundingClientRect();
@@ -231,6 +230,7 @@ function drawMarker(x, y, type, onRemove) {
   g.hitFunc(ctx => {
     ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.closePath();
   });
+  g.on('mousedown', () => { _downOnMarker = true; });
   g.on('click',      e  => { e.cancelBubble = true; onRemove(); });
   g.on('mouseenter', () => stage.container().style.cursor = 'pointer');
   g.on('mouseleave', () => stage.container().style.cursor = 'grab');
@@ -291,7 +291,7 @@ socket.on('map_updated', (data) => {
     origin_y:   data.origin_y,
     width:      data.width,
     height:     data.height,
-    rot_angle:  data.rot_angle || 0,
+    rot_angle:  data.rot_angle ?? 0,
   };
 
   if (!mapImage) return;

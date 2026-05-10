@@ -24,6 +24,10 @@ from server_to_panel import ServerToPanel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("remote_server")
 
+# Suppress Flask/werkzeug per-request logs (Socket.IO polling is very noisy).
+# Disconnect/error events are handled via Socket.IO callbacks, not HTTP logs.
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
+
 CFG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../config/farm_config.yaml"))
 
 
@@ -224,7 +228,10 @@ class RemoteServer:
             if mtype == "telemetry":
                 self._forward_telemetry(msg["data"])
             elif mtype == "event":
-                sio.emit(msg["event"], msg.get("data", {}), namespace="/")
+                event = msg.get("event")
+                if event == "robot_pose":
+                    return  # handled exclusively via inet_pose (extrinsic-corrected)
+                sio.emit(event, msg.get("data", {}), namespace="/")
 
     # ── Internet events (Jetson direct) ───────────────────────────────────────
 
@@ -250,7 +257,10 @@ class RemoteServer:
 
         @sio.on("robot_event", namespace="/internet")
         def inet_event(data):
-            sio.emit(data["event"], data.get("data", {}), namespace="/")
+            event = data.get("event")
+            if event == "robot_pose":
+                return  # handled exclusively via inet_pose (extrinsic-corrected)
+            sio.emit(event, data.get("data", {}), namespace="/")
 
         @sio.on("rgb_frame", namespace="/internet")
         def inet_rgb(data):
