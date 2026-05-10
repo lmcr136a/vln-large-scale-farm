@@ -37,14 +37,14 @@ server:
 lidar_extrinsics:
   translation: [0.0, 0.0, 0.0]
   rotation:    [0.0, 0.0, 180.0]   # 180° yaw = LiDAR mounted facing backward
- 
 
 # ── ROS2 ──────────────────────────────────────────────────────────────────────
 ros2:
   node_name:     'jetson_agent'
   cmd_vel_topic: '/cmd_vel'
   topics:
-    pose:        '/glim_ros/localized_curr_pose'
+    raw_pose:    '/glim_ros/localized_curr_pose'  # raw GLIM output — do not use directly
+    pose:        '/corrected_pose'                 # extrinsic-corrected — use everywhere
     battery:     '/battery_state'
     lidar:       '/rslidar_points'
     zed_front:   '/zed_front/rgb/image_raw'
@@ -122,4 +122,4 @@ monitor:
   update_interval: 1.0
 
 map:
-  update_interval: 30  # s
+  update_interval: 0.5

@@ -9,7 +9,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 const host   = window.location.hostname;
-const socket = io(`http://${host}:8000`, { transports: ['polling'] });
+const socket = io(`http://${host}:8000`, { transports: ['websocket', 'polling'] });
 
 // ── State ─────────────────────────────────────────────────────
 let stage, mapLayer, dynLayer, mapImage;

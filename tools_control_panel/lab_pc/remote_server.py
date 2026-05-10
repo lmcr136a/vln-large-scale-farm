@@ -50,7 +50,7 @@ class RemoteServer:
             ping_interval=self.cfg["server"]["ping_interval"],
             ping_timeout=self.cfg["server"]["ping_timeout"],
             max_http_buffer_size=self.cfg["server"].get("max_http_buffer_size", 10_000_000),
-            allow_upgrades=False,
+            allow_upgrades=True,   # browser clients (localhost) use WebSocket; Jetson stays on polling
         )
 
         self._register_routes()
