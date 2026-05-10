@@ -39,6 +39,7 @@ class RemoteServer:
         cfg_dir = os.path.dirname(self._config_path)
         self._paths_file   = os.path.join(cfg_dir, self.cfg["paths"].get("paths_file",   "paths.json"))
         self._mission_file = os.path.join(cfg_dir, self.cfg["paths"].get("mission_file", "mission.json"))
+        self._schedule_file = os.path.join(cfg_dir, "schedule.json")
         self._path_nodes = self._load_paths()
         self._path_mode = False
 
@@ -121,6 +122,26 @@ class RemoteServer:
             if is_loop and start:
                 full_path.append(start)
             self._push_config_update({"autonomous": {"waypoints": full_path}})
+            return jsonify({"ok": True})
+
+        @self.app.route("/schedule", methods=["GET", "POST"])
+        def handle_schedule():
+            from flask import jsonify, request as req
+            if req.method == "GET":
+                try:
+                    with open(self._schedule_file) as f:
+                        return jsonify(json.load(f))
+                except FileNotFoundError:
+                    default = {"enabled": True,
+                               "sun":[],"mon":[],"tue":[],"wed":[],"thu":[],"fri":[],"sat":[]}
+                    return jsonify(default)
+            data = req.get_json(force=True)
+            try:
+                with open(self._schedule_file, "w") as f:
+                    json.dump(data, f, indent=2)
+            except Exception as e:
+                log.error(f"Schedule save error: {e}")
+                return jsonify({"ok": False})
             return jsonify({"ok": True})
 
         @self.app.route("/saved_map.png")

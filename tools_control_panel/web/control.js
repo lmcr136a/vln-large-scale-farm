@@ -12,10 +12,8 @@ const socket = io(`http://${host}:8000`, {
 
 // ── State ─────────────────────────────────────────────────────
 const keyState    = {};
-let isPathMode    = true;   // always in path mode
 let isAutoMode    = false;
 let pathNodes     = [];
-let followRobot   = false;
 let currentMapMeta = null;   // { resolution, origin_x, origin_y, width, height }
 let isFirstMap     = true;   // center stage on first map load
 let robotPose      = null;   // { x, y, yaw }
@@ -232,17 +230,6 @@ socket.on('robot_pose', (data) => {
     pathNodes.push({ worldX: data.x, worldY: data.y, reached: false });
   }
 
-  if (followRobot && currentMapMeta) {
-    const p = worldToStagePixel(data.x, data.y);
-    if (p) {
-      const sc = stage.scaleX();
-      stage.position({
-        x: stageW / 2 - p.x * sc,
-        y: stageH / 2 - p.y * sc,
-      });
-    }
-  }
-
   redrawDynLayer();
 });
 
@@ -265,7 +252,7 @@ socket.on('sysmon', (data) => {
   }
 });
 
-socket.on('auto_mode_completed', () => { if (isAutoMode) toggleAutoMode(); });
+socket.on('auto_mode_completed', () => { if (isAutoMode) runNow(); });
 
 socket.on('robot_status', (data) => {
   const div = document.getElementById('robot-status');
@@ -391,79 +378,47 @@ function redrawDynLayer() {
 // ═══════════════════════════════════════════════════════════════
 //  Auto Mode Toggle
 // ═══════════════════════════════════════════════════════════════
-function toggleAutoMode() {
-  if (pathNodes.length < 2) { alert('Please create at least 2 waypoints'); return; }
-
-  isAutoMode = !isAutoMode;
-  const button = document.getElementById('autoButton');
-
+function runNow() {
   if (isAutoMode) {
-    button.textContent = 'Stop Autonomous';
-    button.classList.add('active-auto');
-    socket.emit('start_autonomous', {
-      robot_x:   robotPose ? robotPose.x   : 0,
-      robot_y:   robotPose ? robotPose.y   : 0,
-      robot_yaw: robotPose ? robotPose.yaw : 0,
-      waypoints: pathNodes.map(n => ({ x: n.worldX, y: n.worldY })),
-    });
-  } else {
-    button.textContent = 'Start Autonomous';
-    button.classList.remove('active-auto');
+    isAutoMode = false;
+    document.getElementById('autoButton').textContent = '▶ Run Now';
+    document.getElementById('autoButton').classList.remove('active-auto');
     socket.emit('stop_autonomous');
+    return;
   }
+  isAutoMode = true;
+  document.getElementById('autoButton').textContent = '⏹ Stop';
+  document.getElementById('autoButton').classList.add('active-auto');
+  socket.emit('start_autonomous', {
+    waypoints: pathNodes.map(n => ({ x: n.worldX, y: n.worldY })),
+  });
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  Reset Map Zoom / Follow Robot Toggle
-// ═══════════════════════════════════════════════════════════════
 function resetMapZoom() {
+  if (!stage) return;
   stage.scale({ x: 1, y: 1 });
   stage.position({ x: 0, y: 0 });
   stage.batchDraw();
 }
 
-function toggleFollowRobot() {
-  followRobot = !followRobot;
-  document.getElementById('followBtn').textContent =
-    `Follow Robot: ${followRobot ? 'ON' : 'OFF'}`;
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Streaming Toggle
-// ═══════════════════════════════════════════════════════════════
-function toggleStreaming(enabled) {
-  socket.emit('toggle_streaming', { enabled });
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Recording
-// ═══════════════════════════════════════════════════════════════
 function setRecordingState(active, dirname) {
-  const statusEl   = document.getElementById('recordingStatus');
-  const inputEl    = document.getElementById('dirnameInput');
-  const dirnameEl  = document.getElementById('dirnameDisplay');
-
+  const statusEl  = document.getElementById('recordingStatus');
+  const inputEl   = document.getElementById('dirnameInput');
+  const dirnameEl = document.getElementById('dirnameDisplay');
   statusEl.textContent = active ? 'Recording' : 'Stopped';
   statusEl.classList.toggle('active', active);
-
   inputEl.style.display   = active ? 'none' : '';
-  dirnameEl.style.display = active ? ''     : 'none';
-  if (active) {
-    // Use provided dirname, or fall back to what's in the input box
-    dirnameEl.textContent = dirname || inputEl.value || '—';
-  }
-
+  dirnameEl.style.display = active ? '' : 'none';
+  if (active) dirnameEl.textContent = dirname || inputEl.value || '—';
   document.getElementById('btn-rec-start').style.display = active ? 'none' : '';
-  document.getElementById('btn-rec-stop').style.display  = active ? ''     : 'none';
+  document.getElementById('btn-rec-stop').style.display  = active ? '' : 'none';
 }
 
 function startRecording() {
   const dirname = document.getElementById('dirnameInput').value.trim();
-  if (!dirname) { alert('Please enter the dir name to save.'); return; }
-  setTimeout(() => {
-    socket.emit('start_recording', dirname);
-    setRecordingState(true, dirname);
-  }, 100);
+  if (!dirname) { alert('Please enter a directory name.'); return; }
+  socket.emit('start_recording', dirname);
+  setRecordingState(true, dirname);
 }
 
 function stopRecording() {
@@ -471,14 +426,15 @@ function stopRecording() {
   setRecordingState(false);
 }
 
-// Sync recording state on reconnect
-socket.on('recording_status', (data) => {
-  setRecordingState(data.active, data.dirname);
-});
+socket.on('recording_status', (data) => { setRecordingState(data.active, data.dirname); });
 
 function emergencyStop() {
   socket.emit('estop');
-  if (isAutoMode) { isAutoMode = false; updateAutoButton(); }
+  if (isAutoMode) {
+    isAutoMode = false;
+    const btn = document.getElementById('autoButton');
+    if (btn) { btn.textContent = '▶ Run Now'; btn.classList.remove('active-auto'); }
+  }
 }
 
 async function loadMission() {
@@ -491,31 +447,15 @@ async function loadMission() {
     pathNodes = (start ? [start, ...wps] : wps).map(w => ({
       worldX: w.x, worldY: w.y, reached: false,
     }));
-    // For display: if loop, duplicate start at end
     if (data.isLoop && pathNodes.length > 1)
       pathNodes.push({ ...pathNodes[0] });
     redrawDynLayer();
-  } catch (e) { /* no mission saved yet */ }
-}
-
-function updateSchedule() {
-  const timesRaw = document.getElementById('sched-times').value.trim();
-  const offRaw   = document.getElementById('sched-offdays').value.trim();
-  const enabled  = document.getElementById('sched-enabled').checked;
-  fetch('/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ schedule: {
-      enabled,
-      times:    timesRaw ? timesRaw.split(',').map(t => t.trim()) : [],
-      off_days: offRaw   ? offRaw.split(',').map(d => d.trim())  : [],
-    }}),
-  }).then(r => r.json()).then(() => alert('Schedule updated.'));
+  } catch {}
 }
 
 function updateAutoButton() {
   const btn = document.getElementById('autoButton');
   if (!btn) return;
-  btn.textContent = isAutoMode ? 'Stop Autonomous' : 'Start Autonomous';
+  btn.textContent = isAutoMode ? '⏹ Stop' : '▶ Run Now';
   btn.classList.toggle('active-auto', isAutoMode);
 }

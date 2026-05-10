@@ -162,7 +162,44 @@ def main():
     internet  = InternetComm(lab_url=cfg["internet"]["lab_ws_url"])
 
     proxy     = SocketIOProxy(radio, internet, uploader, telemetry)
-    auto_ctrl = AutonomousController(cmd_vel_pub, proxy, cfg)
+
+    _rosbag_proc = [None]   # mutable container for subprocess reference
+
+    def start_rec_cb(subdir: str):
+        if recorder:
+            try:
+                recorder.start_recording(subdir)
+                log.info(f"Camera recording started: {subdir}")
+            except Exception as e:
+                log.error(f"Camera recording start failed: {e}")
+        topics = list(cfg["ros2"]["topics"].values()) + [cfg["ros2"]["cmd_vel_topic"]]
+        try:
+            import subprocess, yaml as _yaml
+            with open(cfg_path) as _f:
+                _raw = _yaml.safe_load(_f)
+            _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            _data = os.path.normpath(os.path.join(_proj, _raw["paths"]["data_dir"]))
+            bag_path = os.path.join(_data, subdir, 'rosbag')
+            _rosbag_proc[0] = subprocess.Popen(
+                ['ros2', 'bag', 'record', '-o', bag_path] + list(set(topics)))
+            log.info(f"Rosbag recording started: {bag_path}")
+        except Exception as e:
+            log.error(f"Rosbag start failed: {e}")
+
+    def stop_rec_cb():
+        if recorder:
+            try:
+                recorder.stop_recording()
+            except Exception as e:
+                log.error(f"Camera recording stop failed: {e}")
+        if _rosbag_proc[0]:
+            _rosbag_proc[0].terminate()
+            _rosbag_proc[0] = None
+            log.info("Rosbag recording stopped")
+
+    auto_ctrl = AutonomousController(cmd_vel_pub, proxy, cfg,
+                                      start_recording=start_rec_cb,
+                                      stop_recording=stop_rec_cb)
     commander = Commander(cmd_vel_pub, auto_ctrl, cfg_path)
 
     def on_command(cmd):

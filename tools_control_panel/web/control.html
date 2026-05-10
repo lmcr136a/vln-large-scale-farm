@@ -2,34 +2,53 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Control + Streaming</title>
+  <title>Farm Robot Control</title>
   <script src="https://cdn.socket.io/3.1.3/socket.io.min.js"></script>
   <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
   <script src="https://unpkg.com/konva@9/konva.min.js"></script>
   <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Schedule calendar */
+    #col-schedule { min-width:220px; }
+    #upcoming-label {
+      font-size:15px; color:white; font-weight:600;
+      margin-bottom:6px; white-space:nowrap;
+    }
+    .sched-table { border-collapse:collapse; font-size:8pt; }
+    .sched-table th, .sched-table td {
+      border:1px solid rgba(255,255,255,0.15);
+      padding:2px 5px; text-align:center;
+      color:rgba(255,255,255,0.7);
+    }
+    .sched-table th { color:rgba(255,255,255,0.45); font-weight:normal; }
+    .sched-table .sched-time { color:rgba(255,255,255,0.4); font-size:7pt; }
+    .sched-table .sched-cell { cursor:pointer; }
+    .sched-table .sched-cell.active { color:#7cf; font-weight:bold; }
+    .sched-table .sched-cell:hover { background:rgba(255,255,255,0.08); }
+    /* Controls column */
+    #col-controls { min-width:140px; }
+    .run-row { display:flex; gap:6px; align-items:center; }
+  </style>
 </head>
 <body>
 
-  <!-- ── Full-screen map background ── -->
   <div id="map-konva-container"></div>
 
-  <!-- ── Top overlay panel ── -->
   <div id="top-panel">
 
-    <!-- 1. Back camera (small) -->
+    <!-- Back camera -->
     <div class="panel-col" id="col-back">
       <img id="back-rgb-image" alt="Back camera" />
     </div>
 
-    <!-- 2. Front camera (main) -->
+    <!-- Front camera -->
     <div class="panel-col" id="col-front">
       <img id="rgb-image" alt="Front camera" />
     </div>
 
-    <!-- divider -->
     <div class="col-divider"></div>
 
-    <!-- 3. System status -->
+    <!-- System status -->
     <div class="panel-col" id="col-sysmon">
       <div class="sysmon-row"><span class="sysmon-label">WiFi</span><span id="info-wifi">—</span></div>
       <div class="sysmon-row"><span class="sysmon-label">CPU</span><span id="info-cpu">—</span></div>
@@ -40,11 +59,14 @@
       <div class="sysmon-row" style="font-size:11px;color:rgba(255,255,255,0.7);"><span id="info-sensors">—</span></div>
     </div>
 
-    <!-- divider -->
     <div class="col-divider"></div>
 
-    <!-- 4. Recording -->
-    <div class="panel-col" id="col-recording">
+    <!-- Combined controls: Plan Path / Recording / Drive -->
+    <div class="panel-col" id="col-controls">
+      <a href="/path_plan.html" class="util-btn" style="text-decoration:none;">🗺 Plan Path</a>
+
+      <div style="height:10px;"></div>
+
       <div class="rec-row">
         <span class="sysmon-label">Recording</span>
         <span id="recordingStatus" class="rec-status">Stopped</span>
@@ -54,63 +76,43 @@
         <span id="dirnameDisplay" style="display:none;font-size:14px;color:rgba(255,255,255,0.85);"></span>
       </div>
       <div class="rec-row">
-        <!-- Start shown when stopped, Stop shown when recording -->
         <button id="btn-rec-start" onclick="startRecording()">Start</button>
         <button id="btn-rec-stop"  onclick="stopRecording()" style="display:none;">Stop</button>
       </div>
+
+      <div style="height:10px;"></div>
+
+      <div class="run-row">
+        <button id="autoButton" onclick="runNow()" style="padding:5px 10px;font-size:13px;">▶ Run Now</button>
+        <button onclick="emergencyStop()"
+                style="background:#cc0000;color:#fff;font-weight:bold;padding:5px 10px;font-size:13px;">🛑 E-STOP</button>
+      </div>
     </div>
 
-    <!-- divider -->
     <div class="col-divider"></div>
 
-    <!-- 5. Navigation buttons -->
-    <div class="panel-col" id="col-buttons">
-      <button onclick="resetMapZoom()" class="util-btn">Reset Zoom</button>
-      <button id="followBtn" onclick="toggleFollowRobot()" class="util-btn">Follow: OFF</button>
-      <label class="util-btn">
-        <input type="checkbox" id="streamToggle" checked onchange="toggleStreaming(this.checked)" />
-        RGB Stream
-      </label>
-      <a href="/path_plan.html" class="util-btn" style="text-decoration:none;">🗺 Plan Path</a>
-      <div style="flex:1;"></div>
-      <button id="autoButton" onclick="toggleAutoMode()">Start Autonomous</button>
-      <button onclick="emergencyStop()" style="background:#cc0000;color:#fff;font-weight:bold;margin-top:4px;">🛑 E-STOP</button>
+    <!-- Weekly schedule -->
+    <div class="panel-col" id="col-schedule">
+      <div id="upcoming-label">Loading schedule…</div>
+      <div style="margin-bottom:4px;font-size:11px;color:rgba(255,255,255,0.4);">
+        Schedule:
+        <span id="sched-enabled-lbl" onclick="toggleScheduleEnabled()"
+              style="cursor:pointer;color:#7cf;">ON</span>
+      </div>
+      <div id="weekly-calendar"></div>
     </div>
 
-    <!-- divider -->
-    <div class="col-divider"></div>
+  </div>
 
-    <!-- 6. Schedule config -->
-    <div class="panel-col" id="col-schedule" style="min-width:160px;">
-      <div class="sysmon-row">
-        <span class="sysmon-label">Schedule</span>
-        <label><input type="checkbox" id="sched-enabled" checked /> On</label>
-      </div>
-      <div class="sysmon-row">
-        <span class="sysmon-label">Times</span>
-        <input id="sched-times" type="text" placeholder="11:00,16:00" style="width:90px;" />
-      </div>
-      <div class="sysmon-row">
-        <span class="sysmon-label">Off days</span>
-        <input id="sched-offdays" type="text" placeholder="2025-12-25" style="width:90px;" />
-      </div>
-      <button onclick="updateSchedule()" class="util-btn" style="margin-top:4px;">Apply</button>
-    </div>
-
-  </div><!-- end top-panel -->
-
-  <!-- ── Robot status overlay (bottom of map) ── -->
   <div id="robot-status"></div>
 
-  <!-- ── Keyboard hint bar ── -->
   <div id="controls">
-    <b>W/A/S/D</b>: PTZ &nbsp;|&nbsp;
-    <b>Z/X</b>: Zoom &nbsp;|&nbsp;
     <b>↑↓←→</b>: Move &nbsp;|&nbsp;
     <b>&lt;/&gt;</b>: Linear spd &nbsp;|&nbsp;
     <b>[/]</b>: Angular spd
   </div>
 
+  <script src="schedule.js"></script>
   <script src="control.js"></script>
 </body>
 </html>
