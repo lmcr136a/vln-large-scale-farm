@@ -258,6 +258,9 @@ def main():
     corrected_pose_pub = base_node.create_publisher(
         _PS, corrected_pose_topic, 10)
 
+    _pose_send_state = {"last": 0.0}
+    POSE_INTERNET_HZ = 5.0
+
     def pose_corrector_cb(msg: _PS):
         p, q = msg.pose.position, msg.pose.orientation
         pos_c, q_c = apply_extrinsic(
@@ -273,9 +276,11 @@ def main():
             out.pose.orientation.z, out.pose.orientation.w = q_c
         corrected_pose_pub.publish(out)
 
-        # Internet push: send raw GLIM yaw so lab PC applies the extrinsic once.
-        # Position correction is negligible (zero translation in typical setup).
-        if internet.connected:
+        # Internet push capped at POSE_INTERNET_HZ to avoid polling packet overflow.
+        # Lab PC applies the extrinsic yaw offset before forwarding to browser.
+        now_s = time.time()
+        if internet.connected and (now_s - _pose_send_state["last"]) >= 1.0 / POSE_INTERNET_HZ:
+            _pose_send_state["last"] = now_s
             raw_yaw = _math.atan2(
                 2.0 * (q.w * q.z + q.x * q.y),
                 1.0 - 2.0 * (q.y ** 2 + q.z ** 2),
