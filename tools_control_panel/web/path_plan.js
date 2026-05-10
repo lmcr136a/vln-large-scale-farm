@@ -9,11 +9,13 @@ const socket = io(`http://${host}:8000`, { transports: ['polling'] });
 
 let stage, mapLayer, dynLayer, mapImage;
 let currentMapMeta = null;
-let startPoint     = null;   // { x, y } world coords
-let waypoints      = [];     // [{ x, y }, ...]
+let startPoint     = null;
+let waypoints      = [];
 let mode           = 'waypoint';
 let robotPose      = null;
 let isFirstMap     = true;
+let _downOnMarker  = false;   // module-level: accessible by both initStage and drawMarker
+let _downPos       = null;
 
 const ZOOM_MIN = 0.1, ZOOM_MAX = 20, ZOOM_STEP = 1.15;
 
@@ -36,9 +38,6 @@ function initStage() {
 
   // Use DOM-level mousedown/mouseup instead of stage.on('click') —
   // Konva swallows click events on draggable stages in some versions.
-  let _downPos      = null;
-  let _downOnMarker = false;   // set when mousedown lands on an existing marker
-
   stage.container().addEventListener('mousedown', e => {
     _downPos = { x: e.clientX, y: e.clientY };
   });
@@ -47,8 +46,8 @@ function initStage() {
     const dx = e.clientX - _downPos.x;
     const dy = e.clientY - _downPos.y;
     _downPos = null;
-    if (Math.sqrt(dx * dx + dy * dy) > 5) return;  // drag, not click
-    if (_downOnMarker) { _downOnMarker = false; return; }  // marker handled by Konva
+    if (Math.sqrt(dx * dx + dy * dy) > 5) return;
+    if (_downOnMarker) { _downOnMarker = false; return; }
     onMapClick(e);
   });
   window.addEventListener('resize', () => {
@@ -113,9 +112,8 @@ function setMode(m) {
 
 // ── Map click ─────────────────────────────────────────────────
 function onMapClick(e) {
-  if (!currentMapMeta) return;
+  if (!currentMapMeta) { console.warn('[path] click ignored: no map meta'); return; }
 
-  // Compute image-space coordinates explicitly
   const rect  = stage.container().getBoundingClientRect();
   const scale = stage.scaleX();
   const sPos  = stage.position();
@@ -125,7 +123,9 @@ function onMapClick(e) {
   };
 
   const world = pixelToWorld(pos.x, pos.y);
-  if (!world) return;
+  if (!world) { console.warn('[path] pixelToWorld returned null'); return; }
+
+  console.log(`[path] click mode=${mode} pixel=(${pos.x.toFixed(1)},${pos.y.toFixed(1)}) world=(${world.x.toFixed(2)},${world.y.toFixed(2)})`);
 
   if (mode === 'start') {
     startPoint = world;
@@ -151,10 +151,11 @@ function clearAll() {
 
 // ── Draw ──────────────────────────────────────────────────────
 function redraw() {
-  if (!dynLayer) return;
+  if (!dynLayer) { console.warn('[path] redraw: dynLayer null'); return; }
   dynLayer.destroyChildren();
 
   const allPoints = startPoint ? [startPoint, ...waypoints] : waypoints;
+  console.log(`[path] redraw start=${!!startPoint} waypoints=${waypoints.length}`);
 
   // Path line (no loop-back)
   if (allPoints.length > 1) {
@@ -207,6 +208,7 @@ function redraw() {
   }
 
   dynLayer.draw();
+  console.log(`[path] dynLayer children: ${dynLayer.children ? dynLayer.children.length : 'N/A'}`);
 }
 
 function drawMarker(x, y, type, onRemove) {
@@ -227,9 +229,15 @@ function drawMarker(x, y, type, onRemove) {
     }));
   }
 
-  g.hitFunc(ctx => {
-    ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.closePath();
-  });
+  // hitFunc is only available on Konva.Shape, not Group.
+  // Use a transparent large circle as hit area instead.
+  g.add(new Konva.Circle({
+    radius: 12,
+    fill: 'transparent',
+    stroke: null,
+    opacity: 0,
+  }));
+
   g.on('mousedown', () => { _downOnMarker = true; });
   g.on('click',      e  => { e.cancelBubble = true; onRemove(); });
   g.on('mouseenter', () => stage.container().style.cursor = 'pointer');

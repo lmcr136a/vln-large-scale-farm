@@ -218,7 +218,7 @@ def main():
         while not shutdown.is_set():
             if shutdown.wait(timeout=interval):
                 break
-            if not internet.connected:
+            if not internet.connected or internet.quality == "low":
                 continue
             try:
                 mtime = os.path.getmtime(png_path)
