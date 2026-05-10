@@ -15,11 +15,9 @@ Architecture:
                                              cmd_vel publisher
 """
 import os
+import math
 import time
 import threading
-import json
-
-import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
@@ -30,7 +28,7 @@ from . import autonomous_driving
 
 def _quat_to_yaw(x, y, z, w):
     """Extract yaw (Z-axis rotation) from a unit quaternion."""
-    return float(np.arctan2(2.0*(w*z + x*y), 1.0 - 2.0*(y**2 + z**2)))
+    return math.atan2(2.0 * (w*z + x*y), 1.0 - 2.0 * (y**2 + z**2))
 
 
 class AutonomousController(Node):
@@ -55,14 +53,7 @@ class AutonomousController(Node):
         self._stop_event = threading.Event()
         self._thread     = None
 
-        # Map rotation angle (PCA from save_map_glim.py) — cached from map_state.json
-        self._rot_angle       = 0.0
-        self._rot_angle_mtime = 0.0
-        map_dir = os.path.expanduser(self.config['paths']['map_dir'])
-        map_state_file = self.config['paths'].get('map_state', 'map_state.json')
-        self._map_yaml_path   = os.path.join(map_dir, map_state_file)
-
-        pose_topic = self.config['ros2']['topics']['pose']
+        pose_topic = self.config['ros2']['topics'].get('pose', '/corrected_pose')
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
@@ -80,42 +71,13 @@ class AutonomousController(Node):
         pos = msg.pose.position
         q   = msg.pose.orientation
         yaw = _quat_to_yaw(q.x, q.y, q.z, q.w)
-
-        # Refresh rot_angle from map_state.json only when the file changes
-        try:
-            mtime = os.path.getmtime(self._map_yaml_path)
-            if mtime > self._rot_angle_mtime:
-                with open(self._map_yaml_path, 'r') as f:
-                    meta = json.load(f)
-                self._rot_angle       = float(meta.get('rot_angle', 0.0))
-                self._rot_angle_mtime = mtime
-        except Exception:
-            pass
-
-        # Apply map rotation — SAME transform as frontend worldToStagePixel
-        theta = self._rot_angle
-        c, s  = np.cos(theta), np.sin(theta)
-        rx    =  c * float(pos.x) + s * float(pos.y)
-        ry    = -s * float(pos.x) + c * float(pos.y)
-        ryaw  = yaw - theta
-
-        # _current_pose in rotated frame — waypoints from JS are also in rotated frame
-        # so autonomous_driving.py compares apples-to-apples
         with self._pose_lock:
             self._current_pose = {
-                'x':   rx,
-                'y':   ry,
+                'x':   float(pos.x),
+                'y':   float(pos.y),
                 'z':   float(pos.z),
-                'yaw': ryaw,
+                'yaw': yaw,
             }
-
-        # Emit same rotated coords to frontend
-        self.socketio.emit('robot_pose', {
-            'x':   rx,
-            'y':   ry,
-            'z':   float(pos.z),
-            'yaw': ryaw,
-        }, namespace='/')
 
     def get_current_pose(self):
         """Thread-safe. Returns {x, y, z, yaw} in map frame, or None."""

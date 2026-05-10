@@ -33,7 +33,21 @@ function initStage() {
   mapLayer.add(mapImage);
 
   stage.container().addEventListener('wheel', onWheel, { passive: false });
-  stage.on('click', onMapClick);
+
+  // Use DOM-level mousedown/mouseup instead of stage.on('click') —
+  // Konva swallows click events on draggable stages in some versions.
+  let _downPos = null;
+  stage.container().addEventListener('mousedown', e => {
+    _downPos = { x: e.clientX, y: e.clientY };
+  });
+  stage.container().addEventListener('mouseup', e => {
+    if (!_downPos) return;
+    const dx = e.clientX - _downPos.x;
+    const dy = e.clientY - _downPos.y;
+    _downPos = null;
+    if (Math.sqrt(dx * dx + dy * dy) > 5) return;  // drag, not click
+    onMapClick(e);
+  });
   window.addEventListener('resize', () => {
     stage.width(container.clientWidth);
     stage.height(container.clientHeight);
@@ -97,14 +111,26 @@ function setMode(m) {
 // ── Map click ─────────────────────────────────────────────────
 function onMapClick(e) {
   if (!currentMapMeta) return;
-  if (stage.isDragging()) return;
-  const pos   = stage.getRelativePointerPosition();
+
+  // Skip if cursor is over an existing marker (Konva handles removal)
+  const pointer = stage.getPointerPosition();
+  if (pointer && stage.getIntersection(pointer)) return;
+
+  // Compute image-space coordinates explicitly
+  const rect  = stage.container().getBoundingClientRect();
+  const scale = stage.scaleX();
+  const sPos  = stage.position();
+  const pos   = {
+    x: (e.clientX - rect.left  - sPos.x) / scale,
+    y: (e.clientY - rect.top   - sPos.y) / scale,
+  };
+
   const world = pixelToWorld(pos.x, pos.y);
   if (!world) return;
 
   if (mode === 'start') {
     startPoint = world;
-    setMode('waypoint');   // auto-switch after placing start
+    setMode('waypoint');
   } else {
     waypoints.push(world);
   }
@@ -131,7 +157,7 @@ function redraw() {
 
   const allPoints = startPoint ? [startPoint, ...waypoints] : waypoints;
 
-  // Path line
+  // Path line (no loop-back)
   if (allPoints.length > 1) {
     const pts = allPoints.flatMap(p => {
       const px = worldToPixel(p.x, p.y);
@@ -140,25 +166,26 @@ function redraw() {
     if (pts.length >= 4) {
       dynLayer.add(new Konva.Line({
         points: pts,
-        stroke: 'rgba(0,200,200,0.5)',
-        strokeWidth: 2,
-        dash: [8, 4],
+        stroke: 'rgba(200,200,200,0.5)',
+        strokeWidth: 1,
+        dash: [6, 3],
         listening: false,
       }));
     }
   }
 
-  // Start point
+  // Start point — white square
   if (startPoint) {
     const p = worldToPixel(startPoint.x, startPoint.y);
-    if (p) drawPoint(p.x, p.y, '#00ff88', 'S', () => { startPoint = null; redraw(); });
+    if (p) drawMarker(p.x, p.y, 'start', () => { startPoint = null; redraw(); });
   }
 
-  // Waypoints
+  // Waypoints — last = blue square (end), others = gray circle
   waypoints.forEach((wp, i) => {
     const p = worldToPixel(wp.x, wp.y);
     if (!p) return;
-    drawPoint(p.x, p.y, '#00ccff', String(i + 1), () => { waypoints.splice(i, 1); redraw(); });
+    const isEnd = i === waypoints.length - 1;
+    drawMarker(p.x, p.y, isEnd ? 'end' : 'mid', () => { waypoints.splice(i, 1); redraw(); });
   });
 
   // Robot pose
@@ -180,27 +207,31 @@ function redraw() {
     }
   }
 
-  dynLayer.batchDraw();
+  dynLayer.draw();
 }
 
-function drawPoint(x, y, color, label, onRemove) {
-  const R = 10;
+function drawMarker(x, y, type, onRemove) {
   const g = new Konva.Group({ x, y });
-  g.add(new Konva.Circle({
-    radius: R, fill: color,
-    stroke: 'white', strokeWidth: 1.5,
-  }));
-  g.add(new Konva.Text({
-    text: label, fontSize: label.length > 1 ? 8 : 10,
-    fill: 'black', fontStyle: 'bold',
-    align: 'center', verticalAlign: 'middle',
-    x: -R, y: -R, width: R * 2, height: R * 2,
-  }));
-  // Larger hit area
+
+  if (type === 'start' || type === 'end') {
+    const S = 10;
+    g.add(new Konva.Rect({
+      x: -S / 2, y: -S / 2, width: S, height: S,
+      fill: type === 'start' ? 'white' : '#4499ff',
+      stroke: 'black', strokeWidth: 1,
+    }));
+  } else {
+    g.add(new Konva.Circle({
+      radius: 5,
+      fill: 'rgb(200,200,200)',
+      stroke: 'black', strokeWidth: 1,
+    }));
+  }
+
   g.hitFunc(ctx => {
-    ctx.beginPath(); ctx.arc(0, 0, R + 6, 0, Math.PI * 2); ctx.closePath();
+    ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.closePath();
   });
-  g.on('click', e => { e.cancelBubble = true; onRemove(); });
+  g.on('click',      e  => { e.cancelBubble = true; onRemove(); });
   g.on('mouseenter', () => stage.container().style.cursor = 'pointer');
   g.on('mouseleave', () => stage.container().style.cursor = 'grab');
   dynLayer.add(g);
