@@ -122,13 +122,14 @@ class AutonomousController(Node):
     # ── Drive loop ─────────────────────────────────────────────────────────────
 
     def _drive_loop(self, waypoints):
-        max_laps = self.config['autonomous'].get('max_repeat_num', 1)
-        params   = self.config.get('autonomous', {})
-
-        self.socketio.emit('robot_status',
-                           {'status': f'Navigating — {len(waypoints)} waypoints'},
-                           namespace='/')
+        print(f'[drive_loop] started, {len(waypoints)} waypoints', flush=True)
         try:
+            max_laps = self.config['autonomous'].get('max_repeat_num', 1)
+            params   = self.config.get('autonomous', {})
+
+            self.socketio.emit('robot_status',
+                               {'status': f'Navigating — {len(waypoints)} waypoints'},
+                               namespace='/')
             for lap in range(max_laps):
                 if self._stop_event.is_set():
                     break
@@ -173,15 +174,17 @@ class AutonomousController(Node):
                         time.sleep(min(PUB_PERIOD, max(0.0, deadline - time.time())))
 
         except Exception as e:
-            self.get_logger().error(f'Drive loop error: {e}')
             import traceback
+            print(f'[drive_loop] EXCEPTION: {e}', flush=True)
             traceback.print_exc()
+            self.get_logger().error(f'Drive loop error: {e}')
         finally:
             self._zero_vel()
             self._active = False
             self.socketio.emit('auto_mode_completed', namespace='/')
             self.socketio.emit('robot_status', {'status': ''}, namespace='/')
             self.get_logger().info('Finished')
+            print('[drive_loop] finished', flush=True)
 
     def _zero_vel(self):
         self.pub.publish(Twist())
