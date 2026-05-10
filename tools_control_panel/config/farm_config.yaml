@@ -30,6 +30,15 @@ server:
   ping_timeout:         20
   max_http_buffer_size: 100000000
 
+# ── Sensor Extrinsics ────────────────────────────────────────────────────────
+# Transform: LiDAR frame → robot base_link frame
+# translation: [x, y, z]        metres
+# rotation:    [roll, pitch, yaw]  degrees
+lidar_extrinsics:
+  translation: [0.0, 0.0, 0.0]
+  rotation:    [0.0, 0.0, 180.0]   # 180° yaw = LiDAR mounted facing backward
+ 
+ 
 # ── ROS2 ──────────────────────────────────────────────────────────────────────
 ros2:
   node_name:     'jetson_agent'
