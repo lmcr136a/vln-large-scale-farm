@@ -125,4 +125,7 @@ function _updateCountdown() {
   el.textContent = `Upcoming: ${next.label}  (${dd}:${hh}:${mm}:${ss})`;
 }
 
-document.addEventListener('DOMContentLoaded', loadSchedule);
+// Called from control.js socket.on('connect') and on page load
+function initSchedule() {
+  loadSchedule();
+}

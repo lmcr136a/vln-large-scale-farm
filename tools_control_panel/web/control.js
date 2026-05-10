@@ -127,6 +127,7 @@ function onMapClick(e) {
 socket.on('connect', () => {
   console.log('Socket.IO connected:', socket.id);
   loadMission();
+  if (typeof initSchedule === 'function') initSchedule();
 });
 socket.on('disconnect', () => console.log('Socket.IO disconnected'));
 socket.on('connect_error', (e) => console.error('Connection error:', e));

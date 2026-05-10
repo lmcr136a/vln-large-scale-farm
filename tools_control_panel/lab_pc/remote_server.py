@@ -93,6 +93,12 @@ class RemoteServer:
             r.headers["Cache-Control"] = "no-store"
             return r
 
+        @self.app.route("/schedule.js")
+        def serve_schedule_js():
+            r = send_file(os.path.join(web_dir, "schedule.js"), mimetype="application/javascript")
+            r.headers["Cache-Control"] = "no-store"
+            return r
+
         @self.app.route("/mission", methods=["GET", "POST"])
         def handle_mission():
             from flask import jsonify, request as req
