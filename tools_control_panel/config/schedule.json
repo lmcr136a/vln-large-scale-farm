@@ -1,10 +1,10 @@
 {
   "enabled": true,
-  "sun": [],
-  "mon": [],
-  "tue": [],
-  "wed": [],
-  "thu": [],
-  "fri": [],
-  "sat": []
+  "sun": ["5am", "11am", "5pm", "11pm"],
+  "mon": ["5am", "7pm"],
+  "tue": ["5am", "11am", "5pm", "11pm"],
+  "wed": ["5am", "11am", "5pm", "11pm"],
+  "thu": ["5am", "11am", "5pm", "11pm"],
+  "fri": ["5am", "11am", "5pm", "11pm"],
+  "sat": ["5am", "11am", "5pm", "11pm"]
 }
