@@ -130,6 +130,7 @@ class AutonomousController(Node):
             self.socketio.emit('robot_status',
                                {'status': f'Navigating — {len(waypoints)} waypoints'},
                                namespace='/')
+
             for lap in range(max_laps):
                 if self._stop_event.is_set():
                     break

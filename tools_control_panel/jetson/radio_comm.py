@@ -19,7 +19,8 @@ class RadioComm:
         self._ser = serial.Serial(
             port=port, baudrate=baud,
             bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE, rtscts=True, timeout=1,
+            stopbits=serial.STOPBITS_ONE, rtscts=True,
+            timeout=1, write_timeout=1.0,
         )
         self._on_command = on_command
         self._tx_lock = threading.Lock()
