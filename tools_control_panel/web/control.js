@@ -174,7 +174,7 @@ socket.on('map_updated', (data) => {
     origin_y:   data.origin_y,
     width:      data.width,
     height:     data.height,
-    rot_angle:  data.rot_angle || 0,
+    rot_angle:  data.rot_angle ?? 0,
   };
 
   if (!mapImage) {
@@ -221,15 +221,17 @@ socket.on('map_updated', (data) => {
 
 // ── Robot Pose (10Hz) ─────────────────────────────────────────
 socket.on('robot_pose', (data) => {
-  const isFirst = robotPose === null;
-  robotPose = data;   // { x, y, yaw }
+  const yawDeg = data.yaw != null ? (data.yaw * 180 / Math.PI).toFixed(1) : 'N/A';
+  const rotDeg = currentMapMeta ? (currentMapMeta.rot_angle * 180 / Math.PI).toFixed(1) : 'N/A';
+  console.log(`[robot_pose] x=${data.x?.toFixed(2)} y=${data.y?.toFixed(2)} yaw=${yawDeg}deg  rot_angle=${rotDeg}deg`);
 
-  // On first pose received, auto-add robot position as first waypoint
+  const isFirst = robotPose === null;
+  robotPose = data;
+
   if (isFirst && currentMapMeta && pathNodes.length === 0) {
     pathNodes.push({ worldX: data.x, worldY: data.y, reached: false });
   }
 
-  // Follow robot mode: move stage so robot stays centered
   if (followRobot && currentMapMeta) {
     const p = worldToStagePixel(data.x, data.y);
     if (p) {
@@ -314,31 +316,40 @@ function redrawDynLayer() {
   if (visibleNodes.length > 1) {
     const pts = [];
     visibleNodes.forEach(n => pts.push(n.stageX, n.stageY));
-    if (visibleNodes.length > 2) pts.push(visibleNodes[0].stageX, visibleNodes[0].stageY);
-
     dynLayer.add(new Konva.Line({
       points: pts,
-      stroke: 'rgb(0,200,200)',
-      strokeWidth: 2,
+      stroke: 'rgba(200,200,200,0.5)',
+      strokeWidth: 1,
+      dash: [6, 3],
       listening: false,
     }));
   }
 
-  // ── Waypoint dots ──────────────────────────────────────────
+  // ── Waypoint markers ───────────────────────────────────────
   visibleNodes.forEach((n, i) => {
-    let fill = 'rgb(0,100,150)';
-    if (n.reached)    fill = 'rgb(255,255,0)';
-    else if (i === 0) fill = 'rgb(255,0,255)';
+    const isStart = i === 0;
+    const isEnd   = i === visibleNodes.length - 1;
 
-    const circle = new Konva.Circle({
-      x: n.stageX, y: n.stageY,
-      radius: 2,
-      fill,
-      stroke: null,
-      listening: false,
-    });
-
-    dynLayer.add(circle);
+    if (isStart || isEnd) {
+      // Square: start=white, end=blue
+      const S = 10;
+      dynLayer.add(new Konva.Rect({
+        x: n.stageX - S / 2, y: n.stageY - S / 2,
+        width: S, height: S,
+        fill: isStart ? 'white' : '#4499ff',
+        stroke: 'black', strokeWidth: 1,
+        listening: false,
+      }));
+    } else {
+      // Intermediate destination: small gray circle
+      dynLayer.add(new Konva.Circle({
+        x: n.stageX, y: n.stageY,
+        radius: n.reached ? 5 : 4,
+        fill: n.reached ? 'rgb(255,220,0)' : 'rgb(200,200,200)',
+        stroke: 'black', strokeWidth: 1,
+        listening: false,
+      }));
+    }
   });
 
   // ── Robot icon: dot + heading line ────────────────────────
@@ -475,12 +486,14 @@ async function loadMission() {
     const r = await fetch('/mission');
     if (!r.ok) return;
     const data = await r.json();
-    pathNodes = (data.waypoints || []).map(w => ({
+    const start = data.start;
+    const wps   = data.waypoints || [];
+    pathNodes = (start ? [start, ...wps] : wps).map(w => ({
       worldX: w.x, worldY: w.y, reached: false,
     }));
-    if (data.start) {
-      pathNodes.unshift({ worldX: data.start.x, worldY: data.start.y, reached: false });
-    }
+    // For display: if loop, duplicate start at end
+    if (data.isLoop && pathNodes.length > 1)
+      pathNodes.push({ ...pathNodes[0] });
     redrawDynLayer();
   } catch (e) { /* no mission saved yet */ }
 }
