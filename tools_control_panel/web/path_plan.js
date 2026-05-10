@@ -20,6 +20,7 @@ let robotPose      = null;
 let isFirstMap     = true;
 let _downPos       = null;
 let _downOnMarker  = false;
+let _markerAction  = null;   // action queued from marker mousedown, executed on mouseup
 
 const ZOOM_MIN = 0.1, ZOOM_MAX = 20, ZOOM_STEP = 1.15;
 
@@ -45,7 +46,13 @@ function initStage() {
     const dx = e.clientX - _downPos.x, dy = e.clientY - _downPos.y;
     _downPos = null;
     if (Math.sqrt(dx*dx + dy*dy) > 5) return;
-    if (_downOnMarker) { _downOnMarker = false; return; }
+    if (_downOnMarker) {
+      _downOnMarker = false;
+      const action = _markerAction;
+      _markerAction = null;
+      if (action) action();
+      return;
+    }
     onMapClick(e);
   });
   window.addEventListener('resize', () => {
@@ -179,8 +186,7 @@ function drawMarker(x, y, type, onAction) {
   // Transparent hit area (Konva.Circle on Group child, not hitFunc)
   g.add(new Konva.Circle({ radius:14,fill:'transparent',stroke:null }));
 
-  g.on('mousedown', () => { _downOnMarker = true; });
-  g.on('click',     e  => { e.cancelBubble = true; onAction(); });
+  g.on('mousedown', () => { _downOnMarker = true; _markerAction = onAction; });
   g.on('mouseenter',() => stage.container().style.cursor = 'pointer');
   g.on('mouseleave',() => stage.container().style.cursor = 'grab');
   dynLayer.add(g);

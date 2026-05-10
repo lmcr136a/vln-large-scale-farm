@@ -273,13 +273,14 @@ def main():
             out.pose.orientation.z, out.pose.orientation.w = q_c
         corrected_pose_pub.publish(out)
 
-        # Real-time internet push (yaw extracted from corrected quaternion)
+        # Internet push: send raw GLIM yaw so lab PC applies the extrinsic once.
+        # Position correction is negligible (zero translation in typical setup).
         if internet.connected:
-            yaw = _math.atan2(
-                2.0 * (q_c[3]*q_c[2] + q_c[0]*q_c[1]),
-                1.0 - 2.0 * (q_c[1]**2 + q_c[2]**2),
+            raw_yaw = _math.atan2(
+                2.0 * (q.w * q.z + q.x * q.y),
+                1.0 - 2.0 * (q.y ** 2 + q.z ** 2),
             )
-            internet.send_pose(pos_c[0], pos_c[1], yaw)
+            internet.send_pose(p.x, p.y, raw_yaw)
 
     raw_pose_qos = QoSProfile(
         reliability=ReliabilityPolicy.BEST_EFFORT,

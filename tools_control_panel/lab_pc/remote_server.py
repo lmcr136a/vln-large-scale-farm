@@ -8,6 +8,7 @@ Data sources:
 """
 import json
 import logging
+import math
 import os
 import sys
 import threading
@@ -107,15 +108,18 @@ class RemoteServer:
             data      = req.get_json(force=True)
             start     = data.get("start")
             waypoints = data.get("waypoints", [])
+            is_loop   = data.get("isLoop", False)
             try:
                 with open(self._mission_file, "w") as f:
-                    json.dump({"start": start, "waypoints": waypoints}, f, indent=2)
-                log.info(f"Mission saved: start={start is not None} waypoints={len(waypoints)}")
+                    json.dump({"start": start, "waypoints": waypoints, "isLoop": is_loop}, f, indent=2)
+                log.info(f"Mission saved: {1 + len(waypoints)} pts, loop={is_loop}")
             except Exception as e:
                 log.error(f"Mission save error: {e}")
                 return jsonify({"ok": False})
-            # Full path sent to Jetson = [start] + waypoints
+            # Full path to Jetson: start + waypoints [+ start if loop]
             full_path = ([start] if start else []) + waypoints
+            if is_loop and start:
+                full_path.append(start)
             self._push_config_update({"autonomous": {"waypoints": full_path}})
             return jsonify({"ok": True})
 
@@ -270,7 +274,7 @@ class RemoteServer:
 
         @sio.on("pose", namespace="/internet")
         def inet_pose(data):
-            sio.emit("robot_pose", data, namespace="/")
+            sio.emit("robot_pose", self._correct_yaw(data), namespace="/")
 
         @sio.on("pointcloud", namespace="/internet")
         def inet_pointcloud(data):
@@ -309,6 +313,16 @@ class RemoteServer:
             sio.emit("command", data, namespace="/internet")
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _correct_yaw(self, data: dict) -> dict:
+        """Apply lidar extrinsic yaw offset to a raw pose dict {x, y, yaw}."""
+        ext = self.cfg.get("lidar_extrinsics", {})
+        yaw_offset = math.radians(ext.get("rotation", [0, 0, 0])[2])
+        if yaw_offset == 0.0:
+            return data
+        corrected = data["yaw"] + yaw_offset
+        corrected = (corrected + math.pi) % (2 * math.pi) - math.pi
+        return {**data, "yaw": corrected}
 
     def _send_map_to_client(self, sid: str):
         """Send the latest saved map directly to a single client (e.g. on reconnect)."""
