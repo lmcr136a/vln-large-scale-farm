@@ -117,41 +117,19 @@ function stageClickToWorld(stageX, stageY) {
   return { x: wx, y: wy };
 }
 
-// ── Map Click → Add Waypoint ──────────────────────────────────
+// ── Map Click — disabled for path editing (use /path_plan.html) ──
 function onMapClick(e) {
-  if (!currentMapMeta) return;
-  if (isAutoMode)      return;
-  if (stage.isDragging()) return;
-
-  const pos    = stage.getRelativePointerPosition();
-  const stageX = pos.x;
-  const stageY = pos.y;
-
-  const world = stageClickToWorld(stageX, stageY);
-  if (!world) return;
-
-  socket.emit('map_clicked', {
-    img_x:   Math.round(stageX),
-    img_y:   Math.round(stageY),
-    world_x: world.x,
-    world_y: world.y,
-  });
-
-  if (isPathMode) {
-    pathNodes.push({
-      stageX, stageY,
-      worldX:  world.x,
-      worldY:  world.y,
-      reached: false,
-    });
-    redrawDynLayer();
-  }
+  // Map click is intentionally disabled on the control panel.
+  // Use the Path Planner page to set start point and waypoints.
 }
 
 // ═══════════════════════════════════════════════════════════════
 //  Socket Connection
 // ═══════════════════════════════════════════════════════════════
-socket.on('connect',    () => console.log('Socket.IO connected:', socket.id));
+socket.on('connect', () => {
+  console.log('Socket.IO connected:', socket.id);
+  loadMission();
+});
 socket.on('disconnect', () => console.log('Socket.IO disconnected'));
 socket.on('connect_error', (e) => console.error('Connection error:', e));
 
@@ -238,7 +216,7 @@ socket.on('map_updated', (data) => {
     img.src = `/saved_map.png?v=${data.version}`;
   }
 
-  console.log(`[map] ${data.width}\u00d7${data.height} ${data.image_data ? '(live)' : '(saved)'}`);
+  console.log(`[map] ${data.width}\u00d7${data.height} rot=${(data.rot_angle*180/Math.PI).toFixed(1)}deg ${data.image_data ? '(live)' : '(saved)'}`);
 });
 
 // ── Robot Pose (10Hz) ─────────────────────────────────────────
@@ -354,26 +332,11 @@ function redrawDynLayer() {
 
     const circle = new Konva.Circle({
       x: n.stageX, y: n.stageY,
-      radius: 2,          // same as line strokeWidth
+      radius: 2,
       fill,
       stroke: null,
+      listening: false,
     });
-
-    // Click on waypoint → remove it (except first/starting point)
-    circle.on('click', (e) => {
-      e.cancelBubble = true;
-      if (i === 0) return;
-      pathNodes.splice(i, 1);
-      redrawDynLayer();
-    });
-    // Slightly larger hit area for easier clicking
-    circle.hitFunc((ctx) => {
-      ctx.beginPath();
-      ctx.arc(0, 0, 8, 0, Math.PI * 2, true);
-      ctx.closePath();
-    });
-    circle.on('mouseenter', () => { stage.container().style.cursor = 'pointer'; });
-    circle.on('mouseleave', () => { stage.container().style.cursor = 'grab'; });
 
     dynLayer.add(circle);
   });
@@ -507,22 +470,19 @@ function emergencyStop() {
   if (isAutoMode) { isAutoMode = false; updateAutoButton(); }
 }
 
-function savePath() {
-  if (pathNodes.length < 2) { alert('Need at least 2 waypoints to save.'); return; }
-  socket.emit('save_path');
-}
-
-socket.on('path_loaded', (data) => {
-  pathNodes = data.waypoints.map(w => ({ worldX: w.x, worldY: w.y, reached: false }));
-  redrawDynLayer();
-});
-
-socket.on('path_saved', (data) => {
-  alert(`Path saved (${data.count} waypoints). Jetson will use this on next scheduled run.`);
-});
-
-function setQuality(level) {
-  socket.emit('set_quality', { level });
+async function loadMission() {
+  try {
+    const r = await fetch('/mission');
+    if (!r.ok) return;
+    const data = await r.json();
+    pathNodes = (data.waypoints || []).map(w => ({
+      worldX: w.x, worldY: w.y, reached: false,
+    }));
+    if (data.start) {
+      pathNodes.unshift({ worldX: data.start.x, worldY: data.start.y, reached: false });
+    }
+    redrawDynLayer();
+  } catch (e) { /* no mission saved yet */ }
 }
 
 function updateSchedule() {

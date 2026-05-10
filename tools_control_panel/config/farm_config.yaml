@@ -5,6 +5,7 @@ paths:
   map_image:     'map_latest.png'
   map_state:     'map_state.json'
   paths_file:    'paths.json'
+  mission_file:  'mission.json'   # start point + waypoints from path planner
   saved_map_dir: 'lab_pc/maps'     # lab PC only — cached copy of last received map
 
 # ── Radio (Jetson <-> Local PC serial) ────────────────────────────────────────
@@ -42,7 +43,6 @@ ros2:
     imu:         '/xsens/imu/data'
     entire_map:  '/glim_ros/entire_map'
     trajectory:  '/glim_ros/localized_trajectory'
-    aligned_points:  '/glim_ros/aligned_points'
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. SCHEDULE CONFIG

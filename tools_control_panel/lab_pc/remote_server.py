@@ -32,7 +32,8 @@ class RemoteServer:
         self.cfg = load_config(config_path)
         self._config_path = os.path.expanduser(config_path)
         cfg_dir = os.path.dirname(self._config_path)
-        self._paths_file = os.path.join(cfg_dir, self.cfg["paths"].get("paths_file", "paths.json"))
+        self._paths_file   = os.path.join(cfg_dir, self.cfg["paths"].get("paths_file",   "paths.json"))
+        self._mission_file = os.path.join(cfg_dir, self.cfg["paths"].get("mission_file", "mission.json"))
         self._path_nodes = self._load_paths()
         self._path_mode = False
 
@@ -66,11 +67,53 @@ class RemoteServer:
 
         @self.app.route("/control.js")
         def serve_js():
-            return send_file(os.path.join(web_dir, "control.js"), mimetype="application/javascript")
+            r = send_file(os.path.join(web_dir, "control.js"), mimetype="application/javascript")
+            r.headers["Cache-Control"] = "no-store"
+            return r
 
         @self.app.route("/styles.css")
         def serve_css():
-            return send_file(os.path.join(web_dir, "styles.css"), mimetype="text/css")
+            r = send_file(os.path.join(web_dir, "styles.css"), mimetype="text/css")
+            r.headers["Cache-Control"] = "no-store"
+            return r
+
+        @self.app.route("/path_plan.html")
+        def serve_path_plan():
+            return send_file(os.path.join(web_dir, "path_plan.html"))
+
+        @self.app.route("/path_plan.js")
+        def serve_path_plan_js():
+            r = send_file(os.path.join(web_dir, "path_plan.js"), mimetype="application/javascript")
+            r.headers["Cache-Control"] = "no-store"
+            return r
+
+        @self.app.route("/mission", methods=["GET", "POST"])
+        def handle_mission():
+            from flask import jsonify, request as req
+            if req.method == "GET":
+                try:
+                    with open(self._mission_file) as f:
+                        return jsonify(json.load(f))
+                except FileNotFoundError:
+                    return jsonify({"start": None, "waypoints": []})
+                except Exception as e:
+                    log.error(f"Mission read error: {e}")
+                    return jsonify({"start": None, "waypoints": []})
+            # POST: save mission and push waypoints to Jetson
+            data      = req.get_json(force=True)
+            start     = data.get("start")
+            waypoints = data.get("waypoints", [])
+            try:
+                with open(self._mission_file, "w") as f:
+                    json.dump({"start": start, "waypoints": waypoints}, f, indent=2)
+                log.info(f"Mission saved: start={start is not None} waypoints={len(waypoints)}")
+            except Exception as e:
+                log.error(f"Mission save error: {e}")
+                return jsonify({"ok": False})
+            # Full path sent to Jetson = [start] + waypoints
+            full_path = ([start] if start else []) + waypoints
+            self._push_config_update({"autonomous": {"waypoints": full_path}})
+            return jsonify({"ok": True})
 
         @self.app.route("/saved_map.png")
         def serve_saved_map():
