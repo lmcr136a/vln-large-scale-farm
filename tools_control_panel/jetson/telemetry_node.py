@@ -7,7 +7,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import PoseStamped
-from sensor_msgs.msg import BatteryState, PointCloud2, Image, Imu
+from sensor_msgs.msg import BatteryState, PointCloud2, Image, Imu, NavSatFix
 
 log = logging.getLogger(__name__)
 
@@ -37,8 +37,9 @@ class TelemetryNode(Node):
         self.create_subscription(Image,          t["zed_front"], self._heartbeat("zed_front"), BEST_EFFORT)
         self.create_subscription(Image,          t["zed_back"],  self._heartbeat("zed_back"),  BEST_EFFORT)
         self.create_subscription(Imu,            t["imu"],       self._heartbeat("imu"),    BEST_EFFORT)
+        self.create_subscription(NavSatFix,      t["gps"],       self._heartbeat("gps"),    BEST_EFFORT)
 
-        for key in ("lidar", "zed_front", "zed_back", "imu"):
+        for key in ("lidar", "zed_front", "zed_back", "imu", "gps"):
             self._last_ts[key] = 0.0
 
     def _cb_pose(self, msg: PoseStamped):

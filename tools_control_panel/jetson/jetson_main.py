@@ -203,7 +203,13 @@ def main():
     commander = Commander(cmd_vel_pub, auto_ctrl, cfg_path)
 
     def on_command(cmd):
-        commander.handle(cmd)
+        ctype = cmd.get("cmd")
+        if ctype == "start_recording":
+            start_rec_cb(cmd.get("dirname", "manual"))
+        elif ctype == "stop_recording":
+            stop_rec_cb()
+        else:
+            commander.handle(cmd)
 
     radio._on_command    = on_command
     internet._on_command = on_command

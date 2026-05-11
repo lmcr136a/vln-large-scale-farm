@@ -50,6 +50,7 @@ ros2:
     zed_front:   '/zed_front/rgb/image_raw'
     zed_back:    '/zed_back/rgb/image_raw'
     imu:         '/xsens/imu/data'
+    gps:         '/gps/fix'
     entire_map:  '/glim_ros/entire_map'
     trajectory:  '/glim_ros/localized_trajectory'
 

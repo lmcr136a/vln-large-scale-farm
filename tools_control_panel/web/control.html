@@ -9,7 +9,15 @@
   <link rel="stylesheet" href="styles.css">
   <style>
     /* Schedule calendar */
+    #col-cameras { display: flex; flex-direction: column; }
     #col-schedule { min-width:220px; }
+    #sensor-status-bar {
+      font-size: 11px;
+      color: rgba(255,255,255,0.75);
+      background: rgba(0,0,0,0.45);
+      padding: 3px 10px;
+      white-space: nowrap;
+    }
     #upcoming-label {
       font-size:15px; color:white; font-weight:600;
       margin-bottom:6px; white-space:nowrap;
@@ -36,14 +44,19 @@
 
   <div id="top-panel">
 
-    <!-- Back camera -->
-    <div class="panel-col" id="col-back">
-      <img id="back-rgb-image" alt="Back camera" />
-    </div>
-
-    <!-- Front camera -->
-    <div class="panel-col" id="col-front">
-      <img id="rgb-image" alt="Front camera" />
+    <!-- Cameras + sensor bar -->
+    <div id="col-cameras">
+      <div style="display:flex;">
+        <div class="panel-col" id="col-back">
+          <img id="back-rgb-image" alt="Back camera" />
+        </div>
+        <div class="panel-col" id="col-front">
+          <img id="rgb-image" alt="Front camera" />
+        </div>
+      </div>
+      <div id="sensor-status-bar">
+        <span id="info-sensors">—</span>
+      </div>
     </div>
 
     <div class="col-divider"></div>
@@ -56,7 +69,6 @@
       <div class="sysmon-row"><span class="sysmon-label">Battery</span><span id="info-battery">—</span></div>
       <div class="sysmon-row"><span class="sysmon-label">Mode</span><span id="info-mode">—</span></div>
       <div class="sysmon-row"><span id="estop-indicator" style="font-weight:bold;letter-spacing:1px;">🟢 OK</span></div>
-      <div class="sysmon-row" style="font-size:11px;color:rgba(255,255,255,0.7);"><span id="info-sensors">—</span></div>
     </div>
 
     <div class="col-divider"></div>

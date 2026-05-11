@@ -232,6 +232,18 @@ class RemoteServer:
         def on_stop():
             self._to_robot({"cmd": "stop_auto"})
 
+        @sio.on("start_recording")
+        def on_start_recording(dirname):
+            if not dirname:
+                return
+            self._to_robot({"cmd": "start_recording", "dirname": str(dirname)})
+            log.info(f"start_recording → Jetson: {dirname}")
+
+        @sio.on("stop_recording")
+        def on_stop_recording():
+            self._to_robot({"cmd": "stop_recording"})
+            log.info("stop_recording → Jetson")
+
         @sio.on("map_clicked")
         def on_map_clicked(data):
             if self._path_mode:
