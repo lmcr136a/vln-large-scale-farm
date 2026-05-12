@@ -8,10 +8,13 @@ import psutil
 
 class ServerToPanel:
     def __init__(self, socketio, config):
-        self.socketio    = socketio
-        self.config      = config
-        self._last_mtime = 0.0
+        self.socketio     = socketio
+        self.config       = config
+        self._last_mtime  = 0.0
         self._map_version = 0
+        self._saved_map_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'maps')
+        os.makedirs(self._saved_map_dir, exist_ok=True)
 
     def _map_dir(self):
         return os.path.expanduser(self.config['paths']['map_dir'])
