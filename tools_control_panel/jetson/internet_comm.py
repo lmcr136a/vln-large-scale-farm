@@ -14,9 +14,8 @@ QUALITY = {
     "high":   {"rgb_hz": 5.0, "pc_ratio": 0.40},
 }
 
-# RTT thresholds (seconds)
-RTT_HIGH   = 0.08   # < 80ms  → high
-RTT_MEDIUM = 0.25   # < 250ms → medium, else low
+RTT_HIGH   = 0.08
+RTT_MEDIUM = 0.25
 QUALITY_CHECK_INTERVAL = 15.0
 
 
@@ -34,13 +33,26 @@ class InternetComm:
     def connected(self) -> bool:
         return self._connected
 
-    # ── Send API ──────────────────────────────────────────────────────────────
+    @property
+    def quality(self) -> str:
+        return self._connected
 
     def send_telemetry(self, payload: dict):
         self._emit("telemetry", payload)
 
     def send_event(self, event: str, data):
         self._emit("robot_event", {"event": event, "data": data})
+
+    def send_pose(self, x: float, y: float, yaw: float):
+        self._emit("pose", {"x": x, "y": y, "yaw": yaw})
+
+    def send_map(self, png_path: str, meta: dict):
+        try:
+            with open(png_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            self._emit("map", {"data": b64, "meta": meta})
+        except Exception as e:
+            log.error(f"send_map: {e}")
 
     def send_rgb(self, frame_jpeg: bytes, camera: str):
         self._send_rgb_internal(base64.b64encode(frame_jpeg).decode(), camera)
@@ -66,8 +78,6 @@ class InternetComm:
             "n":    n,
             "data": base64.b64encode(points[idx].astype(np.float32).tobytes()).decode(),
         })
-
-    # ── Internal ──────────────────────────────────────────────────────────────
 
     def _emit(self, event: str, data):
         if not self._connected:
@@ -104,7 +114,7 @@ class InternetComm:
 
         @sio.on("pong_rtt", namespace="/internet")
         def on_pong(data):
-            pass  # handled inline in _measure_rtt
+            pass
 
     def start(self):
         threading.Thread(target=self._connect_loop, daemon=True).start()
@@ -118,13 +128,11 @@ class InternetComm:
                     log.warning(f"Internet connect failed: {e}, retry in 10s")
                     time.sleep(10)
                     continue
-                # connect()가 예외 없이 리턴하거나 on_connect 콜백으로 _connected=True 된 경우
                 threading.Thread(target=self._quality_loop, daemon=True).start()
                 self._sio.wait()
 
     def _quality_loop(self):
-        """Periodically measure RTT and auto-select quality level."""
-        time.sleep(2.0)  # wait for connection to stabilize
+        time.sleep(2.0)
         while self._connected:
             rtt = self._measure_rtt()
             if rtt is None:
@@ -143,7 +151,6 @@ class InternetComm:
             time.sleep(QUALITY_CHECK_INTERVAL)
 
     def _measure_rtt(self) -> float | None:
-        """Send a ping event and measure round-trip time. Returns seconds or None."""
         result = [None]
         done   = threading.Event()
 

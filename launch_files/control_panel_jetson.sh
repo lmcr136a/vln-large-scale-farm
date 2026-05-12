@@ -23,10 +23,11 @@ sudo ip link set can0 up type can bitrate 500000
 echo "🦾 Launching Scout Mini base node..."
 source /opt/ros/humble/setup.bash
 source "$WORKSPACE_DIR/ros2_ws/scout_ws/install/setup.bash"
+echo "$WORKSPACE_DIR/ros2_ws/scout_ws/install/setup.bash"
 ros2 launch scout_base scout_mini_base.launch.py &
 SCOUT_PID=$!
 sleep 2
-
+echo ""
 echo "🤖 Starting Jetson agent..."
 cd "$WORKSPACE_DIR"
 python3 -u tools_control_panel/jetson/jetson_main.py &
