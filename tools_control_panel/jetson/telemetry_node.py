@@ -1,3 +1,4 @@
+import os
 import shutil
 import threading
 import time
@@ -7,7 +8,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import PoseStamped
-from sensor_msgs.msg import BatteryState, PointCloud2, Image, Imu, NavSatFix
+from sensor_msgs.msg import BatteryState, PointCloud2, Image, Imu
 
 log = logging.getLogger(__name__)
 
@@ -37,9 +38,8 @@ class TelemetryNode(Node):
         self.create_subscription(Image,          t["zed_front"], self._heartbeat("zed_front"), BEST_EFFORT)
         self.create_subscription(Image,          t["zed_back"],  self._heartbeat("zed_back"),  BEST_EFFORT)
         self.create_subscription(Imu,            t["imu"],       self._heartbeat("imu"),    BEST_EFFORT)
-        self.create_subscription(NavSatFix,      t["gps"],       self._heartbeat("gps"),    BEST_EFFORT)
 
-        for key in ("lidar", "zed_front", "zed_back", "imu", "gps"):
+        for key in ("lidar", "zed_front", "zed_back", "imu"):
             self._last_ts[key] = 0.0
 
     def _cb_pose(self, msg: PoseStamped):
@@ -70,10 +70,15 @@ class TelemetryNode(Node):
             storage_pct = round(used / total * 100, 1)
         except Exception:
             storage_pct = -1.0
+        try:
+            wifi = os.popen('iwgetid -r').read().strip() or '—'
+        except Exception:
+            wifi = '—'
         return {
             "t":           round(now, 2),
             "pose":        pose,
             "batt":        batt,
             "sensors":     sensors,
             "storage_pct": storage_pct,
+            "wifi":        wifi,
         }

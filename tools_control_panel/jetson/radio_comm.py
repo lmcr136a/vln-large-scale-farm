@@ -19,8 +19,7 @@ class RadioComm:
         self._ser = serial.Serial(
             port=port, baudrate=baud,
             bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE, rtscts=True,
-            timeout=1, write_timeout=1.0,
+            stopbits=serial.STOPBITS_ONE, rtscts=True, timeout=1,
         )
         self._on_command = on_command
         self._tx_lock = threading.Lock()
@@ -57,7 +56,7 @@ class RadioComm:
                 line = self._ser.readline()
                 if not line:
                     continue
-                cmd = json.loads(line.decode().strip())
+                cmd = json.loads(line.decode('utf-8', errors='ignore').strip())
                 if self._on_command:
                     self._on_command(cmd)
             except json.JSONDecodeError:

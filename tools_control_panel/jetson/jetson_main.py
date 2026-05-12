@@ -168,14 +168,14 @@ def main():
     def start_rec_cb(subdir: str):
         if recorder:
             try:
-                recorder.start_recording(subdir)
-                log.info(f"Camera recording started: {subdir}")
+                recorder.start_recording()
+                log.info(f"Camera recording started (subdir managed by recorder)")
             except Exception as e:
                 log.error(f"Camera recording start failed: {e}")
         topics = list(cfg["ros2"]["topics"].values()) + [cfg["ros2"]["cmd_vel_topic"]]
         try:
             import subprocess, yaml as _yaml
-            with open(cfg_path) as _f:
+            with open(cfg_path, encoding='utf-8') as _f:
                 _raw = _yaml.safe_load(_f)
             _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             _data = os.path.normpath(os.path.join(_proj, _raw["paths"]["data_dir"]))
@@ -245,7 +245,7 @@ def main():
         # Read map_dir from raw yaml — load_config resolves the relative path against
         # the config dir, giving tools_control_panel/output_glim instead of root/output_glim.
         # save_map_glim.py uses raw yaml.safe_load + __file__ anchor, so we match it.
-        with open(cfg_path) as _f:
+        with open(cfg_path, encoding='utf-8') as _f:
             _raw = yaml.safe_load(_f)
         proj_dir    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         raw_map_dir = os.path.expanduser(_raw["paths"]["map_dir"])
@@ -370,7 +370,8 @@ def main():
                 "manual" if commander.is_manual() else
                 "idle"
             )
-            snap["estop"] = commander.is_estopped()
+            snap["estop"]    = commander.is_estopped()
+            snap["internet"] = internet.connected()
             radio.send({"type": "telemetry", "data": snap})
             internet.send_telemetry(snap)
             time.sleep(interval)

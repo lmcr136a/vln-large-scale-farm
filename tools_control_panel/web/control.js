@@ -238,13 +238,11 @@ socket.on('robot_pose', (data) => {
 const sysmonDiv = document.getElementById('sysmon'); // kept for fallback
 socket.on('sysmon', (data) => {
   if (!data || typeof data !== 'object') return;
-  const { cpu, mem, used_gb, total_gb, used_pct, linear_mps, wifi } = data;
+  const { cpu, mem, used_gb, total_gb, used_pct } = data;
 
-  const wifiEl = document.getElementById('info-wifi');
   const cpuEl  = document.getElementById('info-cpu');
   const ssdEl  = document.getElementById('info-ssd');
 
-  if (wifiEl) wifiEl.textContent = wifi || '—';
   if (cpuEl)  cpuEl.textContent  = typeof cpu  === 'number' ? `${cpu.toFixed(1)}%` : '—';
   if (ssdEl && typeof used_gb === 'number' && typeof total_gb === 'number') {
     const usedTB  = (used_gb  / 1024).toFixed(1);
@@ -266,6 +264,7 @@ socket.on('robot_telemetry', (data) => {
   const modeEl    = document.getElementById('info-mode');
   const estopEl   = document.getElementById('estop-indicator');
   const sensorsEl = document.getElementById('info-sensors');
+  const wifiEl    = document.getElementById('info-wifi');
 
   if (battEl)  battEl.textContent  = data.battery >= 0 ? `${data.battery.toFixed(1)}%` : '—';
   if (modeEl)  modeEl.textContent  = data.mode || '—';
@@ -276,6 +275,10 @@ socket.on('robot_telemetry', (data) => {
   if (sensorsEl && data.sensors) {
     sensorsEl.textContent = Object.entries(data.sensors)
       .map(([k, v]) => `${k}:${v ? '✓' : '✗'}`).join('  ');
+  }
+  if (wifiEl) {
+    const inet = data.internet === true ? '🌐✓' : data.internet === false ? '🌐✗' : '';
+    wifiEl.textContent = (data.wifi && data.wifi !== '—' ? data.wifi : '—') + (inet ? '  ' + inet : '');
   }
 });
 

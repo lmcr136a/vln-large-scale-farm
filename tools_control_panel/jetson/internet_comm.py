@@ -9,7 +9,7 @@ import socketio
 log = logging.getLogger(__name__)
 
 QUALITY = {
-    "low":    {"rgb_hz": 0.1, "pc_ratio": 0.08},
+    "low":    {"rgb_hz": 0.5, "pc_ratio": 0.08},
     "medium": {"rgb_hz": 1.0, "pc_ratio": 0.20},
     "high":   {"rgb_hz": 5.0, "pc_ratio": 0.40},
 }
@@ -34,10 +34,6 @@ class InternetComm:
     def connected(self) -> bool:
         return self._connected
 
-    @property
-    def quality(self) -> str:
-        return self._quality
-
     # ── Send API ──────────────────────────────────────────────────────────────
 
     def send_telemetry(self, payload: dict):
@@ -53,6 +49,8 @@ class InternetComm:
         self._send_rgb_internal(b64, camera)
 
     def _send_rgb_internal(self, b64: str, camera: str):
+        if not self._connected:
+            return
         q = QUALITY[self._quality]
         interval = 1.0 / q["rgb_hz"] if q["rgb_hz"] > 0 else float("inf")
         if time.time() - self._last_rgb.get(camera, 0.0) < interval:
@@ -68,18 +66,6 @@ class InternetComm:
             "n":    n,
             "data": base64.b64encode(points[idx].astype(np.float32).tobytes()).decode(),
         })
-
-    def send_pose(self, x: float, y: float, yaw: float):
-        self._emit("pose", {"x": x, "y": y, "yaw": yaw})
-
-    def send_map(self, png_path: str, meta: dict):
-        """Send map image directly to lab PC whenever internet is connected."""
-        try:
-            with open(png_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
-            self._emit("map_frame", {"data": b64, "meta": meta})
-        except Exception as e:
-            log.error(f"send_map: {e}")
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
