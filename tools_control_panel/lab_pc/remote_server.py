@@ -44,6 +44,7 @@ class RemoteServer:
         self._path_mode        = False
         self._bridge_connected = False
         self._inet_connected   = False
+        self._inet_sid         = None
 
         self.app = Flask(__name__, template_folder="../lab_pc")
         self.sio = SocketIO(
@@ -306,11 +307,13 @@ class RemoteServer:
         @sio.on("connect", namespace="/internet")
         def inet_connect():
             self._inet_connected = True
+            self._inet_sid       = request.sid
             log.info(f"Jetson internet connected: {request.sid}")
 
         @sio.on("disconnect", namespace="/internet")
         def inet_disconnect():
             self._inet_connected = False
+            self._inet_sid       = None
             log.warning("Jetson internet disconnected")
 
         @sio.on("ping_rtt", namespace="/internet")
@@ -445,8 +448,12 @@ class RemoteServer:
 
     def _to_robot(self, cmd: dict):
         """Send command via radio bridge AND internet (whichever is connected)."""
-        self.sio.emit("to_robot", cmd, namespace="/bridge")
-        self.sio.emit("command", cmd, namespace="/internet")
+        if self._bridge_connected:
+            self.sio.emit("to_robot", cmd, namespace="/bridge")
+        if self._inet_connected and self._inet_sid:
+            self.sio.emit("command", cmd, to=self._inet_sid, namespace="/internet")
+        if not self._bridge_connected and not self._inet_connected:
+            log.warning(f"No robot connection — command dropped: {cmd.get('cmd')}")
 
     def _to_robot_internet(self, msg: dict):
         """Send command to Jetson via direct internet connection."""
