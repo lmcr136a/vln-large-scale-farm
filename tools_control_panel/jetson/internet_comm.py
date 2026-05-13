@@ -39,6 +39,9 @@ class InternetComm:
     def send_telemetry(self, payload: dict):
         self._emit("telemetry", payload)
 
+    def send_pose(self, x: float, y: float, yaw: float):
+        self._emit("pose", {"x": x, "y": y, "yaw": yaw})
+
     def send_event(self, event: str, data):
         self._emit("robot_event", {"event": event, "data": data})
 
