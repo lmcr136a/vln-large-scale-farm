@@ -304,53 +304,43 @@ class RemoteServer:
     def _register_internet_events(self):
         sio = self.sio
 
-        @sio.on("connect", namespace="/internet")
-        def inet_connect():
+        @sio.on("jetson_hello")
+        def inet_hello():
             self._inet_connected = True
-            log.info("Jetson internet connected")
+            self._inet_sid       = request.sid
+            log.info(f"Jetson internet connected: {request.sid}")
 
-        @sio.on("disconnect", namespace="/internet")
-        def inet_disconnect():
-            self._inet_connected = False
-            self._inet_sid       = None
-            log.warning("Jetson internet disconnected")
-
-        @sio.on("ping_rtt", namespace="/internet")
+        @sio.on("ping_rtt")
         def inet_ping(data):
-            if not self._inet_sid:
-                self._inet_sid = request.sid
-            sio.emit("pong_rtt", {}, to=request.sid, namespace="/internet")
+            sio.emit("pong_rtt", {}, to=request.sid)
 
         # Events emitted by internet_comm.py
-        @sio.on("telemetry", namespace="/internet")
+        @sio.on("telemetry")
         def inet_telemetry(data):
-            if not self._inet_sid:
-                self._inet_sid = request.sid
-                log.info(f"Jetson SID captured: {self._inet_sid}")
             self._forward_telemetry(data)
 
-        @sio.on("robot_event", namespace="/internet")
+        @sio.on("robot_event", )
         def inet_event(data):
             event = data.get("event")
             if event == "robot_pose":
                 return  # handled exclusively via inet_pose (extrinsic-corrected)
             sio.emit(event, data.get("data", {}), namespace="/")
 
-        @sio.on("rgb_frame", namespace="/internet")
+        @sio.on("rgb_frame", )
         def inet_rgb(data):
             cam = data.get("camera", "front")
             event = "front_frame" if cam == "front" else "back_frame"
             sio.emit(event, {"data": data["data"]}, namespace="/")
 
-        @sio.on("pose", namespace="/internet")
+        @sio.on("pose", )
         def inet_pose(data):
             sio.emit("robot_pose", self._correct_yaw(data), namespace="/")
 
-        @sio.on("pointcloud", namespace="/internet")
+        @sio.on("pointcloud", )
         def inet_pointcloud(data):
             sio.emit("pointcloud_update", data, namespace="/")
 
-        @sio.on("map_frame", namespace="/internet")
+        @sio.on("map_frame", )
         def inet_map_frame(data):
             import base64
             meta = data.get("meta", {})
@@ -378,9 +368,9 @@ class RemoteServer:
             }, namespace="/")
 
         # Commands from panel → Jetson via internet
-        @sio.on("to_robot", namespace="/internet")
+        @sio.on("to_robot", )
         def inet_to_robot(data):
-            sio.emit("command", data, namespace="/internet")
+            sio.emit("command", data, )
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -455,7 +445,7 @@ class RemoteServer:
         if self._bridge_connected:
             self.sio.emit("to_robot", cmd, namespace="/bridge")
         if self._inet_connected and self._inet_sid:
-            self.sio.emit("command", cmd, to=self._inet_sid, namespace="/internet")
+            self.sio.emit("command", cmd, to=self._inet_sid, )
         if not self._bridge_connected and not self._inet_connected:
             log.warning(f"No robot connection — command dropped: {cmd.get('cmd')}")
 
@@ -463,9 +453,9 @@ class RemoteServer:
         """Send command to Jetson via direct internet connection."""
         mtype = msg.get("type")
         if mtype == "quality":
-            self.sio.emit("quality", msg, namespace="/internet")
+            self.sio.emit("quality", msg, )
         else:
-            self.sio.emit("command", msg, namespace="/internet")
+            self.sio.emit("command", msg, )
 
     def _push_config_update(self, updates: dict):
         try:
