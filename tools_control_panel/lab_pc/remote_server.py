@@ -40,8 +40,10 @@ class RemoteServer:
         self._paths_file   = os.path.join(cfg_dir, self.cfg["paths"].get("paths_file",   "paths.json"))
         self._mission_file = os.path.join(cfg_dir, self.cfg["paths"].get("mission_file", "mission.json"))
         self._schedule_file = os.path.join(cfg_dir, "schedule.json")
-        self._path_nodes = self._load_paths()
-        self._path_mode = False
+        self._path_nodes       = self._load_paths()
+        self._path_mode        = False
+        self._bridge_connected = False
+        self._inet_connected   = False
 
         self.app = Flask(__name__, template_folder="../lab_pc")
         self.sio = SocketIO(
@@ -200,6 +202,7 @@ class RemoteServer:
             elif key == "ArrowLeft":  vz =  VEL["angular_speed"]
             elif key == "ArrowRight": vz = -VEL["angular_speed"]
             if vx or vz:
+                log.info(f"[cmd] velocity vx={vx} vz={vz}  bridge={self._bridge_connected}  inet={self._inet_connected}")
                 self._to_robot({"cmd": "velocity", "vx": vx, "vz": vz})
 
         @sio.on("keyup")
@@ -276,10 +279,12 @@ class RemoteServer:
 
         @sio.on("connect", namespace="/bridge")
         def bridge_connect():
+            self._bridge_connected = True
             log.info(f"Radio bridge connected: {request.sid}")
 
         @sio.on("disconnect", namespace="/bridge")
         def bridge_disconnect():
+            self._bridge_connected = False
             log.warning("Radio bridge disconnected")
 
         @sio.on("from_robot", namespace="/bridge")
@@ -300,10 +305,12 @@ class RemoteServer:
 
         @sio.on("connect", namespace="/internet")
         def inet_connect():
+            self._inet_connected = True
             log.info(f"Jetson internet connected: {request.sid}")
 
         @sio.on("disconnect", namespace="/internet")
         def inet_disconnect():
+            self._inet_connected = False
             log.warning("Jetson internet disconnected")
 
         @sio.on("ping_rtt", namespace="/internet")
@@ -432,6 +439,8 @@ class RemoteServer:
             "storage_pct": data.get("storage_pct", -1),
             "mode":        data.get("mode", "idle"),
             "estop":       data.get("estop", False),
+            "wifi":        data.get("wifi", "—"),
+            "internet":    data.get("internet", False),
         }, namespace="/")
 
     def _to_robot(self, cmd: dict):

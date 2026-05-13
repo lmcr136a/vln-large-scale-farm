@@ -1,6 +1,6 @@
 {
   "gnss": {
-    "gnss_topic": "/gps/fix_pose",
+    "gnss_topic": "/gps/fix",
     "min_baseline": 10.0,
     "prior_inf_scale": [
       1e3,
