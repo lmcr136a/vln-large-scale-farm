@@ -307,8 +307,7 @@ class RemoteServer:
         @sio.on("connect", namespace="/internet")
         def inet_connect():
             self._inet_connected = True
-            self._inet_sid       = request.sid
-            log.info(f"Jetson internet connected: {request.sid}")
+            log.info("Jetson internet connected")
 
         @sio.on("disconnect", namespace="/internet")
         def inet_disconnect():
@@ -318,11 +317,16 @@ class RemoteServer:
 
         @sio.on("ping_rtt", namespace="/internet")
         def inet_ping(data):
+            if not self._inet_sid:
+                self._inet_sid = request.sid
             sio.emit("pong_rtt", {}, to=request.sid, namespace="/internet")
 
         # Events emitted by internet_comm.py
         @sio.on("telemetry", namespace="/internet")
         def inet_telemetry(data):
+            if not self._inet_sid:
+                self._inet_sid = request.sid
+                log.info(f"Jetson SID captured: {self._inet_sid}")
             self._forward_telemetry(data)
 
         @sio.on("robot_event", namespace="/internet")
