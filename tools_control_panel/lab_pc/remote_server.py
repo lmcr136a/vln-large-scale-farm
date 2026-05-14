@@ -305,7 +305,7 @@ class RemoteServer:
         sio = self.sio
 
         @sio.on("jetson_hello")
-        def inet_hello():
+        def inet_hello(data=None):
             self._inet_connected = True
             self._inet_sid       = request.sid
             log.info(f"Jetson internet connected: {request.sid}")

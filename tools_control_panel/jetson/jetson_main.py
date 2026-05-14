@@ -371,7 +371,7 @@ def main():
                 "idle"
             )
             snap["estop"]    = commander.is_estopped()
-            snap["internet"] = internet.connected()
+            snap["internet"] = internet.connected
             radio.send({"type": "telemetry", "data": snap})
             internet.send_telemetry(snap)
             time.sleep(interval)

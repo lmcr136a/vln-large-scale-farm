@@ -18,7 +18,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 
 # ── Port config ────────────────────────────────────────────
-RADIO_PORT = '/dev/ttyUSB1'   # radio (RTCM source)
+RADIO_PORT = '/dev/ttyUSB0'   # radio (RTCM source)
 F9P_PORT   = '/dev/ttyACM0'   # u-blox F9P GNSS receiver
 BAUD_RADIO = 57600
 BAUD_F9P   = 115200
@@ -46,6 +46,10 @@ def _configure_f9p(ser: serial.Serial) -> None:
         (0x10730001, 1),  # UART1INPROT-UBX
         (0x10730002, 1),  # UART1INPROT-NMEA
         (0x10740002, 1),  # UART1OUTPROT-NMEA
+        (0x10770004, 1),  # USBINPROT-RTCM3X  ← USB로 RTCM 받기
+        (0x10770001, 1),  # USBINPROT-UBX
+        (0x10770002, 1),  # USBINPROT-NMEA
+        (0x10780002, 1),  # USBOUTPROT-NMEA
         (0x10310021, 1),  # SIGNAL-GPS_ENA
         (0x10310025, 1),  # SIGNAL-GLO_ENA
         (0x10310031, 1),  # SIGNAL-GAL_ENA
@@ -112,25 +116,28 @@ class RtkGpsNode(Node):
         threading.Thread(target=self._bridge_thread, daemon=True).start()
         threading.Thread(target=self._nmea_thread,   daemon=True).start()
 
-    # ── RTCM bridge: radio → F9P ──────────────────────────
+    # ── RTCM bridge: radio → F9P raw passthrough ─────────
     def _bridge_thread(self):
-        buf = b''
         while rclpy.ok():
-            data = self._radio.read(4096)
+            try:
+                data = self._radio.read(4096)
+            except serial.SerialException:
+                print('[RADIO] disconnected, retrying in 2s...')
+                time.sleep(2.0)
+                try:
+                    self._radio.close()
+                    self._radio = serial.Serial(RADIO_PORT, BAUD_RADIO, timeout=0.1)
+                    print('[RADIO] reconnected')
+                except Exception as e:
+                    print(f'[RADIO] reconnect failed: {e}')
+                continue
+
             if not data:
                 continue
-            for byte in data:
-                if byte == 0xD3 or buf:
-                    buf += bytes([byte])
-                    if len(buf) >= 3:
-                        plen  = ((buf[1] & 0x03) << 8) | buf[2]
-                        total = plen + 6
-                        if len(buf) >= total:
-                            pkt = buf[:total]
-                            self._f9p.write(pkt)
-                            buf = buf[total:]
-                            with self._state_lock:
-                                self._state['rtcm_count'] += 1
+
+            self._f9p.write(data)
+            with self._state_lock:
+                self._state['rtcm_count'] += data.count(0xD3)
 
     # ── NMEA reader: F9P → state ──────────────────────────
     def _nmea_thread(self):
