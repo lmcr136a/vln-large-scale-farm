@@ -1,20 +1,17 @@
 """
-Local PC radio bridge.
-- Serial: receives telemetry/events from Jetson, sends commands to Jetson.
-- WebSocket client: connects to Lab PC remote_server (/bridge namespace) via Tailscale.
-  Forwards everything bidirectionally.
-Run: python radio_bridge.py [--config farm_config.yaml]
+Local PC radio bridge — Linux version.
+Serial port: /dev/ttyUSB* or /dev/ttyACM* (set in farm_config.yaml → radio.serial_port)
+Run: python3 radio_bridge_linux.py [--config ../config/farm_config.yaml]
 """
 import argparse
 import json
 import logging
-import serial
-import sys
 import threading
 import time
-import yaml
 
-import socketio  # pip install "python-socketio[client]"
+import serial
+import socketio
+import yaml
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("radio_bridge")
@@ -29,20 +26,21 @@ def load_config(path):
 
 class RadioBridge:
     def __init__(self, cfg):
-        self._cfg = cfg
-        self._ser = None
-        self._sio = socketio.Client(reconnection=True, reconnection_delay=3)
+        self._cfg     = cfg
+        self._ser     = None
+        self._sio     = socketio.Client(reconnection=True, reconnection_delay=3)
         self._tx_lock = threading.Lock()
         self._running = False
-
-    # ── Serial ────────────────────────────────────────────────────────────────
 
     def _open_serial(self):
         r = self._cfg["radio"]
         self._ser = serial.Serial(
             port=r["serial_port"], baudrate=r["baud_rate"],
             bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE, rtscts=True, timeout=1,
+            stopbits=serial.STOPBITS_ONE,
+            rtscts=True,
+            timeout=1,
+            write_timeout=1.0,
         )
         log.info(f"Serial opened: {r['serial_port']}")
 
@@ -53,7 +51,6 @@ class RadioBridge:
                 if not line:
                     continue
                 msg = json.loads(line.decode('utf-8', errors='ignore').strip())
-                # Forward everything Jetson sends to Lab PC
                 self._sio.emit("from_robot", msg, namespace="/bridge")
             except json.JSONDecodeError:
                 pass
@@ -70,10 +67,10 @@ class RadioBridge:
         with self._tx_lock:
             try:
                 self._ser.write(data)
+            except serial.SerialTimeoutException:
+                log.error("Serial TX: Write timeout")
             except Exception as e:
                 log.error(f"Serial TX: {e}")
-
-    # ── SocketIO to Lab PC ────────────────────────────────────────────────────
 
     def _setup_sio(self):
         sio = self._sio
@@ -88,7 +85,6 @@ class RadioBridge:
 
         @sio.on("to_robot", namespace="/bridge")
         def on_command(data):
-            # Lab PC -> radio -> Jetson
             self._send_to_robot(data)
 
     def run(self):
@@ -96,14 +92,13 @@ class RadioBridge:
         self._open_serial()
         self._setup_sio()
 
-        lab_url = self._cfg["internet"]["lab_ws_url"].replace("ws://", "http://").replace("wss://", "https://")
-        # Connect in background (will retry automatically)
+        lab_url = self._cfg["internet"]["lab_ws_url"] \
+            .replace("ws://", "http://").replace("wss://", "https://")
         threading.Thread(
             target=lambda: self._sio.connect(lab_url, namespaces=["/bridge"]),
             daemon=True,
         ).start()
 
-        # Serial RX blocks here
         try:
             self._serial_rx_loop()
         except KeyboardInterrupt:
