@@ -16,10 +16,10 @@ tmux kill-session -t $SESSION 2>/dev/null
 tmux new-session -d -s $SESSION -n "Sensors"
 tmux send-keys -t $SESSION:0 "bash $SCRIPT_DIR/launch_robosense.sh" C-m
 
-tmux split-window -t $SESSION:0 -h
+tmux split-window -t $SESSION:0 -v
 tmux send-keys -t $SESSION:0 "bash $SCRIPT_DIR/launch_xsens.sh $MODE" C-m
 
-tmux split-window -t $SESSION:0 -h
+tmux split-window -t $SESSION:0 -v
 tmux send-keys -t $SESSION:0 "python3 scripts/rtk_gps_node.py" C-m
 
 tmux select-layout -t $SESSION:0 even-horizontal

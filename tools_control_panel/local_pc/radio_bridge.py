@@ -116,8 +116,11 @@ class RadioBridge:
 
 
 def main():
+    
+    import os
+    _DEFAULT_CFG = os.path.join(os.path.dirname(__file__), "../config/farm_config.yaml")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="farm_config.yaml")
+    parser.add_argument("--config", default=_DEFAULT_CFG)
     args = parser.parse_args()
     cfg = load_config(args.config)
     RadioBridge(cfg).run()
