@@ -1,8 +1,12 @@
+#pragma once
+
+#include <cmath>
 #include <deque>
 #include <atomic>
 #include <thread>
 #include <numeric>
 #include <Eigen/Core>
+#include <Eigen/QR>
 
 #define GLIM_ROS2
 
@@ -12,12 +16,16 @@
 #include <glim/util/concurrent_vector.hpp>
 
 #ifdef GLIM_ROS2
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp/executors/single_threaded_executor.hpp>
 #include <glim/util/extension_module_ros2.hpp>
-#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <nav_msgs/msg/path.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 
 using ExtensionModuleBase = glim::ExtensionModuleROS2;
-using PoseWithCovarianceStamped = geometry_msgs::msg::PoseWithCovarianceStamped;
-using PoseWithCovarianceStampedConstPtr = geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr;
+using NavSatFix = sensor_msgs::msg::NavSatFix;
+using NavSatFixConstPtr = sensor_msgs::msg::NavSatFix::ConstSharedPtr;
 
 template <typename Stamp>
 double to_sec(const Stamp& stamp) {
@@ -25,8 +33,6 @@ double to_sec(const Stamp& stamp) {
 }
 #else
 #include <glim/util/extension_module_ros.hpp>
-#include <geometry_msgs/PoseWithCovarianceStamped.hpp>
-
 using ExtensionModuleBase = glim::ExtensionModuleROS;
 #endif
 
@@ -40,16 +46,12 @@ using ExtensionModuleBase = glim::ExtensionModuleROS;
 #include <glim/util/logging.hpp>
 #include <glim/util/convert_to_string.hpp>
 #include <glim_ext/util/config_ext.hpp>
+#include <glim_ext/geodetic.hpp>
 
 namespace glim {
 
 using gtsam::symbol_shorthand::X;
 
-/**
- * @brief Naive implementation of GNSS constraints for the global optimization.
- * @note  This implementation is very naive and ignores the IMU-GNSS transformation and GNSS observation covariance.
- *        If you use a precise GNSS (e.g., RTK), consider asking for a closed-source extension module with better GNSS handling.
- */
 class GNSSGlobal : public ExtensionModuleBase {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -60,12 +62,34 @@ public:
     logger->info("gnss_global_config_path={}", config_path);
 
     glim::Config config(config_path);
-    gnss_topic = config.param<std::string>("gnss", "gnss_topic", "/pose_with_cov");
+    gnss_topic = config.param<std::string>("gnss", "gnss_topic", "/gps/fix");
     prior_inf_scale = config.param<Eigen::Vector3d>("gnss", "prior_inf_scale", Eigen::Vector3d(1e3, 1e3, 0.0));
     min_baseline = config.param<double>("gnss", "min_baseline", 5.0);
 
+    lever_arm_body = config.param<Eigen::Vector3d>("gnss", "lever_arm_body", Eigen::Vector3d::Zero());
+    lever_arm_refine_min_submaps = config.param<int>("gnss", "lever_arm_refine_min_submaps", 30);
+
+    logger->info("lever_arm_body (approx): [{:.3f}, {:.3f}, {:.3f}] m",
+      lever_arm_body.x(), lever_arm_body.y(), lever_arm_body.z());
+
     transformation_initialized = false;
-    T_world_utm.setIdentity();
+    lever_arm_refined = false;
+    enu_origin_set = false;
+    T_world_enu.setIdentity();
+    R_enu_ecef.setIdentity();
+
+    // Publishers
+    pub_node = rclcpp::Node::make_shared("gnss_global_pub");
+    // aligned GPS (lever-arm corrected, world frame, submap rate)
+    gps_path_pub = pub_node->create_publisher<nav_msgs::msg::Path>("/glim_ros/fixed_gps", 10);
+    gps_path_msg.header.frame_id = "map";
+    // raw GPS in world frame (GPS rate, no lever arm — for alignment check)
+    raw_gps_path_pub = pub_node->create_publisher<nav_msgs::msg::Path>("/glim_ros/raw_gps_world", 10);
+    raw_gps_path_msg.header.frame_id = "map";
+
+    pub_executor = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    pub_executor->add_node(pub_node);
+    pub_executor_thread = std::thread([this] { pub_executor->spin(); });
 
     kill_switch = false;
     thread = std::thread([this] { backend_task(); });
@@ -76,25 +100,69 @@ public:
     GlobalMappingCallbacks::on_insert_submap.add(std::bind(&GNSSGlobal::on_insert_submap, this, _1));
     GlobalMappingCallbacks::on_smoother_update.add(std::bind(&GNSSGlobal::on_smoother_update, this, _1, _2, _3));
   }
+
   ~GNSSGlobal() {
     kill_switch = true;
     thread.join();
+    pub_executor->cancel();
+    pub_executor_thread.join();
   }
 
   virtual std::vector<GenericTopicSubscription::Ptr> create_subscriptions() override {
-    const auto sub = std::make_shared<TopicSubscription<PoseWithCovarianceStamped>>(gnss_topic, [this](const PoseWithCovarianceStampedConstPtr msg) { gnss_callback(msg); });
+    const auto sub = std::make_shared<TopicSubscription<NavSatFix>>(
+      gnss_topic,
+      [this](const NavSatFixConstPtr msg) { gnss_callback(msg); });
     return {sub};
   }
 
-  void gnss_callback(const PoseWithCovarianceStampedConstPtr& gnss_msg) {
+  void gnss_callback(const NavSatFixConstPtr& msg) {
+    if (msg->status.status < 0) return;
+
+    const double lat = msg->latitude;
+    const double lon = msg->longitude;
+    const double alt = std::isfinite(msg->altitude) ? msg->altitude : 0.0;
+    const double stamp = to_sec(msg->header.stamp);
+
+    const Eigen::Vector3d ecef = wgs84_to_ecef(lat, lon, alt);
+
+    if (!enu_origin_set) {
+      origin_ecef = ecef;
+
+      const double lat_r = lat * M_PI / 180.0;
+      const double lon_r = lon * M_PI / 180.0;
+      R_enu_ecef.row(0) = Eigen::Vector3d(-std::sin(lon_r), std::cos(lon_r), 0.0);
+      R_enu_ecef.row(1) = Eigen::Vector3d(-std::sin(lat_r) * std::cos(lon_r), -std::sin(lat_r) * std::sin(lon_r), std::cos(lat_r));
+      R_enu_ecef.row(2) = Eigen::Vector3d(std::cos(lat_r) * std::cos(lon_r), std::cos(lat_r) * std::sin(lon_r), std::sin(lat_r));
+
+      enu_origin_set = true;
+      logger->info("ENU origin set: lat={:.7f} lon={:.7f} alt={:.2f}", lat, lon, alt);
+    }
+
+    const Eigen::Vector3d enu = R_enu_ecef * (ecef - origin_ecef);
+
     Eigen::Vector4d gnss_data;
-    const double stamp = to_sec(gnss_msg->header.stamp);
-    const auto& pos = gnss_msg->pose.pose.position;
-    gnss_data << stamp, pos.x, pos.y, pos.z;
+    gnss_data << stamp, enu.x(), enu.y(), enu.z();
     input_gnss_queue.push_back(gnss_data);
+
+    // Publish raw GPS in world frame at GPS rate (no lever arm, just alignment check)
+    if (transformation_initialized) {
+      const Eigen::Vector3d xyz_world = T_world_enu * enu;
+      geometry_msgs::msg::PoseStamped pose;
+      pose.header.frame_id = "map";
+      pose.header.stamp = msg->header.stamp;
+      pose.pose.position.x = xyz_world.x();
+      pose.pose.position.y = xyz_world.y();
+      pose.pose.position.z = xyz_world.z();
+      pose.pose.orientation.w = 1.0;
+      raw_gps_path_msg.header.stamp = msg->header.stamp;
+      raw_gps_path_msg.poses.push_back(pose);
+      raw_gps_path_pub->publish(raw_gps_path_msg);
+    }
   }
 
-  void on_insert_submap(const SubMap::ConstPtr& submap) { input_submap_queue.push_back(submap); }
+  void on_insert_submap(const SubMap::ConstPtr& submap) {
+    input_submap_queue.push_back(submap);
+  }
 
   void on_smoother_update(gtsam_points::ISAM2Ext& isam2, gtsam::NonlinearFactorGraph& new_factors, gtsam::Values& new_values) {
     const auto factors = output_factors.get_all_and_clear();
@@ -106,15 +174,13 @@ public:
 
   void backend_task() {
     logger->info("starting GNSS global thread");
-    std::deque<Eigen::Vector4d> utm_queue;
+    std::deque<Eigen::Vector4d> enu_queue;
     std::deque<SubMap::ConstPtr> submap_queue;
 
     while (!kill_switch) {
-      // Convert GeoPoint(lat/lon) to UTM
       const auto gnss_data = input_gnss_queue.get_all_and_clear();
-      utm_queue.insert(utm_queue.end(), gnss_data.begin(), gnss_data.end());
+      enu_queue.insert(enu_queue.end(), gnss_data.begin(), gnss_data.end());
 
-      // Add new submaps
       const auto new_submaps = input_submap_queue.get_all_and_clear();
       if (new_submaps.empty()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -122,24 +188,26 @@ public:
       }
       submap_queue.insert(submap_queue.end(), new_submaps.begin(), new_submaps.end());
 
-      // Remove submaps that are created earlier than the oldest GNSS data
-      while (!utm_queue.empty() && !submap_queue.empty() && submap_queue.front()->frames.front()->stamp < utm_queue.front()[0]) {
+      while (!enu_queue.empty() && !submap_queue.empty() &&
+             submap_queue.front()->frames.front()->stamp < enu_queue.front()[0]) {
         submap_queue.pop_front();
       }
 
-      // Interpolate UTM coords and associate with submaps
-      while (!utm_queue.empty() && !submap_queue.empty() && submap_queue.front()->frames.front()->stamp > utm_queue.front()[0] &&
-             submap_queue.front()->frames.back()->stamp < utm_queue.back()[0]) {
+      while (!enu_queue.empty() && !submap_queue.empty() &&
+             submap_queue.front()->frames.front()->stamp > enu_queue.front()[0] &&
+             submap_queue.front()->frames.back()->stamp < enu_queue.back()[0]) {
         const auto& submap = submap_queue.front();
         const double stamp = submap->frames[submap->frames.size() / 2]->stamp;
 
-        const auto right = std::lower_bound(utm_queue.begin(), utm_queue.end(), stamp, [](const Eigen::Vector4d& utm, const double t) { return utm[0] < t; });
-        if (right == utm_queue.end() || (right + 1) == utm_queue.end()) {
+        const auto right = std::lower_bound(
+          enu_queue.begin(), enu_queue.end(), stamp,
+          [](const Eigen::Vector4d& v, const double t) { return v[0] < t; });
+
+        if (right == enu_queue.end() || (right + 1) == enu_queue.end()) {
           logger->warn("invalid condition in GNSS global module!!");
           break;
         }
         const auto left = right - 1;
-        logger->debug("submap={:.6f} utm_left={:.6f} utm_right={:.6f}", stamp, (*left)[0], (*right)[0]);
 
         const double tl = (*left)[0];
         const double tr = (*right)[0];
@@ -150,14 +218,15 @@ public:
         submap_coords.push_back(interpolated);
 
         submap_queue.pop_front();
-        utm_queue.erase(utm_queue.begin(), left);
+        enu_queue.erase(enu_queue.begin(), left);
       }
 
-      // Initialize T_world_utm
-      if (!transformation_initialized && !submaps.empty() && (submaps.front()->T_world_origin.inverse() * submaps.back()->T_world_origin).translation().norm() > min_baseline) {
+      // Initialize T_world_enu via SVD alignment
+      if (!transformation_initialized && !submaps.empty() &&
+          (submaps.front()->T_world_origin.inverse() * submaps.back()->T_world_origin).translation().norm() > min_baseline) {
         Eigen::Vector3d mean_est = Eigen::Vector3d::Zero();
         Eigen::Vector3d mean_gnss = Eigen::Vector3d::Zero();
-        for (int i = 0; i < submaps.size(); i++) {
+        for (size_t i = 0; i < submaps.size(); i++) {
           mean_est += submaps[i]->T_world_origin.translation();
           mean_gnss += submap_coords[i].tail<3>();
         }
@@ -165,54 +234,113 @@ public:
         mean_gnss /= submaps.size();
 
         Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
-        for (int i = 0; i < submaps.size(); i++) {
-          const Eigen::Vector3d centered_est = submaps[i]->T_world_origin.translation() - mean_est;
-          const Eigen::Vector3d centered_gnss = submap_coords[i].tail<3>() - mean_gnss;
-          cov += centered_gnss * centered_est.transpose();
+        for (size_t i = 0; i < submaps.size(); i++) {
+          cov += (submap_coords[i].tail<3>() - mean_gnss) *
+                 (submaps[i]->T_world_origin.translation() - mean_est).transpose();
         }
         cov /= submaps.size();
 
-        const Eigen::JacobiSVD<Eigen::Matrix2d> svd(cov.block<2, 2>(0, 0), Eigen::ComputeFullU | Eigen::ComputeFullV);
-        const Eigen::Matrix2d U = svd.matrixU();
-        const Eigen::Matrix2d V = svd.matrixV();
-        const Eigen::Matrix2d D = svd.singularValues().asDiagonal();
+        const Eigen::JacobiSVD<Eigen::Matrix2d> svd(
+          cov.block<2, 2>(0, 0), Eigen::ComputeFullU | Eigen::ComputeFullV);
         Eigen::Matrix2d S = Eigen::Matrix2d::Identity();
-
-        const double det = U.determinant() * V.determinant();
-        if (det < 0.0) {
+        if (svd.matrixU().determinant() * svd.matrixV().determinant() < 0.0) {
           S(1, 1) = -1;
         }
 
-        Eigen::Isometry3d T_utm_world = Eigen::Isometry3d::Identity();
-        T_utm_world.linear().block<2, 2>(0, 0) = U * S * V.transpose();
-        T_utm_world.translation() = mean_gnss - T_utm_world.linear() * mean_est;
+        Eigen::Isometry3d T_enu_world = Eigen::Isometry3d::Identity();
+        T_enu_world.linear().block<2, 2>(0, 0) = svd.matrixU() * S * svd.matrixV().transpose();
+        T_enu_world.translation() = mean_gnss - T_enu_world.linear() * mean_est;
 
-        T_world_utm = T_utm_world.inverse();
-
-        for (int i = 0; i < submaps.size(); i++) {
-          const Eigen::Vector3d gnss = T_world_utm * submap_coords[i].tail<3>();
-          logger->debug("submap={} gnss={}", convert_to_string(submaps[i]->T_world_origin.translation().eval()), convert_to_string(gnss));
-        }
-
-        logger->info("T_world_utm={}", convert_to_string(T_world_utm));
+        T_world_enu = T_enu_world.inverse();
         transformation_initialized = true;
+        logger->info("T_world_enu initialized — publishing aligned GPS to /glim_ros/fixed_gps");
+
+        // Publish all accumulated points retroactively
+        publish_all_gps_points();
       }
 
-      // Add translation prior factor
+      if (transformation_initialized && !lever_arm_refined &&
+          (int)submaps.size() >= lever_arm_refine_min_submaps) {
+        refine_lever_arm();
+      }
+
       if (transformation_initialized) {
-        const Eigen::Vector3d xyz = T_world_utm * submap_coords.back().tail<3>();
-        logger->debug("submap={} gnss={}", convert_to_string(submaps.back()->T_world_origin.translation().eval()), convert_to_string(xyz));
+        const Eigen::Vector3d p_gnss_world = T_world_enu * submap_coords.back().tail<3>();
+        const Eigen::Matrix3d R_world_lidar = submaps.back()->T_world_origin.linear();
+        const Eigen::Vector3d xyz = p_gnss_world - R_world_lidar * lever_arm_body;
+
+        logger->debug("submap={} gnss_corrected={}",
+          convert_to_string(submaps.back()->T_world_origin.translation().eval()),
+          convert_to_string(xyz));
+
+        // Publish corrected GPS point
+        publish_gps_point(xyz, submaps.back()->frames.back()->stamp);
 
         const auto& submap = submaps.back();
-        // note: should use a more accurate information matrix
         const auto model = gtsam::noiseModel::Isotropic::Information(prior_inf_scale.asDiagonal());
-        gtsam::NonlinearFactor::shared_ptr factor(new gtsam::PoseTranslationPrior<gtsam::Pose3>(X(submap->id), xyz, model));
-        output_factors.push_back(factor);
+        output_factors.push_back(
+          gtsam::NonlinearFactor::shared_ptr(
+            new gtsam::PoseTranslationPrior<gtsam::Pose3>(X(submap->id), xyz, model)));
       }
     }
   }
 
 private:
+  void publish_gps_point(const Eigen::Vector3d& xyz, double stamp_sec) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header.frame_id = "map";
+    pose.header.stamp.sec = static_cast<int32_t>(stamp_sec);
+    pose.header.stamp.nanosec = static_cast<uint32_t>((stamp_sec - pose.header.stamp.sec) * 1e9);
+    pose.pose.position.x = xyz.x();
+    pose.pose.position.y = xyz.y();
+    pose.pose.position.z = xyz.z();
+    pose.pose.orientation.w = 1.0;
+
+    gps_path_msg.header.stamp = pose.header.stamp;
+    gps_path_msg.poses.push_back(pose);
+    gps_path_pub->publish(gps_path_msg);
+  }
+
+  void publish_all_gps_points() {
+    for (size_t i = 0; i < submaps.size(); i++) {
+      const Eigen::Vector3d p_gnss_world = T_world_enu * submap_coords[i].tail<3>();
+      const Eigen::Matrix3d R_world_lidar = submaps[i]->T_world_origin.linear();
+      const Eigen::Vector3d xyz = p_gnss_world - R_world_lidar * lever_arm_body;
+      publish_gps_point(xyz, submaps[i]->frames.back()->stamp);
+    }
+  }
+
+  void refine_lever_arm() {
+    const int N = submaps.size();
+    Eigen::MatrixXd A(3 * N, 3);
+    Eigen::VectorXd b(3 * N);
+
+    for (int i = 0; i < N; i++) {
+      const Eigen::Vector3d p_gnss_world = T_world_enu * submap_coords[i].tail<3>();
+      const Eigen::Matrix3d R = submaps[i]->T_world_origin.linear();
+      const Eigen::Vector3d p_lidar = submaps[i]->T_world_origin.translation();
+      A.block<3, 3>(3 * i, 0) = R;
+      b.segment<3>(3 * i) = p_gnss_world - p_lidar;
+    }
+
+    const Eigen::Vector3d refined = A.colPivHouseholderQr().solve(b);
+
+    if ((refined - lever_arm_body).norm() > 2.0) {
+      logger->warn("lever arm refinement outlier (delta={:.3f} m), keeping approximate",
+        (refined - lever_arm_body).norm());
+      lever_arm_refined = true;
+      return;
+    }
+
+    logger->info(
+      "lever arm refined: [{:.3f}, {:.3f}, {:.3f}] m  (approx was [{:.3f}, {:.3f}, {:.3f}])",
+      refined.x(), refined.y(), refined.z(),
+      lever_arm_body.x(), lever_arm_body.y(), lever_arm_body.z());
+
+    lever_arm_body = refined;
+    lever_arm_refined = true;
+  }
+
   std::atomic_bool kill_switch;
   std::thread thread;
 
@@ -227,10 +355,26 @@ private:
   Eigen::Vector3d prior_inf_scale;
   double min_baseline;
 
-  bool transformation_initialized;
-  Eigen::Isometry3d T_world_utm;
+  bool enu_origin_set;
+  Eigen::Vector3d origin_ecef;
+  Eigen::Matrix3d R_enu_ecef;
 
-  // Logging
+  bool transformation_initialized;
+  Eigen::Isometry3d T_world_enu;
+
+  Eigen::Vector3d lever_arm_body;
+  bool lever_arm_refined;
+  int lever_arm_refine_min_submaps;
+
+  // ROS2 publisher
+  rclcpp::Node::SharedPtr pub_node;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr gps_path_pub;
+  nav_msgs::msg::Path gps_path_msg;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr raw_gps_path_pub;
+  nav_msgs::msg::Path raw_gps_path_msg;
+  std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> pub_executor;
+  std::thread pub_executor_thread;
+
   std::shared_ptr<spdlog::logger> logger;
 };
 
