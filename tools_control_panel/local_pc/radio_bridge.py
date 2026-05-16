@@ -22,9 +22,32 @@ log = logging.getLogger("radio_bridge")
 MAX_BYTES = 1900
 
 
-def load_config(path):
-    with open(path) as f:
-        return yaml.safe_load(f)
+import os
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_DEFAULT_CFG = os.path.join(_SCRIPT_DIR, "../config/farm_config.yaml")
+_DEFAULT_CFG_LOCAL = os.path.join(_SCRIPT_DIR, "../config/local_config.yaml")
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    result = base.copy()
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(result.get(k), dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
+def load_config(base_path, local_path=None):
+    with open(base_path) as f:
+        cfg = yaml.safe_load(f)
+    if local_path and os.path.exists(local_path):
+        with open(local_path) as f:
+            local = yaml.safe_load(f)
+        cfg = _deep_merge(cfg, local or {})
+        log.info(f"Local config applied: {local_path}")
+    return cfg
 
 
 class RadioBridge:
@@ -116,13 +139,11 @@ class RadioBridge:
 
 
 def main():
-    
-    import os
-    _DEFAULT_CFG = os.path.join(os.path.dirname(__file__), "../config/farm_config.yaml")
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=_DEFAULT_CFG)
+    parser.add_argument("--local-config", default=_DEFAULT_CFG_LOCAL)
     args = parser.parse_args()
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, args.local_config)
     RadioBridge(cfg).run()
 
 
