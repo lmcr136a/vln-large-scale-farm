@@ -89,7 +89,7 @@ autonomous:
   max_repeat_num:  1
   min_waypoints:   2
 
-  position_tolerance:    0.3
+  position_tolerance:    0.1
   orientation_tolerance: 5
 
   max_linear_speed:  1.5
