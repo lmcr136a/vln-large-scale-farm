@@ -9,6 +9,7 @@ import urllib.request
 import yaml
 
 log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
 
 DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 # datetime.weekday(): 0=Mon … 5=Sat, 6=Sun
@@ -81,35 +82,43 @@ class Scheduler:
 
     def _loop(self):
         while True:
-            now      = datetime.datetime.now()
-            hhmm     = (now.hour, now.minute)
-            date_str = now.strftime('%Y-%m-%d')
-            weekday  = now.weekday()  # 0=Mon … 6=Sun
+            try:
+                now      = datetime.datetime.now()
+                hhmm     = (now.hour, now.minute)
+                date_str = now.strftime('%Y-%m-%d')
+                weekday  = now.weekday()
 
-            if now.strftime('%H:%M') == '00:00':
-                self._fired_today.clear()
+                if now.strftime('%H:%M') == '00:00':
+                    self._fired_today.clear()
 
-            sched = self._load_schedule()
-            if sched.get('enabled', True):
+                sched = self._load_schedule()
+                enabled = sched.get('enabled', True)
                 day_key = DAYS[weekday]
-                for time_str in sched.get(day_key, []):
-                    parsed = _parse_time(time_str)
-                    if not parsed:
-                        continue
-                    if hhmm == parsed:
-                        fire_key = f'{date_str}_{time_str}'
-                        if fire_key not in self._fired_today:
-                            self._fired_today.add(fire_key)
-                            waypoints = self._load_waypoints()
-                            if len(waypoints) >= 2:
-                                log.info(f'Scheduled run: {day_key} {time_str}')
-                                threading.Thread(
-                                    target=self._fire_with_retry,
-                                    args=(waypoints,),
-                                    daemon=True,
-                                ).start()
-                            else:
-                                log.warning(f'Scheduled run skipped — no waypoints')
+                times   = sched.get(day_key, [])
+                log.debug(f'Scheduler check {now.strftime("%H:%M")} enabled={enabled} {day_key}={times}')
+
+                if enabled:
+                    for time_str in times:
+                        parsed = _parse_time(time_str)
+                        if not parsed:
+                            log.warning(f'Cannot parse time: {time_str!r}')
+                            continue
+                        if hhmm == parsed:
+                            fire_key = f'{date_str}_{time_str}'
+                            if fire_key not in self._fired_today:
+                                self._fired_today.add(fire_key)
+                                waypoints = self._load_waypoints()
+                                if len(waypoints) >= 2:
+                                    log.info(f'Scheduled run: {day_key} {time_str}')
+                                    threading.Thread(
+                                        target=self._fire_with_retry,
+                                        args=(waypoints,),
+                                        daemon=True,
+                                    ).start()
+                                else:
+                                    log.warning(f'Scheduled run skipped — no waypoints ({len(waypoints)})')
+            except Exception as e:
+                log.error(f'Scheduler loop error: {e}', exc_info=True)
             time.sleep(30)
 
     def _fire_with_retry(self, waypoints, max_retries=10, interval=60):
