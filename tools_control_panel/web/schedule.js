@@ -77,10 +77,10 @@ function findNextSchedule() {
     const times = scheduleData[day] || [];
 
     for (const t of times) {
-      const h = _parseHour(t);
-      if (h == null) continue;
+      const parsed = _parseTime(t);
+      if (parsed == null) continue;
       const candidate = new Date(d);
-      candidate.setHours(h, 0, 0, 0);
+      candidate.setHours(parsed.h, parsed.min, 0, 0);
       if (candidate > now) {
         if (!best || candidate < best.time) {
           best = {
@@ -95,14 +95,15 @@ function findNextSchedule() {
   return best;
 }
 
-function _parseHour(s) {
-  const m = s.match(/^(\d+)(am|pm)$/i);
+function _parseTime(s) {
+  const m = s.match(/^(\d+)(?::(\d{2}))?(am|pm)$/i);
   if (!m) return null;
   let h = parseInt(m[1]);
-  const pm = m[2].toLowerCase() === 'pm';
+  const min = m[2] ? parseInt(m[2]) : 0;
+  const pm = m[3].toLowerCase() === 'pm';
   if (pm && h !== 12) h += 12;
   if (!pm && h === 12) h = 0;
-  return h;
+  return {h, min};
 }
 
 function startCountdown() {
