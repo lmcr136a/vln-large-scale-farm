@@ -126,12 +126,17 @@ class InternetComm:
                 try:
                     self._sio.connect(self._url, namespaces=["/"])
                 except Exception as e:
-                    log.warning(f"Internet connect failed: {e}, retry in 10s")
-                    time.sleep(10)
-                    continue
-                # connect()가 예외 없이 리턴하거나 on_connect 콜백으로 _connected=True 된 경우
-                threading.Thread(target=self._quality_loop, daemon=True).start()
-                self._sio.wait()
+                    if not self._connected:
+                        log.warning(f"Internet connect failed: {e}, retry in 10s")
+                        time.sleep(10)
+                        continue
+                    # on_connect fired before exception — connection is actually up
+                    log.info("Connected (namespace warning ignored)")
+            threading.Thread(target=self._quality_loop, daemon=True).start()
+            self._sio.wait()
+            self._connected = False
+            log.warning("Internet disconnected, retry in 5s")
+            time.sleep(5)
 
     def _quality_loop(self):
         """Periodically measure RTT and auto-select quality level."""

@@ -23,10 +23,14 @@ def _wifi_ssid() -> str:
         return ""
 
 
-def _at_station(pose: list, cfg: dict) -> bool:
+def _at_station(pose, cfg: dict) -> bool:
     sx, sy = cfg["station_pose"]
-    dx = pose[0] - sx
-    dy = pose[1] - sy
+    if isinstance(pose, dict):
+        px, py = pose.get("x", 0.0), pose.get("y", 0.0)
+    else:
+        px, py = pose[0], pose[1]
+    dx = px - sx
+    dy = py - sy
     return math.sqrt(dx * dx + dy * dy) <= cfg["station_radius"]
 
 

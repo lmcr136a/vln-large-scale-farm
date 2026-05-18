@@ -177,6 +177,19 @@ def main():
                 log.warning("start_recording ignored: already recording")
                 return
             _rec_active[0] = True
+        import subprocess, yaml as _yaml
+        try:
+            with open(cfg_path, encoding='utf-8') as _f:
+                _raw = _yaml.safe_load(_f)
+            _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            _data = os.path.normpath(os.path.join(_proj, _raw["paths"]["data_dir"]))
+            ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
+            rec_dir  = os.path.join(_data, subdir, ts)
+            bag_path = os.path.join(rec_dir, 'rosbag')
+            os.makedirs(rec_dir, exist_ok=True)
+        except Exception as e:
+            log.error(f"Recording path setup failed: {e}")
+            return
         if recorder:
             try:
                 recorder.start_recording(output_dir=rec_dir)
@@ -185,15 +198,6 @@ def main():
                 log.error(f"Camera recording start failed: {e}")
         topics = list(cfg["ros2"]["topics"].values()) + [cfg["ros2"]["cmd_vel_topic"]]
         try:
-            import subprocess, yaml as _yaml
-            with open(cfg_path, encoding='utf-8') as _f:
-                _raw = _yaml.safe_load(_f)
-            _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            _data = os.path.normpath(os.path.join(_proj, _raw["paths"]["data_dir"]))
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            rec_dir  = os.path.join(_data, subdir, ts)
-            bag_path = os.path.join(rec_dir, 'rosbag')
-            os.makedirs(rec_dir, exist_ok=True)
             _rosbag_proc[0] = subprocess.Popen(
                 ['ros2', 'bag', 'record', '-o', bag_path] + list(set(topics)))
             log.info(f"Rosbag recording started: {bag_path}")
