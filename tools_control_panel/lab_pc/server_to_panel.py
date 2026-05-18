@@ -25,6 +25,9 @@ class ServerToPanel:
     def _map_state_path(self):
         return os.path.join(self._map_dir(), self.config['paths'].get('map_state', 'map_state.json'))
 
+    def notify_jetson_map(self):
+        self._last_mtime = time.time()
+
     def send_map_update(self, force=False):
         png_path   = self._map_image_path()
         state_path = self._map_state_path()
