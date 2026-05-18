@@ -5,6 +5,7 @@ import os
 import re
 import threading
 import time
+import urllib.request
 import yaml
 
 log = logging.getLogger(__name__)
@@ -15,16 +16,16 @@ _WEEKDAY_MAP = {d: i for i, d in enumerate(DAYS)}
 
 
 def _parse_time(s: str):
-    """Parse '5am', '5:30am', '11:45pm' → (hour, minute). Returns None on error."""
-    m = re.fullmatch(r'(\d{1,2})(?::(\d{2}))?(am|pm)', s.strip().lower())
+    """Parse '5am', '11pm' → (hour, minute). Returns None on error."""
+    m = re.fullmatch(r'(\d{1,2})(am|pm)', s.strip().lower())
     if not m:
         return None
-    h, minute, period = int(m.group(1)), int(m.group(2) or 0), m.group(3)
+    h, period = int(m.group(1)), m.group(2)
     if period == 'pm' and h != 12:
         h += 12
     elif period == 'am' and h == 12:
         h = 0
-    return h, minute
+    return h, 0
 
 
 class Scheduler:
@@ -33,16 +34,25 @@ class Scheduler:
     Fires start_cb(waypoints) at scheduled times, with retry on failure.
     """
 
-    def __init__(self, config_path: str, start_cb):
+    def __init__(self, config_path: str, start_cb, lab_url: str = None):
         self._cfg_path      = os.path.expanduser(config_path)
         self._schedule_file = os.path.join(os.path.dirname(self._cfg_path), 'schedule.json')
         self._start_cb      = start_cb
+        self._lab_url       = lab_url.rstrip('/') if lab_url else None
         self._fired_today: set = set()
 
     def run(self):
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _load_schedule(self) -> dict:
+        # Try Lab PC API first
+        if self._lab_url:
+            try:
+                with urllib.request.urlopen(f'{self._lab_url}/schedule', timeout=3) as r:
+                    return json.loads(r.read())
+            except Exception as e:
+                log.warning(f'Schedule fetch from Lab PC failed: {e}, falling back to local')
+        # Fallback: local file
         try:
             with open(self._schedule_file) as f:
                 return json.load(f)

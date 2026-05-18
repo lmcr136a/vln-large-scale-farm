@@ -237,7 +237,7 @@ def main():
     radio.start()
     internet.start()
 
-    Scheduler(cfg_path, auto_ctrl.start).run()
+    Scheduler(cfg_path, auto_ctrl.start, lab_url=cfg['internet']['lab_ws_url']).run()
 
     pc_topic    = cfg["internet"]["pointcloud_topic"]
     pc_interval = float(cfg["internet"]["pointcloud_interval"])
