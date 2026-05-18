@@ -66,9 +66,17 @@ class Scheduler:
         try:
             with open(self._cfg_path, encoding='utf-8') as f:
                 cfg = yaml.safe_load(f)
-            return cfg.get('autonomous', {}).get('waypoints', [])
+            mission_file = cfg.get('paths', {}).get('mission_file', 'mission.json')
+            if not os.path.isabs(mission_file):
+                mission_file = os.path.join(os.path.dirname(self._cfg_path), mission_file)
+            with open(mission_file, encoding='utf-8') as f:
+                mission = json.load(f)
+            return mission.get('waypoints', [])
+        except FileNotFoundError:
+            log.warning('mission.json not found')
+            return []
         except Exception as e:
-            log.error(f'Config read error: {e}')
+            log.error(f'Waypoints load error: {e}')
             return []
 
     def _loop(self):
