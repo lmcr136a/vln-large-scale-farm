@@ -17,16 +17,16 @@ _WEEKDAY_MAP = {d: i for i, d in enumerate(DAYS)}
 
 
 def _parse_time(s: str):
-    """Parse '5am', '11pm' → (hour, minute). Returns None on error."""
-    m = re.fullmatch(r'(\d{1,2})(am|pm)', s.strip().lower())
+    """Parse '5am', '5:30am', '11:45pm' → (hour, minute). Returns None on error."""
+    m = re.fullmatch(r'(\d{1,2})(?::(\d{2}))?(am|pm)', s.strip().lower())
     if not m:
         return None
-    h, period = int(m.group(1)), m.group(2)
+    h, minute, period = int(m.group(1)), int(m.group(2) or 0), m.group(3)
     if period == 'pm' and h != 12:
         h += 12
     elif period == 'am' and h == 12:
         h = 0
-    return h, 0
+    return h, minute
 
 
 class Scheduler:
