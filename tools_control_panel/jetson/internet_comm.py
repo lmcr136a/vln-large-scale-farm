@@ -68,6 +68,15 @@ class InternetComm:
             "data": base64.b64encode(points[idx].astype(np.float32).tobytes()).decode(),
         })
 
+
+    def send_map(self, png_path: str, meta: dict):
+        try:
+            with open(png_path, "rb") as f:
+                data = base64.b64encode(f.read()).decode()
+            self._emit("map_frame", {"data": data, "meta": meta})
+        except Exception as e:
+            log.error(f"send_map: {e}")
+
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _emit(self, event: str, data):

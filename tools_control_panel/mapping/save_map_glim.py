@@ -33,9 +33,9 @@ STEP_MIN_PTS       = 10
 
 Z_COLOR_RANGE      = 0.05
 
-ROBOT_ACTUAL_SIZE  = 1.2
+ROBOT_ACTUAL_SIZE  = 0.6
 ROBOT_RADIUS_M     = ROBOT_ACTUAL_SIZE / 2.0
-ROBOT_ARROW_LEN_M  = 1.5
+ROBOT_ARROW_LEN_M  = 0.46
 
 COLOR_TRAJECTORY   = (100, 255, 170)
 COLOR_ROBOT_CIRCLE = (0, 0, 255)
@@ -201,7 +201,7 @@ def _interp_anchors(t, anchors):
     return np.clip(c0 + (c1 - c0) * t_seg[:, np.newaxis], 0, 255).astype(np.uint8)
 
 
-def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, output_path, world_rot_angle=0.0):
+def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, output_path, world_rot_angle=0.0, robot_pos=None):
     try:
         u_min = meta['u_min']
         v_min = meta['v_min']
@@ -243,8 +243,9 @@ def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, output_path, world_r
             pts_px = [to_px(p[0], p[1]) for p in path_xyz]
             draw.line(pts_px, fill=COLOR_TRAJECTORY, width=lw)
 
-        if path_xyz is not None and len(path_xyz) > 0:
-            rx, ry = to_px(path_xyz[-1][0], path_xyz[-1][1])
+        _robot_pos = robot_pos if robot_pos is not None else (path_xyz[-1] if path_xyz is not None and len(path_xyz) > 0 else None)
+        if _robot_pos is not None:
+            rx, ry = to_px(_robot_pos[0], _robot_pos[1])
 
             dx =  np.cos(robot_yaw)
             dy = -np.sin(robot_yaw)
@@ -489,10 +490,15 @@ class ContinuousPointCloudMapper(Node):
             'grid_size': PIXEL_GRID_SIZE,
             'grid_width': grid_w, 'grid_height': grid_h,
         }
+        p = self.latest_pose.position
+        robot_xy = np.array([[p.x, p.y, 0.0]])
+        robot_xy_r = _rotate_xy(robot_xy, theta)
+        robot_pos_r = (robot_xy_r[0, 0], robot_xy_r[0, 1])
+
         final_res, _, _ = render_and_save(
             grid, z_rel, meta, path_r, robot_yaw_rotated,
             os.path.join(self._output_dir, self._map_image),
-            world_rot_angle=theta)
+            world_rot_angle=theta, robot_pos=robot_pos_r)
         if final_res is None:
             return
 

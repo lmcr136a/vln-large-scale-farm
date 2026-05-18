@@ -18,10 +18,7 @@ find_package(Eigen3 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem)
 find_package(glim REQUIRED)
 
-# ImGui / guik / glk — init_pose_viewer extension module용
-find_package(imgui QUIET)
-find_package(guik QUIET)
-find_package(glk QUIET)
+option(BUILD_WITH_VIEWER "Build viewer-dependent modules" ON)
 
 # ──────────────────────────────────────────────
 # 1. map_loader_node
@@ -41,7 +38,7 @@ target_link_libraries(map_loader_node
 )
 
 # ──────────────────────────────────────────────
-# 2. localizer_ext  (GLIM extension module — submap callback 직접 수신)
+# 2. localizer_ext
 # ──────────────────────────────────────────────
 add_library(localizer_ext SHARED src/localizer_ext.cpp)
 target_include_directories(localizer_ext PRIVATE
@@ -57,26 +54,36 @@ target_link_libraries(localizer_ext
 )
 
 # ──────────────────────────────────────────────
-# 4. init_pose_viewer  (GLIM extension module .so)
+# 3. init_pose_viewer (viewer only)
 # ──────────────────────────────────────────────
-add_library(init_pose_viewer SHARED src/init_pose_viewer.cpp)
-target_include_directories(init_pose_viewer PRIVATE
-  include
-  /usr/local/include
-)
-ament_target_dependencies(init_pose_viewer
-  rclcpp geometry_msgs
-)
-target_link_libraries(init_pose_viewer
-  glim::glim
-  ${PCL_LIBRARIES}
-)
+if(BUILD_WITH_VIEWER)
+  find_package(imgui QUIET)
+  find_package(guik QUIET)
+  find_package(glk QUIET)
+
+  add_library(init_pose_viewer SHARED src/init_pose_viewer.cpp)
+  target_include_directories(init_pose_viewer PRIVATE
+    include
+    /usr/local/include
+  )
+  ament_target_dependencies(init_pose_viewer
+    rclcpp geometry_msgs
+  )
+  target_link_libraries(init_pose_viewer
+    glim::glim
+    ${PCL_LIBRARIES}
+  )
+endif()
 
 # ──────────────────────────────────────────────
 # Install
 # ──────────────────────────────────────────────
-install(TARGETS
-  map_loader_node localizer_ext init_pose_viewer
+set(INSTALL_TARGETS map_loader_node localizer_ext)
+if(BUILD_WITH_VIEWER)
+  list(APPEND INSTALL_TARGETS init_pose_viewer)
+endif()
+
+install(TARGETS ${INSTALL_TARGETS}
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)

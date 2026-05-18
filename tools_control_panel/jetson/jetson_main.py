@@ -7,6 +7,7 @@ import struct
 import sys
 import threading
 import time
+from datetime import datetime
 import yaml
 
 import numpy as np
@@ -42,8 +43,9 @@ BEST_EFFORT_QOS = QoSProfile(
 
 class RecorderProxy:
     """Captures front_frame/back_frame emits from recorder and sends via internet."""
-    def __init__(self, internet):
-        self._internet = internet
+    def __init__(self, internet, telemetry=None):
+        self._internet  = internet
+        self._telemetry = telemetry
 
     def emit(self, event: str, data=None, namespace=None):
         if event in ("front_frame", "back_frame") and data:
@@ -51,6 +53,8 @@ class RecorderProxy:
             b64 = data.get("data", "")
             if b64:
                 self._internet.send_rgb_b64(b64, camera)
+                if self._telemetry:
+                    self._telemetry.touch(f"zed_{camera}")
 
     def start_background_task(self, *a, **kw): pass
 
@@ -163,13 +167,20 @@ def main():
 
     proxy     = SocketIOProxy(radio, internet, uploader, telemetry)
 
-    _rosbag_proc = [None]   # mutable container for subprocess reference
+    _rosbag_proc = [None]
+    _rec_lock    = threading.Lock()
+    _rec_active  = [False]
 
     def start_rec_cb(subdir: str):
+        with _rec_lock:
+            if _rec_active[0]:
+                log.warning("start_recording ignored: already recording")
+                return
+            _rec_active[0] = True
         if recorder:
             try:
-                recorder.start_recording()
-                log.info(f"Camera recording started (subdir managed by recorder)")
+                recorder.start_recording(output_dir=rec_dir)
+                log.info(f"Camera recording started: {rec_dir}")
             except Exception as e:
                 log.error(f"Camera recording start failed: {e}")
         topics = list(cfg["ros2"]["topics"].values()) + [cfg["ros2"]["cmd_vel_topic"]]
@@ -179,7 +190,10 @@ def main():
                 _raw = _yaml.safe_load(_f)
             _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             _data = os.path.normpath(os.path.join(_proj, _raw["paths"]["data_dir"]))
-            bag_path = os.path.join(_data, subdir, 'rosbag')
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            rec_dir  = os.path.join(_data, subdir, ts)
+            bag_path = os.path.join(rec_dir, 'rosbag')
+            os.makedirs(rec_dir, exist_ok=True)
             _rosbag_proc[0] = subprocess.Popen(
                 ['ros2', 'bag', 'record', '-o', bag_path] + list(set(topics)))
             log.info(f"Rosbag recording started: {bag_path}")
@@ -187,6 +201,8 @@ def main():
             log.error(f"Rosbag start failed: {e}")
 
     def stop_rec_cb():
+        with _rec_lock:
+            _rec_active[0] = False
         if recorder:
             try:
                 recorder.stop_recording()
@@ -347,7 +363,7 @@ def main():
         from sensor.recorder import MultiSensorRecorder
         rec_cfg  = cfg["recording"]
         recorder = MultiSensorRecorder(base_node, output_base_dir=cfg["paths"]["data_dir"])
-        rec_proxy = RecorderProxy(internet)
+        rec_proxy = RecorderProxy(internet, telemetry)
         for cam in rec_cfg.get("zed_cameras", []):
             recorder.add_zed_camera(
                 serial_number=cam["serial"],

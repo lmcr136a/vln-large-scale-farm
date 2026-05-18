@@ -37,7 +37,7 @@ server:
 # rotation:    [roll, pitch, yaw]  degrees
 lidar_extrinsics:
   translation: [0.0, 0.0, 0.0]
-  rotation:    [0.0, 0.0, 180.0]   # 180° yaw = LiDAR mounted facing backward
+  rotation:    [0.0, 0.0, 0.0]   # 180° yaw = LiDAR mounted facing backward
 
 # ── ROS2 ──────────────────────────────────────────────────────────────────────
 ros2:
@@ -53,6 +53,7 @@ ros2:
     imu:         '/xsens/imu/data'
     gps:         '/gps/fix'
     entire_map:  '/glim_ros/entire_map'
+    aligned_points: '/glim_ros/aligned_points' 
     trajectory:  '/glim_ros/localized_trajectory'
 
 # ══════════════════════════════════════════════════════════════════════════════

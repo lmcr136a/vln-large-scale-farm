@@ -8,7 +8,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import PoseStamped
-from sensor_msgs.msg import BatteryState, PointCloud2, Image, Imu
+from sensor_msgs.msg import BatteryState, PointCloud2, Image, Imu, NavSatFix
 
 log = logging.getLogger(__name__)
 
@@ -32,14 +32,14 @@ class TelemetryNode(Node):
         self._last_ts: dict[str, float] = {}
 
         t = topics
-        self.create_subscription(PoseStamped,    t["pose"],      self._cb_pose,            BEST_EFFORT)
-        self.create_subscription(BatteryState,   t["battery"],   self._cb_battery,         10)
-        self.create_subscription(PointCloud2,    t["lidar"],     self._heartbeat("lidar"),  BEST_EFFORT)
-        self.create_subscription(Image,          t["zed_front"], self._heartbeat("zed_front"), BEST_EFFORT)
-        self.create_subscription(Image,          t["zed_back"],  self._heartbeat("zed_back"),  BEST_EFFORT)
-        self.create_subscription(Imu,            t["imu"],       self._heartbeat("imu"),    BEST_EFFORT)
+        self.create_subscription(PoseStamped,    t["pose"],      self._cb_pose,              BEST_EFFORT)
+        self.create_subscription(BatteryState,   t["battery"],   self._cb_battery,           10)
+        self.create_subscription(PointCloud2,    t["lidar"],     self._heartbeat("lidar"),    BEST_EFFORT)
+        self.create_subscription(Imu,            t["imu"],       self._heartbeat("imu"),      BEST_EFFORT)
+        if "gps" in t:
+            self.create_subscription(NavSatFix,  t["gps"],       self._heartbeat("gps"),      BEST_EFFORT)
 
-        for key in ("lidar", "zed_front", "zed_back", "imu"):
+        for key in ("lidar", "zed_front", "zed_back", "imu", "gps"):
             self._last_ts[key] = 0.0
 
     def _cb_pose(self, msg: PoseStamped):
@@ -53,6 +53,9 @@ class TelemetryNode(Node):
     def _cb_battery(self, msg: BatteryState):
         with self._lock:
             self._battery = round(float(msg.percentage) * 100, 1)
+
+    def touch(self, key: str):
+        self._last_ts[key] = time.time()
 
     def _heartbeat(self, key: str):
         def cb(_msg):
