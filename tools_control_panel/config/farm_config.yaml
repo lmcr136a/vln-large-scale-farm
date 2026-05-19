@@ -52,6 +52,7 @@ ros2:
     zed_back:    '/zed_back/rgb/image_raw'
     imu:         '/xsens/imu/data'
     gps:         '/gps/fix'
+    gps_status:  '/gps/rtk_status'
     entire_map:  '/glim_ros/entire_map'
     aligned_points: '/glim_ros/aligned_points' 
     trajectory:  '/glim_ros/localized_trajectory'
@@ -126,3 +127,13 @@ monitor:
 
 map:
   update_interval: 60
+
+# ── Tmux Session Monitor ──────────────────────────────────────────────────────
+tmux:
+  session: 'vln'
+  # Override per-window restart commands if needed.
+  # Built-in keys: slam, map_saver, obstacle, gps, lidar, imu
+  # Example override:
+  #   slam:
+  #     cmd: 'bash launch_files/launch_slam.sh real'
+  windows:

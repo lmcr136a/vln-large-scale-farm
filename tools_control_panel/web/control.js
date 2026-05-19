@@ -280,6 +280,23 @@ socket.on('robot_telemetry', (data) => {
     const inet = data.internet === true ? '🌐✓' : data.internet === false ? '🌐✗' : '';
     wifiEl.textContent = (data.wifi && data.wifi !== '—' ? data.wifi : '—') + (inet ? '  ' + inet : '');
   }
+
+  // ── Link quality bars ──────────────────────────────────
+  updateQualityBar('radio', data.radio_quality);
+  updateQualityBar('gnss',  data.gps_status?.gnss_radio_quality);
+  updateQualityBar('inet',  data.internet_quality);
+
+  const rttEl = document.getElementById('rtt-label');
+  if (rttEl) {
+    rttEl.textContent = data.internet_rtt_ms != null
+      ? `RTT: ${data.internet_rtt_ms} ms` : 'RTT: —';
+  }
+
+  // ── GPS RTK status ─────────────────────────────────────
+  if (data.gps_status) updateGpsPanel(data.gps_status);
+
+  // ── Tmux window status ─────────────────────────────────
+  if (data.tmux_status) updateTmuxPanel(data.tmux_status);
 });
 
 socket.on('waypoint_reached', (data) => {
@@ -462,4 +479,97 @@ function updateAutoButton() {
   if (!btn) return;
   btn.textContent = isAutoMode ? '⏹ Stop' : '▶ Run Now';
   btn.classList.toggle('active-auto', isAutoMode);
+}
+// ═══════════════════════════════════════════════════════════════
+//  Link Quality Bars
+// ═══════════════════════════════════════════════════════════════
+
+function qualityColor(score) {
+  if (score == null) return 'rgba(255,255,255,0.15)';
+  if (score >= 80) return '#00dc78';
+  if (score >= 60) return '#7ecf40';
+  if (score >= 40) return '#f0c040';
+  if (score >= 20) return '#f08030';
+  return '#ff5050';
+}
+
+function updateQualityBar(id, score) {
+  const fill  = document.getElementById(`bar-${id}`);
+  const label = document.getElementById(`score-${id}`);
+  if (!fill || !label) return;
+  const pct = score != null ? Math.min(100, Math.max(0, score)) : 0;
+  fill.style.width      = `${pct}%`;
+  fill.style.background = qualityColor(score);
+  label.textContent     = score != null ? `${score}%` : '—';
+  label.style.color     = qualityColor(score);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  GPS RTK Status Panel
+// ═══════════════════════════════════════════════════════════════
+
+function updateGpsPanel(g) {
+  const badge = document.getElementById('gps-mode-badge');
+  if (badge) {
+    badge.textContent = g.rtk_mode || 'No Fix';
+    badge.className = 'gps-mode-badge ' + (
+      g.rtk_fixed ? 'gps-mode-fixed' :
+      g.rtk_float ? 'gps-mode-float' :
+      g.rtk_mode === 'DGPS' || g.rtk_mode === '3D Fix' ? 'gps-mode-dgps' :
+      'gps-mode-nofix'
+    );
+  }
+
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val ?? '—';
+  };
+
+  set('gps-lat',    g.lat  != null ? g.lat.toFixed(7)  : null);
+  set('gps-lon',    g.lon  != null ? g.lon.toFixed(7)  : null);
+  set('gps-alt',    g.alt  != null ? `${g.alt.toFixed(1)} m` : null);
+  set('gps-hacc',   g.h_acc != null ? `${g.h_acc.toFixed(3)} m` : null);
+  set('gps-sv',     g.sv);
+  set('gps-hdop',   g.hdop != null ? g.hdop.toFixed(1) : null);
+  set('gps-strong', g.strong_sv);
+  set('base-id',    g.base_id);
+  set('base-dist',  g.baseline_m != null ? `${g.baseline_m} m` : null);
+  set('base-latlon', g.base_lat != null
+    ? `${g.base_lat.toFixed(5)}, ${g.base_lon.toFixed(5)}` : null);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Tmux Window Status Panel
+// ═══════════════════════════════════════════════════════════════
+
+const TMUX_WINDOW_LABELS = {
+  slam:      'SLAM',
+  map_saver: '2D Map',
+  obstacle:  'Safety',
+  gps:       'GPS Node',
+  lidar:     'LiDAR',
+  imu:       'IMU',
+};
+
+function updateTmuxPanel(status) {
+  const container = document.getElementById('tmux-rows');
+  if (!container) return;
+
+  const keys = Object.keys(TMUX_WINDOW_LABELS).filter(k => k in status);
+  container.innerHTML = keys.map(key => {
+    const alive = status[key];
+    const dotClass = alive === true ? 'ok' : alive === false ? 'fail' : 'unkn';
+    const label = TMUX_WINDOW_LABELS[key] || key;
+    return `
+      <div class="tmux-row">
+        <div class="tmux-dot ${dotClass}"></div>
+        <div class="tmux-label">${label}</div>
+        <button class="tmux-restart-btn" onclick="restartWindow('${key}')">↺</button>
+      </div>`;
+  }).join('');
+}
+
+function restartWindow(key) {
+  if (!confirm(`Restart "${TMUX_WINDOW_LABELS[key] || key}"?`)) return;
+  socket.emit('command', { cmd: 'restart_window', window: key });
 }

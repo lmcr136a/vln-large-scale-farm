@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import threading
@@ -9,6 +10,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import BatteryState, PointCloud2, Image, Imu, NavSatFix
+from std_msgs.msg import String
 
 log = logging.getLogger(__name__)
 
@@ -30,14 +32,17 @@ class TelemetryNode(Node):
         self._pose    = [0.0] * 7
         self._battery = -1.0
         self._last_ts: dict[str, float] = {}
+        self._gps_status: dict = {}
 
         t = topics
-        self.create_subscription(PoseStamped,    t["pose"],      self._cb_pose,              BEST_EFFORT)
-        self.create_subscription(BatteryState,   t["battery"],   self._cb_battery,           10)
-        self.create_subscription(PointCloud2,    t["lidar"],     self._heartbeat("lidar"),    BEST_EFFORT)
-        self.create_subscription(Imu,            t["imu"],       self._heartbeat("imu"),      BEST_EFFORT)
+        self.create_subscription(PoseStamped,  t["pose"],    self._cb_pose,          BEST_EFFORT)
+        self.create_subscription(BatteryState, t["battery"], self._cb_battery,       10)
+        self.create_subscription(PointCloud2,  t["lidar"],   self._heartbeat("lidar"),   BEST_EFFORT)
+        self.create_subscription(Imu,          t["imu"],     self._heartbeat("imu"),     BEST_EFFORT)
         if "gps" in t:
-            self.create_subscription(NavSatFix,  t["gps"],       self._heartbeat("gps"),      BEST_EFFORT)
+            self.create_subscription(NavSatFix, t["gps"],   self._heartbeat("gps"),     BEST_EFFORT)
+        if "gps_status" in t:
+            self.create_subscription(String, t["gps_status"], self._cb_gps_status, 10)
 
         for key in ("lidar", "zed_front", "zed_back", "imu", "gps"):
             self._last_ts[key] = 0.0
@@ -54,6 +59,14 @@ class TelemetryNode(Node):
         with self._lock:
             self._battery = round(float(msg.percentage) * 100, 1)
 
+    def _cb_gps_status(self, msg: String):
+        try:
+            status = json.loads(msg.data)
+            with self._lock:
+                self._gps_status = status
+        except Exception:
+            pass
+
     def touch(self, key: str):
         self._last_ts[key] = time.time()
 
@@ -67,6 +80,7 @@ class TelemetryNode(Node):
         with self._lock:
             pose = list(self._pose)
             batt = self._battery
+            gps_status = dict(self._gps_status)
         sensors = {k: (now - ts < SENSOR_TIMEOUT) for k, ts in self._last_ts.items()}
         try:
             total, used, _ = shutil.disk_usage(self._data_dir)
@@ -84,4 +98,5 @@ class TelemetryNode(Node):
             "sensors":     sensors,
             "storage_pct": storage_pct,
             "wifi":        wifi,
+            "gps_status":  gps_status,
         }

@@ -36,6 +36,120 @@
     /* Controls column */
     #col-controls { min-width:140px; }
     .run-row { display:flex; gap:6px; align-items:center; }
+
+    /* ── Connection Status Panel ─────────────────────────────── */
+    #col-conn {
+      min-width: 210px;
+      gap: 5px;
+    }
+    .conn-title {
+      font-size: 10px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.45);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 2px;
+    }
+    .conn-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      width: 100%;
+    }
+    .conn-label {
+      font-size: 10px;
+      color: rgba(255,255,255,0.55);
+      width: 90px;
+      flex-shrink: 0;
+    }
+    .quality-bar-wrap {
+      flex: 1;
+      height: 6px;
+      background: rgba(255,255,255,0.12);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .quality-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.6s ease, background 0.6s ease;
+    }
+    .quality-score {
+      font-size: 10px;
+      font-weight: 700;
+      width: 30px;
+      text-align: right;
+      color: rgba(255,255,255,0.7);
+    }
+
+    /* ── GPS Status Panel ────────────────────────────────────── */
+    #col-gps {
+      min-width: 200px;
+      gap: 4px;
+    }
+    .gps-mode-badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+      letter-spacing: 0.5px;
+      display: inline-block;
+    }
+    .gps-mode-fixed  { background: rgba(0,220,120,0.25); color: #00dc78; border: 1px solid rgba(0,220,120,0.4); }
+    .gps-mode-float  { background: rgba(80,180,255,0.20); color: #50b4ff; border: 1px solid rgba(80,180,255,0.4); }
+    .gps-mode-dgps   { background: rgba(255,200,50,0.20); color: #ffc832; border: 1px solid rgba(255,200,50,0.4); }
+    .gps-mode-nofix  { background: rgba(255,80,80,0.15); color: #ff6060; border: 1px solid rgba(255,80,80,0.3); }
+    .gps-detail {
+      font-size: 10px;
+      color: rgba(255,255,255,0.55);
+      line-height: 1.5;
+    }
+    .gps-detail span { color: rgba(255,255,255,0.85); }
+    .gps-base-label {
+      font-size: 9px;
+      color: rgba(255,255,255,0.35);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-top: 2px;
+    }
+
+    /* ── Tmux Window Status ──────────────────────────────────── */
+    #col-tmux {
+      min-width: 170px;
+      gap: 4px;
+    }
+    .tmux-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+    }
+    .tmux-label {
+      font-size: 10px;
+      color: rgba(255,255,255,0.6);
+      flex: 1;
+    }
+    .tmux-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .tmux-dot.ok   { background: #00dc78; }
+    .tmux-dot.fail { background: #ff5050; }
+    .tmux-dot.unkn { background: rgba(255,255,255,0.25); }
+    .tmux-restart-btn {
+      font-size: 9px;
+      padding: 1px 5px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: rgba(255,255,255,0.6);
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    .tmux-restart-btn:hover {
+      background: rgba(255,255,255,0.18);
+      color: white;
+    }
   </style>
 </head>
 <body>
@@ -69,6 +183,68 @@
       <div class="sysmon-row"><span class="sysmon-label">Battery</span><span id="info-battery">—</span></div>
       <div class="sysmon-row"><span class="sysmon-label">Mode</span><span id="info-mode">—</span></div>
       <div class="sysmon-row"><span id="estop-indicator" style="font-weight:bold;letter-spacing:1px;">🟢 OK</span></div>
+    </div>
+
+    <div class="col-divider"></div>
+
+    <!-- Connection quality -->
+    <div class="panel-col" id="col-conn">
+      <div class="conn-title">Link Quality</div>
+
+      <div class="conn-row">
+        <div class="conn-label">Jetson ↔ PC</div>
+        <div class="quality-bar-wrap"><div class="quality-bar-fill" id="bar-radio"></div></div>
+        <div class="quality-score" id="score-radio">—</div>
+      </div>
+
+      <div class="conn-row">
+        <div class="conn-label">Base ↔ GNSS</div>
+        <div class="quality-bar-wrap"><div class="quality-bar-fill" id="bar-gnss"></div></div>
+        <div class="quality-score" id="score-gnss">—</div>
+      </div>
+
+      <div class="conn-row">
+        <div class="conn-label">Internet</div>
+        <div class="quality-bar-wrap"><div class="quality-bar-fill" id="bar-inet"></div></div>
+        <div class="quality-score" id="score-inet">—</div>
+      </div>
+
+      <div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:2px;" id="rtt-label">RTT: —</div>
+    </div>
+
+    <div class="col-divider"></div>
+
+    <!-- GPS RTK Status -->
+    <div class="panel-col" id="col-gps">
+      <div class="conn-title">GPS / RTK</div>
+      <span id="gps-mode-badge" class="gps-mode-badge gps-mode-nofix">No Fix</span>
+      <div class="gps-detail">
+        Lat: <span id="gps-lat">—</span><br>
+        Lon: <span id="gps-lon">—</span><br>
+        Alt: <span id="gps-alt">—</span>&nbsp;&nbsp;
+        hAcc: <span id="gps-hacc">—</span>
+      </div>
+      <div class="gps-detail">
+        SV: <span id="gps-sv">—</span> &nbsp;
+        HDOP: <span id="gps-hdop">—</span> &nbsp;
+        Strong: <span id="gps-strong">—</span>
+      </div>
+      <div class="gps-base-label">Base station</div>
+      <div class="gps-detail">
+        ID: <span id="base-id">—</span> &nbsp;
+        Baseline: <span id="base-dist">—</span>
+      </div>
+      <div class="gps-detail" style="font-size:9px;">
+        <span id="base-latlon">—</span>
+      </div>
+    </div>
+
+    <div class="col-divider"></div>
+
+    <!-- Tmux Window Status -->
+    <div class="panel-col" id="col-tmux">
+      <div class="conn-title">Windows</div>
+      <div id="tmux-rows"><!-- populated by JS --></div>
     </div>
 
     <div class="col-divider"></div>
