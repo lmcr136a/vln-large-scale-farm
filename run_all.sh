@@ -29,12 +29,12 @@ tmux new-window -t $SESSION:1 -n "SLAM"
 tmux send-keys -t $SESSION:1 "bash $SCRIPT_DIR/launch_slam.sh $MODE" C-m
 
 # Window 2: Control Panel
-tmux new-window -t $SESSION:2 -n "Web"
+tmux new-window -t $SESSION:2 -n "Main"
 tmux send-keys -t $SESSION:2 "bash $SCRIPT_DIR/control_panel_jetson.sh" C-m
 
 # Window 3: 2D Map Saver
 tmux new-window -t $SESSION:3 -n "2Dmap"
-tmux send-keys -t $SESSION:3 "python3 tools_control_panel/mapping/save_map_glim.py" C-m
+tmux send-keys -t $SESSION:3 "python3 tools_control_panel/save_map_glim.py" C-m
 
 # Window 4: Obstacle Detection
 tmux new-window -t $SESSION:4 -n "O.D."
@@ -51,7 +51,7 @@ tmux send-keys -t "$SESSION:5" "clear; printf '%s\n' \
 'Windows:' \
 '  0: Sensors (LiDAR | Xsens IMU | GPS)' \
 '  1: SLAM' \
-'  2: WEB Control Panel' \
+'  2: Main' \
 '  3: 2D Map Saver' \
 '  4: Obstacle Detection' \
 '  5: Here' \

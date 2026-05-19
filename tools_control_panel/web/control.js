@@ -487,12 +487,13 @@ function updateGpsPanel(g) {
 //  Tmux Panel
 // ═══════════════════════════════════════════════════════════════
 const TMUX_WINDOW_LABELS = {
-  slam:      'SLAM',
-  map_saver: '2D Map',
-  obstacle:  'Safety',
-  gps:       'GPS Node',
-  lidar:     'LiDAR',
-  imu:       'IMU',
+  jetson_agent:  'Main',
+  lidar:         'LiDAR',
+  imu:           'IMU',
+  gps:           'GPS Node',
+  slam:          'SLAM',
+  map_saver:     '2D Map',
+  obstacle:      'O.D.',
 };
 
 function updateTmuxPanel(status) {

@@ -100,7 +100,7 @@ function _renderUpcoming() {
   const listEl   = document.getElementById('upcoming-list');
   if (!nextEl || !listEl) return;
 
-  const items = _getUpcoming(10);
+  const items = _getUpcoming(5);
 
   if (!enabled || items.length === 0) {
     nextEl.textContent  = 'No upcoming schedule';
@@ -122,7 +122,7 @@ function _renderUpcoming() {
 function _startCountdown() {
   if (_countdownTimer) clearInterval(_countdownTimer);
   _countdownTimer = setInterval(() => {
-    const items  = _getUpcoming(1);
+    const items  = _getUpcoming(5);
     const countEl = document.getElementById('upcoming-countdown');
     if (!countEl) return;
     if (items.length === 0) { countEl.textContent = ''; return; }
