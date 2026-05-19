@@ -17,21 +17,21 @@ from tf2_ros import TransformException
 from rclpy.duration import Duration
 
 current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MAP_UPDATE_RATE    = 1.0
+MAP_UPDATE_RATE    = 5.0
 TARGET_FRAME       = 'map'
 IMAGE_RES_MUL      = 2
 
-MIN_POINTS_CELL    = 1
+MIN_POINTS_CELL    = 2
 
-BAND_LOW           = 0.30
-BAND_HIGH          = 1.80
-MIN_POINTS_BAND    = 50
+BAND_LOW           = -0.5
+BAND_HIGH          = 3.0
+MIN_POINTS_BAND    = 20
 
 STEP_THRESHOLD     = 0.40
 MEDIAN_FILTER_SIZE = 15
-STEP_MIN_PTS       = 10
+STEP_MIN_PTS       = 1
 
-Z_COLOR_RANGE      = 0.05
+Z_COLOR_RANGE      = 0.5
 
 ROBOT_ACTUAL_SIZE  = 0.6
 ROBOT_RADIUS_M     = ROBOT_ACTUAL_SIZE / 2.0
