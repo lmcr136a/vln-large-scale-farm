@@ -141,11 +141,52 @@ window.addEventListener('keyup', (e) => {
 //  SocketIO Push Events
 // ═══════════════════════════════════════════════════════════════
 
-socket.on('front_frame', (data) => {
-  document.getElementById('rgb-image').src = 'data:image/jpeg;base64,' + data.data;
+// ── Camera mode: 'radio' (default) or 'stream' ───────────────
+let cameraMode = 'radio';
+
+function toggleCameraMode() {
+  cameraMode = cameraMode === 'radio' ? 'stream' : 'radio';
+  const btn    = document.getElementById('camera-toggle');
+  const backEl = document.getElementById('col-back');
+  const frontImg = document.getElementById('rgb-image');
+  if (cameraMode === 'radio') {
+    btn.textContent = '📡 Radio';
+    btn.classList.remove('streaming');
+    if (backEl)  backEl.style.display = 'none';
+    if (frontImg) frontImg.classList.add('radio-mode');
+  } else {
+    btn.textContent = '📷 Streaming';
+    btn.classList.add('streaming');
+    if (backEl)  backEl.style.display = '';
+    if (frontImg) frontImg.classList.remove('radio-mode');
+  }
+}
+
+// Init: hide back camera in default radio mode (script runs after DOM is ready)
+(function initCameraMode() {
+  const backEl   = document.getElementById('col-back');
+  const frontImg = document.getElementById('rgb-image');
+  if (backEl)   backEl.style.display = 'none';
+  if (frontImg) frontImg.classList.add('radio-mode');
+})();
+
+socket.on('radio_frame', (data) => {
+  if (cameraMode !== 'radio') return;
+  if (data.camera !== 'front') return;
+  const img = document.getElementById('rgb-image');
+  if (img) img.src = 'data:image/jpeg;base64,' + data.data;
 });
+
+socket.on('front_frame', (data) => {
+  if (cameraMode !== 'stream') return;
+  const img = document.getElementById('rgb-image');
+  if (img) img.src = 'data:image/jpeg;base64,' + data.data;
+});
+
 socket.on('back_frame', (data) => {
-  document.getElementById('back-rgb-image').src = 'data:image/jpeg;base64,' + data.data;
+  if (cameraMode !== 'stream') return;
+  const img = document.getElementById('back-rgb-image');
+  if (img) img.src = 'data:image/jpeg;base64,' + data.data;
 });
 
 socket.on('map_updated', (data) => {

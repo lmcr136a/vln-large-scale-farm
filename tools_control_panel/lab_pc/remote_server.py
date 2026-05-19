@@ -295,6 +295,11 @@ class RemoteServer:
             mtype = msg.get("type")
             if mtype == "telemetry":
                 self._forward_telemetry(msg["data"])
+            elif mtype == "radio_frame":
+                sio.emit("radio_frame", {
+                    "camera": msg.get("camera"),
+                    "data":   msg.get("data"),
+                }, namespace="/")
             elif mtype == "event":
                 event = msg.get("event")
                 if event == "robot_pose":

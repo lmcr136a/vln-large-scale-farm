@@ -42,10 +42,33 @@ BEST_EFFORT_QOS = QoSProfile(
 )
 
 
+def _scale_jpeg_b64(b64: str, width: int) -> str | None:
+    """Decode a JPEG base64 string, scale to given width (preserving ratio), re-encode."""
+    try:
+        import io
+        import base64 as _b64
+        from PIL import Image
+        raw = _b64.b64decode(b64)
+        img = Image.open(io.BytesIO(raw)).convert('RGB')
+        w, h = img.size
+        new_h = max(1, round(h * width / w))
+        img = img.resize((width, new_h), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=50)
+        return _b64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return None
+
+
 class RecorderProxy:
-    def __init__(self, internet, telemetry=None):
-        self._internet  = internet
-        self._telemetry = telemetry
+    RADIO_INTERVAL = 3.0   # seconds between radio frames
+    RADIO_WIDTH    = 32    # output width in pixels
+
+    def __init__(self, internet, telemetry=None, radio=None):
+        self._internet   = internet
+        self._telemetry  = telemetry
+        self._radio      = radio
+        self._last_radio = 0.0
 
     def emit(self, event: str, data=None, namespace=None):
         if event in ("front_frame", "back_frame") and data:
@@ -55,6 +78,18 @@ class RecorderProxy:
                 self._internet.send_rgb_b64(b64, camera)
                 if self._telemetry:
                     self._telemetry.touch(f"zed_{camera}")
+                # Radio: front only, rate-limited
+                if camera == "front" and self._radio:
+                    now = time.time()
+                    if now - self._last_radio >= self.RADIO_INTERVAL:
+                        self._last_radio = now
+                        small = _scale_jpeg_b64(b64, self.RADIO_WIDTH)
+                        if small:
+                            self._radio.send({
+                                "type":   "radio_frame",
+                                "camera": "front",
+                                "data":   small,
+                            })
 
     def start_background_task(self, *a, **kw): pass
 
@@ -428,7 +463,7 @@ def main():
         from sensor.recorder import MultiSensorRecorder
         rec_cfg  = cfg["recording"]
         recorder = MultiSensorRecorder(base_node, output_base_dir=cfg["paths"]["data_dir"])
-        rec_proxy = RecorderProxy(internet, telemetry)
+        rec_proxy = RecorderProxy(internet, telemetry, radio)
         for cam in rec_cfg.get("zed_cameras", []):
             recorder.add_zed_camera(
                 serial_number=cam["serial"],
