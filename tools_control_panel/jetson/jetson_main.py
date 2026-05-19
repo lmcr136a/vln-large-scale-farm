@@ -43,7 +43,6 @@ BEST_EFFORT_QOS = QoSProfile(
 
 
 class RecorderProxy:
-    """Captures front_frame/back_frame emits from recorder and sends via internet."""
     def __init__(self, internet, telemetry=None):
         self._internet  = internet
         self._telemetry = telemetry
@@ -79,21 +78,34 @@ class SocketIOProxy:
 from config_loader import load_config
 
 
+# ── State file used to track which tmux window jetson_main is in ──────────────
+_JETSON_STATE_FILE = '/tmp/jetson_main_window'
+
+
 class TmuxMonitor:
     """
     Polls tmux windows for process liveness and can restart them via send-keys.
-    Window specs loaded from cfg['tmux'] if present.
+    Also supports self-restart of jetson_main.py via alternating staging windows.
     """
 
-    # Default process check strings per window name
     _DEFAULTS = {
-        "slam":      {"check": "glim_rosnode",   "cmd": "bash launch_files/launch_slam.sh",          "window": "SLAM"},
+        "slam":      {"check": "glim_rosnode",   "cmd": "bash launch_files/launch_slam.sh",             "window": "SLAM"},
         "map_saver": {"check": "save_map_glim",  "cmd": "python3 tools_control_panel/save_map_glim.py", "window": "2Dmap"},
-        "obstacle":  {"check": "safety_checker", "cmd": "python3 tools_scout_control/safety_checker.py", "window": "O.D."},
-        "gps":       {"check": "rtk_gps_node",   "cmd": "python3 scripts/rtk_gps_node.py",           "pane": "Sensors.2"},
-        "lidar":     {"check": "robosense",       "cmd": "bash launch_files/launch_robosense.sh",     "pane": "Sensors.0"},
-        "imu":       {"check": "xsens",           "cmd": "bash launch_files/launch_xsens.sh",         "pane": "Sensors.1"},
+        "obstacle":  {"check": "safety_checker", "cmd": "python3 tools_scout_control/safety_checker.py","window": "O.D."},
+        "gps":       {"check": "rtk_gps_node",   "cmd": "python3 scripts/rtk_gps_node.py",              "pane":   "Sensors.2"},
+        "lidar":     {"check": "robosense",       "cmd": "bash launch_files/launch_robosense.sh",        "pane":   "Sensors.0"},
+        "imu":       {"check": "xsens",           "cmd": "bash launch_files/launch_xsens.sh",           "pane":   "Sensors.1"},
     }
+
+    # Window 5 ("---") is idle by default → first staging choice.
+    # Window 3 ("2Dmap") is used when jetson_main is already in window 5.
+    _STAGING = {
+        5: {"name": "2Dmap", "index": 3},
+        3: {"name": "---",   "index": 5},
+    }
+    _DEFAULT_STAGING = {"name": "---", "index": 5}
+    _JETSON_RESTART_CMD = "bash launch_files/control_panel_jetson.sh"
+    _RESTART_DELAY_S    = 10
 
     def __init__(self, session: str, cfg_windows: dict | None = None):
         self._session = session
@@ -127,6 +139,63 @@ class TmuxMonitor:
             log.error(f"TmuxMonitor restart {key}: {e}")
             return False
 
+    def restart_jetson_main(self) -> bool:
+        """
+        Restart jetson_main.py without losing connection:
+        1. Read state file to find the current window (default: 2 / Web).
+        2. Pick the alternate staging window (5 → 3, or 3 → 5, or default → 5).
+        3. Write the new window index to the state file.
+        4. Send 'sleep N && control_panel_jetson.sh' to the staging window.
+        5. Kill the current jetson_main.py (this process will terminate here).
+        After N seconds the new instance starts in the staging window.
+        """
+        try:
+            with open(_JETSON_STATE_FILE) as f:
+                current_win = int(f.read().strip())
+        except Exception:
+            current_win = 0  # unknown — treat as default
+
+        staging = self._STAGING.get(current_win, self._DEFAULT_STAGING)
+        staging_name  = staging["name"]
+        staging_index = staging["index"]
+
+        log.info(f"restart_jetson_main: current_win={current_win} → staging={staging_name}({staging_index})")
+
+        try:
+            # Persist new window BEFORE killing so the next instance can read it
+            with open(_JETSON_STATE_FILE, 'w') as f:
+                f.write(str(staging_index))
+
+            t = f"{self._session}:{staging_name}"
+
+            # Interrupt anything currently running in the staging window
+            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
+            time.sleep(0.4)
+
+            # Queue: sleep then restart
+            subprocess.run(
+                ["tmux", "send-keys", "-t", t,
+                 f"sleep {self._RESTART_DELAY_S} && {self._JETSON_RESTART_CMD}",
+                 "Enter"],
+                timeout=3,
+            )
+
+            time.sleep(0.5)  # ensure sleep command is running before we die
+
+            # Kill ourselves — this process terminates from here
+            subprocess.run(["pkill", "-f", "jetson_main.py"], timeout=3)
+            return True
+
+        except Exception as e:
+            log.error(f"restart_jetson_main: {e}")
+            # Restore state file on failure
+            try:
+                with open(_JETSON_STATE_FILE, 'w') as f:
+                    f.write(str(current_win))
+            except Exception:
+                pass
+            return False
+
     def _poll_loop(self):
         while True:
             status = {}
@@ -139,13 +208,10 @@ class TmuxMonitor:
                     )
                     status[key] = r.returncode == 0
                 except Exception:
-                    status[key] = None   # unknown
+                    status[key] = None
             with self._lock:
                 self._status = status
             time.sleep(5)
-
-
-
 
 
 def pc2_to_numpy(msg: PointCloud2) -> np.ndarray:
@@ -164,12 +230,6 @@ def pc2_to_numpy(msg: PointCloud2) -> np.ndarray:
 
 
 def build_extrinsic_T_B_L(cfg: dict) -> np.ndarray:
-    """
-    Returns 4×4 homogeneous transform T_B_L:
-    transforms a point expressed in LiDAR frame into base_link frame.
-    Reads lidar_extrinsics.translation ([x,y,z] m) and
-               lidar_extrinsics.rotation  ([roll,pitch,yaw] deg) from config.
-    """
     ext  = cfg.get("lidar_extrinsics", {})
     t    = np.array(ext.get("translation", [0.0, 0.0, 0.0]), dtype=float)
     rpy  = ext.get("rotation", [0.0, 0.0, 0.0])
@@ -181,36 +241,18 @@ def build_extrinsic_T_B_L(cfg: dict) -> np.ndarray:
 
 
 def apply_extrinsic(T_B_L: np.ndarray, pos: list, quat_xyzw: list):
-    """
-    Correct a GLIM-published LiDAR pose to the robot base_link pose.
-
-    GLIM gives T_M_L (LiDAR in map frame).
-    We want  T_M_B  (base_link in map frame).
-
-      T_M_B = T_M_L  ×  T_L_B
-      T_L_B = inv(T_B_L)
-
-    pos       : [x, y, z]          — LiDAR origin in map frame
-    quat_xyzw : [qx, qy, qz, qw]  — LiDAR orientation in map frame
-    Returns   : (pos_corrected, quat_corrected_xyzw)
-    """
-    # T_M_L
     R_M_L       = _Rotation.from_quat(quat_xyzw).as_matrix()
     T_M_L       = np.eye(4)
     T_M_L[:3,:3] = R_M_L
     T_M_L[:3, 3] = pos
-
-    # T_L_B = inv(T_B_L)
     R_B_L = T_B_L[:3, :3]
     t_B_L = T_B_L[:3,  3]
     T_L_B       = np.eye(4)
     T_L_B[:3,:3] = R_B_L.T
     T_L_B[:3, 3] = -R_B_L.T @ t_B_L
-
-    # T_M_B
     T_M_B = T_M_L @ T_L_B
     pos_c  = T_M_B[:3, 3].tolist()
-    quat_c = _Rotation.from_matrix(T_M_B[:3,:3]).as_quat().tolist()  # [x,y,z,w]
+    quat_c = _Rotation.from_matrix(T_M_B[:3,:3]).as_quat().tolist()
     return pos_c, quat_c
 
 
@@ -237,8 +279,7 @@ def main():
 
     proxy     = SocketIOProxy(radio, internet, uploader, telemetry)
 
-    # Tmux monitor (optional — gracefully disabled if tmux is not available)
-    tmux_session = cfg.get("tmux", {}).get("session", "vln")
+    tmux_session    = cfg.get("tmux", {}).get("session", "vln")
     tmux_cfg_windows = cfg.get("tmux", {}).get("windows", None)
     try:
         tmux_monitor = TmuxMonitor(tmux_session, tmux_cfg_windows)
@@ -272,14 +313,12 @@ def main():
         if recorder:
             try:
                 recorder.start_recording(output_dir=rec_dir)
-                log.info(f"Camera recording started: {rec_dir}")
             except Exception as e:
                 log.error(f"Camera recording start failed: {e}")
         topics = list(cfg["ros2"]["topics"].values()) + [cfg["ros2"]["cmd_vel_topic"]]
         try:
             _rosbag_proc[0] = subprocess.Popen(
                 ['ros2', 'bag', 'record', '-o', bag_path] + list(set(topics)))
-            log.info(f"Rosbag recording started: {bag_path}")
         except Exception as e:
             log.error(f"Rosbag start failed: {e}")
 
@@ -294,7 +333,6 @@ def main():
         if _rosbag_proc[0]:
             _rosbag_proc[0].terminate()
             _rosbag_proc[0] = None
-            log.info("Rosbag recording stopped")
 
     auto_ctrl = AutonomousController(cmd_vel_pub, proxy, cfg,
                                       start_recording=start_rec_cb,
@@ -307,10 +345,18 @@ def main():
             start_rec_cb(cmd.get("dirname", "manual"))
         elif ctype == "stop_recording":
             stop_rec_cb()
-        elif ctype == "restart_window" and tmux_monitor:
+        elif ctype == "restart_window":
             key = cmd.get("window", "")
-            ok = tmux_monitor.restart(key)
-            log.info(f"restart_window '{key}': {'ok' if ok else 'failed'}")
+            if key == "jetson_agent":
+                # Self-restart via staging window — process dies after this call
+                if tmux_monitor:
+                    log.info("Self-restart requested via browser")
+                    tmux_monitor.restart_jetson_main()
+                    # If we reach here, pkill hasn't landed yet — just wait
+                    time.sleep(5)
+            elif tmux_monitor:
+                ok = tmux_monitor.restart(key)
+                log.info(f"restart_window '{key}': {'ok' if ok else 'failed'}")
         else:
             commander.handle(cmd)
 
@@ -330,7 +376,6 @@ def main():
         _latest_pc[0] = pc2_to_numpy(msg)
 
     base_node.create_subscription(PointCloud2, pc_topic, pc_callback, BEST_EFFORT_QOS)
-    log.info(f"Pointcloud source: {pc_topic}")
 
     def pointcloud_loop():
         while True:
@@ -341,13 +386,9 @@ def main():
 
     threading.Thread(target=pointcloud_loop, daemon=True).start()
 
-    # Map direct-push loop: sends map_latest.png via internet when quality == "high"
     shutdown = threading.Event()
 
     def map_watch_loop():
-        # Read map_dir from raw yaml — load_config resolves the relative path against
-        # the config dir, giving tools_control_panel/output_glim instead of root/output_glim.
-        # save_map_glim.py uses raw yaml.safe_load + __file__ anchor, so we match it.
         with open(cfg_path, encoding='utf-8') as _f:
             _raw = yaml.safe_load(_f)
         proj_dir    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -360,7 +401,6 @@ def main():
         interval   = cfg.get("map", {}).get("update_interval", 1.0)
         last_mtime    = 0.0
         map_not_found = False
-        log.info(f"Map watch: {png_path}")
         while not shutdown.is_set():
             if shutdown.wait(timeout=interval):
                 break
@@ -369,7 +409,6 @@ def main():
             try:
                 mtime = os.path.getmtime(png_path)
                 if map_not_found:
-                    log.info("Map watch: map found, starting to send")
                     map_not_found = False
                 if mtime <= last_mtime:
                     continue
@@ -377,32 +416,20 @@ def main():
                 with open(state_path) as f:
                     meta = json.load(f)
                 internet.send_map(png_path, meta)
-                log.info(f"Map sent ({int(os.path.getsize(png_path)/1024)}KB)")
             except FileNotFoundError:
                 if not map_not_found:
-                    log.info("Map watch: no map yet, will send once available")
                     map_not_found = True
             except Exception as e:
                 log.error(f"Map watch: {e}")
 
-    # ── Pose corrector ────────────────────────────────────────────────────────
-    # Subscribes to raw GLIM pose, applies lidar_extrinsics, republishes on
-    # cfg["ros2"]["topics"]["pose"] so ALL downstream code (TelemetryNode,
-    # AutonomousController, internet sender) automatically gets the correct pose.
     from geometry_msgs.msg import PoseStamped as _PS
     import math as _math
 
     T_B_L = build_extrinsic_T_B_L(cfg)
-    log.info(f"Lidar extrinsics — t={cfg.get('lidar_extrinsics',{}).get('translation')} "
-             f"rpy_deg={cfg.get('lidar_extrinsics',{}).get('rotation')}")
 
-    raw_pose_topic = cfg["ros2"]["topics"].get(
-        "raw_pose", "/glim_ros/localized_curr_pose")
-    corrected_pose_topic = cfg["ros2"]["topics"].get(
-        "pose", "/corrected_pose")
-
-    corrected_pose_pub = base_node.create_publisher(
-        _PS, corrected_pose_topic, 10)
+    raw_pose_topic       = cfg["ros2"]["topics"].get("raw_pose", "/glim_ros/localized_curr_pose")
+    corrected_pose_topic = cfg["ros2"]["topics"].get("pose", "/corrected_pose")
+    corrected_pose_pub   = base_node.create_publisher(_PS, corrected_pose_topic, 10)
 
     _pose_send_state = {"last": 0.0}
     POSE_INTERNET_HZ = 5.0
@@ -422,8 +449,6 @@ def main():
             out.pose.orientation.z, out.pose.orientation.w = q_c
         corrected_pose_pub.publish(out)
 
-        # Internet push capped at POSE_INTERNET_HZ to avoid polling packet overflow.
-        # Lab PC applies the extrinsic yaw offset before forwarding to browser.
         now_s = time.time()
         if internet.connected and (now_s - _pose_send_state["last"]) >= 1.0 / POSE_INTERNET_HZ:
             _pose_send_state["last"] = now_s
@@ -438,13 +463,10 @@ def main():
         durability=DurabilityPolicy.VOLATILE,
         history=HistoryPolicy.KEEP_LAST, depth=1,
     )
-    base_node.create_subscription(
-        _PS, raw_pose_topic, pose_corrector_cb, raw_pose_qos)
-    log.info(f"Pose corrector: {raw_pose_topic} → {corrected_pose_topic}")
+    base_node.create_subscription(_PS, raw_pose_topic, pose_corrector_cb, raw_pose_qos)
 
     threading.Thread(target=map_watch_loop, daemon=True).start()
 
-    # ZED cameras via recorder
     recorder = None
     try:
         from sensor.recorder import MultiSensorRecorder
@@ -460,7 +482,6 @@ def main():
                 always_stream=True,
                 stream_fps=rec_cfg.get("web_stream_hz", 5),
             )
-        log.info(f"ZED cameras initialized: {[c['name'] for c in rec_cfg.get('zed_cameras', [])]}")
     except Exception as e:
         log.warning(f"ZED recorder init failed: {e}")
 
@@ -508,7 +529,6 @@ def main():
     shutdown.wait()
 
     log.info("Shutting down")
-    # Stop recorder threads before ROS2 context is destroyed
     if recorder:
         try:
             recorder.stop_recording()

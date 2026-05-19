@@ -491,6 +491,7 @@ const TMUX_WINDOW_LABELS = {
   gps:       'GPS Node',
   lidar:     'LiDAR',
   imu:       'IMU',
+  jetson_agent:  'Jetson Agent', 
 };
 
 function updateTmuxPanel(status) {

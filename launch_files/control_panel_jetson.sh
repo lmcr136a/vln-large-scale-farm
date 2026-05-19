@@ -27,6 +27,10 @@ echo "$WORKSPACE_DIR/ros2_ws/scout_ws/install/setup.bash"
 ros2 launch scout_base scout_mini_base.launch.py &
 SCOUT_PID=$!
 sleep 2
+
+# Clear the window state file so restart logic starts fresh from window 2
+rm -f /tmp/jetson_main_window
+
 echo ""
 echo "🤖 Starting Jetson agent..."
 cd "$WORKSPACE_DIR"
