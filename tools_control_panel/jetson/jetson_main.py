@@ -69,7 +69,7 @@ def _scale_jpeg_b64(b64: str, width: int) -> str | None:
 
 class RecorderProxy:
     RADIO_INTERVAL = 3.0   # seconds between radio frames
-    RADIO_WIDTH    = 50    # output width in pixels → 50×28 for 16:9
+    RADIO_WIDTH    = 60    # output width in pixels → 60×34 for 16:9
 
     def __init__(self, internet, telemetry=None, radio=None):
         self._internet   = internet

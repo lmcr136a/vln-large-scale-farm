@@ -423,18 +423,20 @@ class RtkGpsNode(Node):
             s = dict(self._state)
         gnss_quality = self._gnss_radio_quality()
 
+        def _r(v, dp): return round(v, dp) if v is not None else None
+
         carr_map = {0: 'None', 1: 'Float', 2: 'Fixed', None: 'Unknown'}
         status = {
             'rtk_mode':      s['status_str'],
             'rtk_fixed':     s['rtk_fixed'],
             'rtk_float':     s['rtk_float'],
-            'lat':           s['lat'],
-            'lon':           s['lon'],
-            'alt':           s['alt'],
-            'hdop':          s['hdop'],
+            'lat':           _r(s['lat'],      6),
+            'lon':           _r(s['lon'],      6),
+            'alt':           _r(s['alt'],      2),
+            'hdop':          _r(s['hdop'],     1),
             'sv':            s['sv'],
-            'h_acc':         s['hAcc'],
-            'v_acc':         s['vAcc'],
+            'h_acc':         _r(s['hAcc'],     3),
+            'v_acc':         _r(s['vAcc'],     3),
             'carr_soln':     carr_map.get(s['carrSoln'], 'Unknown'),
             'strong_sv':     s['strong'],
             'cr_used':       s['cr_used'],
@@ -443,9 +445,9 @@ class RtkGpsNode(Node):
             'rtcm_bad':      s['rtcm_bad'],
             'gnss_radio_quality': gnss_quality,
             'base_id':       s['base_id'],
-            'base_lat':      s['base_lat'],
-            'base_lon':      s['base_lon'],
-            'base_alt':      s['base_alt'],
+            'base_lat':      _r(s['base_lat'], 6),
+            'base_lon':      _r(s['base_lon'], 6),
+            'base_alt':      _r(s['base_alt'], 2),
             'fw_ver':        s['fw_ver'],
         }
         # Baseline distance (rough metres)
