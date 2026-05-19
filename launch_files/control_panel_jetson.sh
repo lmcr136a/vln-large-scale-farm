@@ -14,24 +14,20 @@ cleanup() {
     echo "✅ Stopped"
     exit 0
 }
+trap cleanup SIGINT SIGTERM
 
 echo "🚗 Setting up CAN interface..."
-
-echo -1 | sudo tee /sys/module/usbcore/parameters/autosuspend >/dev/null || true
-
-sudo ip link set can0 down 2>/dev/null || true
-sudo ip link set can0 type can bitrate 500000 restart-ms 100
-sudo ip link set can0 txqueuelen 1000
-sudo ip link set can0 up
-
-ip -details link show can0
+sudo ip link set can0 down 2>/dev/null
+sudo ip link set can0 up type can bitrate 500000
 
 echo "🦾 Launching Scout Mini base node..."
 source /opt/ros/humble/setup.bash
 source "$WORKSPACE_DIR/ros2_ws/scout_ws/install/setup.bash"
-
+echo "$WORKSPACE_DIR/ros2_ws/scout_ws/install/setup.bash"
 ros2 launch scout_base scout_mini_base.launch.py &
 SCOUT_PID=$!
+sleep 2
+
 
 echo ""
 echo "🤖 Starting Jetson agent..."
