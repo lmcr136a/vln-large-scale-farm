@@ -312,8 +312,13 @@ socket.on('robot_telemetry', (data) => {
   const wifiName = (data.wifi && data.wifi !== '—') ? data.wifi : '—';
   set('info-wifi', wifiName + inetQ);
 
-  // Radio quality scores
+  // Radio quality + one-way delay
   updateRadioScore('score-radio', data.radio_quality);
+  const radioRttEl = document.getElementById('radio-delay');
+  if (radioRttEl) {
+    const ow = data.radio_rtt_ms != null ? Math.round(data.radio_rtt_ms / 2) : null;
+    radioRttEl.textContent = ow != null ? `${ow} ms` : '—';
+  }
   updateRadioScore('score-gnss',  data.gps_status?.gnss_radio_quality);
 
   // GPS panel

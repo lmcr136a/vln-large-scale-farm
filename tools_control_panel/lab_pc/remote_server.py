@@ -443,6 +443,7 @@ class RemoteServer:
             "internet":         data.get("internet", False),
             # new fields
             "radio_quality":    data.get("radio_quality"),
+            "radio_rtt_ms":     data.get("radio_rtt_ms"),
             "internet_quality": data.get("internet_quality"),
             "internet_rtt_ms":  data.get("internet_rtt_ms"),
             "gps_status":       data.get("gps_status"),

@@ -36,6 +36,7 @@ class RadioComm:
         self._ping_lock    = threading.Lock()
         self._ping_history: collections.deque = collections.deque()
         self._pending_ping: float | None = None  # timestamp of unanswered ping
+        self._last_rtt_ms: float | None = None   # last measured round-trip time
 
     def start(self):
         self._running = True
@@ -71,6 +72,10 @@ class RadioComm:
             success = sum(1 for _, ok in self._ping_history if ok)
             return int(success / len(self._ping_history) * 100)
 
+    def get_rtt_ms(self) -> float | None:
+        """Return last measured round-trip time in ms, or None if not yet measured."""
+        return self._last_rtt_ms
+
     # ── Ping loop ─────────────────────────────────────────────
     def _ping_loop(self):
         time.sleep(3.0)  # let connection stabilize before first ping
@@ -102,6 +107,7 @@ class RadioComm:
                 if msg.get('type') == 'pong':
                     with self._ping_lock:
                         if self._pending_ping is not None:
+                            self._last_rtt_ms = (time.time() - self._pending_ping) * 1000
                             self._record_ping(True)
                             self._pending_ping = None
                 elif self._on_command:

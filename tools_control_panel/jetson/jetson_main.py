@@ -69,7 +69,7 @@ def _scale_jpeg_b64(b64: str, width: int) -> str | None:
 
 class RecorderProxy:
     RADIO_INTERVAL = 3.0   # seconds between radio frames
-    RADIO_WIDTH    = 32    # output width in pixels
+    RADIO_WIDTH    = 50    # output width in pixels → 50×28 for 16:9
 
     def __init__(self, internet, telemetry=None, radio=None):
         self._internet   = internet
@@ -483,6 +483,8 @@ def main():
     except Exception as e:
         log.warning(f"ZED recorder init failed: {e}")
 
+    _telem_size_last = [0.0]
+
     def telemetry_loop():
         interval = 1.0 / TELEMETRY_HZ
         while True:
@@ -495,10 +497,27 @@ def main():
             snap["estop"]            = commander.is_estopped()
             snap["internet"]         = internet.connected
             snap["radio_quality"]    = radio.get_quality()
+            snap["radio_rtt_ms"]     = radio.get_rtt_ms()
             snap["internet_quality"] = internet.get_quality()
             snap["internet_rtt_ms"]  = internet.get_rtt_ms()
             if tmux_monitor:
                 snap["tmux_status"] = tmux_monitor.get_status()
+
+            # Periodic size breakdown — helps diagnose bandwidth usage
+            now_t = time.time()
+            if now_t - _telem_size_last[0] >= 60.0:
+                _telem_size_last[0] = now_t
+                pkt = json.dumps({"type": "telemetry", "data": snap}, separators=(',', ':'))
+                breakdown = sorted(
+                    ((k, len(json.dumps(v, separators=(',', ':')).encode()))
+                     for k, v in snap.items()),
+                    key=lambda x: -x[1],
+                )
+                log.info(
+                    f"Telemetry packet {len(pkt.encode())}B | " +
+                    " | ".join(f"{k}:{v}B" for k, v in breakdown)
+                )
+
             radio.send({"type": "telemetry", "data": snap})
             internet.send_telemetry(snap)
             time.sleep(interval)
