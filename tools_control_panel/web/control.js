@@ -470,13 +470,15 @@ function updateGpsPanel(g) {
   const baseLine = document.getElementById('gps-base-line');
   if (baseLine) {
     if (g.base_lat != null) {
+      // "Base Fixed" label at inherited 10pt; coordinate values small via .gps-coord
       baseLine.innerHTML =
-        `<span class="lbl">Base Fixed &nbsp;</span>` +
-        `<span class="lbl">Lat </span>${g.base_lat.toFixed(6)} ` +
-        `<span class="lbl">Lon </span>${g.base_lon.toFixed(6)} ` +
-        `<span class="lbl">Alt </span>${g.base_alt != null ? g.base_alt.toFixed(1) + 'm' : '—'}`;
+        `Base Fixed &nbsp;` +
+        `<span class="lbl">Lat </span><span class="gps-coord">${g.base_lat.toFixed(6)}</span> ` +
+        `<span class="lbl">Lon </span><span class="gps-coord">${g.base_lon.toFixed(6)}</span> ` +
+        `<span class="lbl">Alt </span><span class="gps-coord">${g.base_alt != null ? g.base_alt.toFixed(1) + 'm' : '—'}</span>`;
     } else {
-      baseLine.innerHTML = `<span class="lbl">Base </span>not fixed`;
+      // "Base not fixed" at inherited 10pt (no small class)
+      baseLine.textContent = 'Base not fixed';
     }
   }
 }
@@ -491,7 +493,6 @@ const TMUX_WINDOW_LABELS = {
   gps:       'GPS Node',
   lidar:     'LiDAR',
   imu:       'IMU',
-  jetson_agent:  'Jetson Agent', 
 };
 
 function updateTmuxPanel(status) {

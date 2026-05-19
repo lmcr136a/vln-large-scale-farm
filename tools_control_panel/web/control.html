@@ -18,39 +18,57 @@
       white-space: nowrap;
     }
 
-    /* ── Column 1: Status + Radio + GPS ─────────────────────── */
-    #col-status { min-width: 180px; gap: 3px; }
-
-    .sec-label {
-      font-size: 9px;
-      font-weight: 700;
-      letter-spacing: 1.2px;
-      text-transform: uppercase;
-      color: rgba(255,255,255,0.35);
-      margin-top: 5px;
+    /* ── Column 1A: System info (12pt) ───────────────────────── */
+    #col-sys {
+      min-width: 120px;
+      font-size: 12pt;
+      gap: 5px;
     }
-    .st-row {
+    .sys-row {
       display: flex;
       align-items: baseline;
-      gap: 5px;
-      font-size: 12px;
-      line-height: 1.5;
-    }
-    .st-lbl { color: rgba(255,255,255,0.45); flex-shrink: 0; }
-    .st-val { color: rgba(255,255,255,0.9); }
-
-    /* Radio quality inline */
-    .radio-row {
-      display: flex;
-      align-items: center;
       gap: 6px;
-      font-size: 12px;
-      line-height: 1.6;
+      line-height: 1.5;
+      white-space: nowrap;
     }
-    .radio-lbl { color: rgba(255,255,255,0.45); width: 68px; flex-shrink: 0; }
-    .radio-score { font-weight: 700; }
+    .sys-lbl {
+      color: rgba(255,255,255,0.45);
+      flex-shrink: 0;
+      min-width: 44px;
+    }
 
-    /* GPS section */
+    /* ── Column 1B: Radio + GPS (10pt default) ───────────────── */
+    #col-radio-gps {
+      min-width: 170px;
+      font-size: 10pt;
+      gap: 3px;
+    }
+    .sec-divider-hdr {
+      font-size: 12pt;
+      color: white;
+      font-weight: 600;
+      text-align: center;
+      width: 100%;
+      margin: 4px 0 2px;
+    }
+
+    /* Radio grid: two columns side by side */
+    .radio-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px 16px;
+      width: 100%;
+    }
+    .radio-grid-lbl {
+      color: rgba(255,255,255,0.45);
+      font-size: 9pt;
+    }
+    .radio-score {
+      font-size: 11pt;
+      font-weight: 700;
+    }
+
+    /* GPS sub-section */
     .gps-mode-badge {
       display: inline-block;
       font-size: 11px;
@@ -58,35 +76,39 @@
       padding: 1px 7px;
       border-radius: 3px;
       letter-spacing: 0.4px;
-      margin-top: 3px;
+      margin-top: 1px;
     }
-    .gps-fixed  { background: rgba(0,210,110,0.22); color: #00d26e; border: 1px solid rgba(0,210,110,0.4); }
-    .gps-float  { background: rgba(60,160,255,0.18); color: #3ca0ff; border: 1px solid rgba(60,160,255,0.4); }
-    .gps-dgps   { background: rgba(255,190,40,0.18); color: #ffbe28; border: 1px solid rgba(255,190,40,0.4); }
-    .gps-nofix  { background: rgba(255,70,70,0.15);  color: #ff5050; border: 1px solid rgba(255,70,70,0.3); }
+    .gps-fixed { background: rgba(0,210,110,0.22); color: #00d26e; border: 1px solid rgba(0,210,110,0.4); }
+    .gps-float { background: rgba(60,160,255,0.18); color: #3ca0ff; border: 1px solid rgba(60,160,255,0.4); }
+    .gps-dgps  { background: rgba(255,190,40,0.18); color: #ffbe28; border: 1px solid rgba(255,190,40,0.4); }
+    .gps-nofix { background: rgba(255,70,70,0.15);  color: #ff5050; border: 1px solid rgba(255,70,70,0.3); }
 
+    /* Small coordinate values (8px) */
     .gps-coord {
       font-size: 8px;
       color: rgba(255,255,255,0.7);
       line-height: 1.6;
       font-family: monospace;
     }
-    .gps-coord .lbl { color: rgba(255,255,255,0.38); }
-    .gps-sv {
-      font-size: 11px;
-      color: rgba(255,255,255,0.65);
+    .lbl { color: rgba(255,255,255,0.38); }
+
+    /* Base line: inherits 10pt, coord values inside use .gps-coord */
+    #gps-base-line {
+      color: rgba(255,255,255,0.7);
       line-height: 1.5;
     }
-    .gps-sv span { color: rgba(255,255,255,0.88); }
 
     /* ── Column 2: Controls ──────────────────────────────────── */
     #col-controls { min-width: 145px; gap: 7px; }
     .run-row { display: flex; gap: 6px; align-items: center; }
     .rec-row { display: flex; gap: 6px; align-items: center; }
 
-    /* ── Column 3: Upcoming schedule ─────────────────────────── */
-    #col-schedule { min-width: 190px; gap: 0; }
-
+    /* ── Column 3: Schedule ──────────────────────────────────── */
+    #col-schedule {
+      min-width: 190px;
+      gap: 0;
+      padding-right: 6px;
+    }
     #upcoming-next {
       font-size: 12pt;
       font-weight: 700;
@@ -95,8 +117,9 @@
       white-space: nowrap;
     }
     #upcoming-countdown {
-      font-size: 10px;
-      color: rgba(255,255,255,0.45);
+      font-size: 12pt;
+      font-weight: 600;
+      color: rgba(255,255,255,0.55);
       margin-bottom: 5px;
     }
     .upcoming-item {
@@ -116,14 +139,24 @@
       text-decoration: underline;
     }
 
-    /* ── Column 4: Tmux ──────────────────────────────────────── */
-    #col-tmux { min-width: 155px; gap: 4px; }
-
+    /* ── Column 4: Process Status (10pt everything) ──────────── */
+    #col-tmux {
+      min-width: 155px;
+      gap: 4px;
+      font-size: 10pt;
+    }
+    .col-proc-title {
+      font-size: 10pt;
+      font-weight: 700;
+      color: rgba(255,255,255,0.45);
+      letter-spacing: 0.5px;
+      margin-bottom: 2px;
+    }
     .tmux-row {
       display: flex;
       align-items: center;
       gap: 6px;
-      font-size: 11px;
+      font-size: 10pt;
     }
     .tmux-dot {
       width: 7px; height: 7px;
@@ -133,9 +166,9 @@
     .tdot-ok   { background: #00d26e; }
     .tdot-fail { background: #ff5050; box-shadow: 0 0 4px rgba(255,80,80,0.6); }
     .tdot-unkn { background: rgba(255,255,255,0.2); }
-    .tmux-lbl  { flex: 1; color: rgba(255,255,255,0.7); }
+    .tmux-lbl  { flex: 1; color: rgba(255,255,255,0.7); font-size: 10pt; }
     .tmux-btn  {
-      font-size: 9px;
+      font-size: 10pt;
       padding: 1px 5px;
       background: rgba(255,255,255,0.07);
       border: 1px solid rgba(255,255,255,0.18);
@@ -146,11 +179,7 @@
     }
     .tmux-btn:hover { background: rgba(255,255,255,0.15); color: white; }
 
-    #estop-badge {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.5px;
-    }
+    #estop-badge { font-size: 12pt; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -176,49 +205,45 @@
 
     <div class="col-divider"></div>
 
-    <!-- Column 1: Status + Radio + GPS -->
-    <div class="panel-col" id="col-status">
-
-      <div class="st-row">
-        <span class="st-lbl">WiFi</span>
-        <span class="st-val" id="info-wifi">—</span>
+    <!-- Column 1A: System (12pt) -->
+    <div class="panel-col" id="col-sys">
+      <div class="sys-row">
+        <span class="sys-lbl">WiFi</span>
+        <span id="info-wifi">—</span>
       </div>
-      <div class="st-row">
-        <span class="st-lbl">CPU</span>
-        <span class="st-val" id="info-cpu">—</span>
+      <div class="sys-row">
+        <span class="sys-lbl">CPU</span>
+        <span id="info-cpu">—</span>
       </div>
-      <div class="st-row">
-        <span class="st-lbl">SSD</span>
-        <span class="st-val" id="info-ssd">—</span>
+      <div class="sys-row">
+        <span class="sys-lbl">Batt</span>
+        <span id="info-battery">—</span>
       </div>
-      <div class="st-row">
-        <span class="st-lbl">Scout Batt</span>
-        <span class="st-val" id="info-battery">—</span>
-      </div>
-      <div class="st-row">
-        <span class="st-lbl">Mode</span>
-        <span class="st-val" id="info-mode">—</span>
+      <div class="sys-row">
+        <span class="sys-lbl">Mode</span>
+        <span id="info-mode">—</span>
         &nbsp;<span id="estop-badge">🟢</span>
       </div>
+    </div>
 
-      <div class="sec-label">Radio</div>
-      <div class="radio-row">
-        <span class="radio-lbl">Local PC</span>
+    <div class="col-divider"></div>
+
+    <!-- Column 1B: Radio + GPS (10pt default) -->
+    <div class="panel-col" id="col-radio-gps">
+
+      <div class="sec-divider-hdr">── RADIO ──</div>
+      <div class="radio-grid">
+        <span class="radio-grid-lbl">Local PC</span>
+        <span class="radio-grid-lbl">GPS Base</span>
         <span class="radio-score" id="score-radio">—</span>
-      </div>
-      <div class="radio-row">
-        <span class="radio-lbl">GPS Base</span>
         <span class="radio-score" id="score-gnss">—</span>
       </div>
 
-      <div class="sec-label">GPS</div>
+      <div class="sec-divider-hdr">── GPS ──</div>
       <span id="gps-mode-badge" class="gps-mode-badge gps-nofix">No Fix</span>
-
-      <div class="gps-coord" id="gps-base-line">
-        <span class="lbl">Base </span>—
-      </div>
-      <div class="gps-sv">
-        SV: <span id="gps-sv">—</span> &nbsp; HDOP: <span id="gps-hdop">—</span>
+      <div id="gps-base-line">Base —</div>
+      <div style="color:rgba(255,255,255,0.65);line-height:1.5;">
+        SV: <span id="gps-sv">—</span>&nbsp;&nbsp;HDOP: <span id="gps-hdop">—</span>
       </div>
       <div class="gps-coord">
         <span class="lbl">Lat </span><span id="gps-lat">—</span>
@@ -254,12 +279,12 @@
 
       <div class="run-row">
         <button id="autoButton" onclick="runNow()"
-                style="padding:5px 10px;font-size:13px;">▶ Run Now</button>
+                style="padding:5px 10px;font-size:13px;">&#x25B6; Run Now</button>
       </div>
       <div class="run-row" style="margin-top:4px;">
         <button onclick="emergencyStop()"
                 style="background:#cc0000;color:#fff;font-weight:bold;padding:5px 10px;font-size:13px;width:100%;">
-          🛑 E-STOP
+          &#x1F6D1; E-STOP
         </button>
       </div>
 
@@ -267,7 +292,7 @@
 
     <div class="col-divider"></div>
 
-    <!-- Column 3: Upcoming schedule -->
+    <!-- Column 3: Schedule -->
     <div class="panel-col" id="col-schedule">
       <div id="upcoming-next">—</div>
       <div id="upcoming-countdown">—</div>
@@ -279,12 +304,10 @@
 
     <div class="col-divider"></div>
 
-    <!-- Column 4: Tmux windows -->
+    <!-- Column 4: Process Status (10pt) -->
     <div class="panel-col" id="col-tmux">
-      <div class="sec-label" style="margin-top:0;">Windows</div>
-      <div id="tmux-rows">
-        <!-- populated by JS -->
-      </div>
+      <div class="col-proc-title">Process Status</div>
+      <div id="tmux-rows"></div>
     </div>
 
   </div>
@@ -292,7 +315,7 @@
   <div id="robot-status"></div>
 
   <div id="controls">
-    <b>↑↓←→</b>: Move &nbsp;|&nbsp;
+    <b>&#x2191;&#x2193;&#x2190;&#x2192;</b>: Move &nbsp;|&nbsp;
     <b>&lt;/&gt;</b>: Linear spd &nbsp;|&nbsp;
     <b>[/]</b>: Angular spd
   </div>
