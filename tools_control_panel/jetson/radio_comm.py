@@ -6,19 +6,21 @@ import time
 import logging
 
 log = logging.getLogger(__name__)
-MAX_BYTES = 1900
-
-# Quality measurement window (seconds)
-_QUALITY_WINDOW = 30.0
-_RX_TIMEOUT     = 10.0   # no packet for 10s → rx_score = 0
+MAX_BYTES     = 1900
+PING_INTERVAL = 10.0   # seconds between pings
+PING_HISTORY  = 6      # keep last 6 results (= last 60 s)
 
 
 class RadioComm:
     """
     Bidirectional serial radio channel: Jetson <-> Local PC.
-    TX: telemetry + events (pose, status, sensor health).
-    RX: commands (estop, velocity, continue, new_path, config_update).
-    Quality score (0-100) derived from TX success rate + RX heartbeat activity.
+    TX: telemetry + events.
+    RX: commands + pong replies.
+
+    Quality (0-100): pong success rate over the last PING_HISTORY pings.
+      - Sends a ping every PING_INTERVAL seconds.
+      - radio_bridge_linux.py must reply with {"type":"pong","t":<echo>}.
+      - If no pong arrives before the next ping fires, that round is marked failed.
     """
 
     def __init__(self, port: str, baud: int, on_command=None):
@@ -28,19 +30,17 @@ class RadioComm:
             stopbits=serial.STOPBITS_ONE, rtscts=True, timeout=1,
         )
         self._on_command = on_command
-        self._tx_lock = threading.Lock()
-        self._running = False
+        self._tx_lock    = threading.Lock()
+        self._running    = False
 
-        # TX sliding window: deque of (timestamp, success: bool)
-        self._tx_window: collections.deque = collections.deque()
-        self._tx_window_lock = threading.Lock()
-
-        # Last time an RX packet was received
-        self._last_rx_time: float = 0.0
+        self._ping_lock    = threading.Lock()
+        self._ping_history: collections.deque = collections.deque()
+        self._pending_ping: float | None = None  # timestamp of unanswered ping
 
     def start(self):
         self._running = True
-        threading.Thread(target=self._rx_loop, daemon=True).start()
+        threading.Thread(target=self._rx_loop,   daemon=True).start()
+        threading.Thread(target=self._ping_loop, daemon=True).start()
         log.info(f"Radio opened: {self._ser.port}")
 
     def stop(self):
@@ -53,58 +53,60 @@ class RadioComm:
         data = (json.dumps(payload, separators=(',', ':')) + '\n').encode()
         if len(data) > MAX_BYTES:
             log.warning(f"Packet too large ({len(data)}B), dropping")
-            self._record_tx(False)
             return False
         with self._tx_lock:
             try:
                 self._ser.write(data)
-                self._record_tx(True)
                 return True
             except Exception as e:
                 if self._running:
                     log.error(f"Radio TX: {e}")
-                self._record_tx(False)
                 return False
 
     def get_quality(self) -> int:
-        """Return 0-100 radio link quality score (Jetson <-> Local PC)."""
-        now = time.time()
-        cutoff = now - _QUALITY_WINDOW
+        """Return 0-100 based on pong success rate over last PING_HISTORY pings."""
+        with self._ping_lock:
+            if not self._ping_history:
+                return 0
+            success = sum(1 for _, ok in self._ping_history if ok)
+            return int(success / len(self._ping_history) * 100)
 
-        with self._tx_window_lock:
-            # Evict old entries
-            while self._tx_window and self._tx_window[0][0] < cutoff:
-                self._tx_window.popleft()
-            total = len(self._tx_window)
-            ok    = sum(1 for _, s in self._tx_window if s)
+    # ── Ping loop ─────────────────────────────────────────────
+    def _ping_loop(self):
+        time.sleep(3.0)  # let connection stabilize before first ping
+        while self._running:
+            with self._ping_lock:
+                # Previous ping unanswered → mark as failed
+                if self._pending_ping is not None:
+                    self._record_ping(False)
+                t = time.time()
+                self._pending_ping = t
+            self.send({"type": "ping", "t": t})
+            time.sleep(PING_INTERVAL)
 
-        # TX success rate (0.0-1.0)
-        tx_score = (ok / total) if total > 0 else 0.0
+    def _record_ping(self, success: bool):
+        """Must be called with _ping_lock held."""
+        self._ping_history.append((time.time(), success))
+        while len(self._ping_history) > PING_HISTORY:
+            self._ping_history.popleft()
 
-        # RX activity: decay to 0 if no packet received within _RX_TIMEOUT
-        elapsed_rx = now - self._last_rx_time if self._last_rx_time > 0 else _QUALITY_WINDOW
-        rx_score = max(0.0, 1.0 - elapsed_rx / _RX_TIMEOUT)
-
-        # If TX is completely fresh (no history yet), trust RX side only
-        if total == 0:
-            return int(rx_score * 100)
-
-        return int((tx_score * 0.65 + rx_score * 0.35) * 100)
-
-    def _record_tx(self, success: bool):
-        with self._tx_window_lock:
-            self._tx_window.append((time.time(), success))
-
+    # ── RX loop ───────────────────────────────────────────────
     def _rx_loop(self):
         while self._running:
             try:
                 line = self._ser.readline()
                 if not line:
                     continue
-                self._last_rx_time = time.time()
-                cmd = json.loads(line.decode('utf-8', errors='ignore').strip())
-                if self._on_command:
-                    self._on_command(cmd)
+                msg = json.loads(line.decode('utf-8', errors='ignore').strip())
+
+                if msg.get('type') == 'pong':
+                    with self._ping_lock:
+                        if self._pending_ping is not None:
+                            self._record_ping(True)
+                            self._pending_ping = None
+                elif self._on_command:
+                    self._on_command(msg)
+
             except json.JSONDecodeError:
                 pass
             except Exception as e:

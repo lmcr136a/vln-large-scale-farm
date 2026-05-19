@@ -98,7 +98,6 @@ class Scheduler:
                 enabled = sched.get('enabled', True)
                 day_key = DAYS[weekday]
                 times   = sched.get(day_key, [])
-                log.debug(f'Scheduler check {now.strftime("%H:%M")} enabled={enabled} {day_key}={times}')
 
                 if enabled:
                     for time_str in times:

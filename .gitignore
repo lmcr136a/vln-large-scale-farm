@@ -62,3 +62,5 @@ ros2_ws/glim_ws/install/
 ros2_ws/glim_ws/log/
 # tools_control_panel/config/mission.json
 tools_control_panel/lab_pc/maps/
+auto_nav_log/
+output*

@@ -169,7 +169,7 @@ class InternetComm:
 
             if level != self._quality:
                 self._quality = level
-                log.info(f"Quality auto: {level} (RTT {rtt*1000:.0f}ms)" if rtt else f"Quality auto: {level} (no response)")
+                # log.info(f"Quality auto: {level} (RTT {rtt*1000:.0f}ms)" if rtt else f"Quality auto: {level} (no response)")
 
             time.sleep(QUALITY_CHECK_INTERVAL)
 

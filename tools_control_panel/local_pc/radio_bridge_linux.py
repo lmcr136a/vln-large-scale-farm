@@ -19,7 +19,7 @@ log = logging.getLogger("radio_bridge")
 
 MAX_BYTES = 1900
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_SCRIPT_DIR        = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_CFG       = os.path.join(_SCRIPT_DIR, "../config/farm_config.yaml")
 _DEFAULT_CFG_LOCAL = os.path.join(_SCRIPT_DIR, "../config/local_config.yaml")
 
@@ -81,6 +81,12 @@ class RadioBridge:
                 if not line:
                     continue
                 msg = json.loads(line.decode('utf-8', errors='ignore').strip())
+
+                # Reply to ping immediately — do not forward to lab PC
+                if msg.get('type') == 'ping':
+                    self._send_to_robot({'type': 'pong', 't': msg.get('t', 0)})
+                    continue
+
                 self._sio.emit("from_robot", msg, namespace="/bridge")
                 self._stats["rx_total"]  += 1
                 self._stats["rx_window"] += 1
@@ -95,6 +101,7 @@ class RadioBridge:
                             self._stats["last_sensors"] = data["sensors"]
                 else:
                     self._stats["last_rx"][mtype] = str(data)[:60]
+
             except json.JSONDecodeError:
                 pass
             except Exception as e:
@@ -144,8 +151,8 @@ class RadioBridge:
 
             pose = s["last_pose"]
             if pose and isinstance(pose, dict):
-                px = pose.get("x", pose.get("position", {}).get("x", "?"))
-                py = pose.get("y", pose.get("position", {}).get("y", "?"))
+                px  = pose.get("x", pose.get("position", {}).get("x", "?"))
+                py  = pose.get("y", pose.get("position", {}).get("y", "?"))
                 yaw = pose.get("yaw", pose.get("z", "?"))
                 pose_str = f"x={px:.3f}  y={py:.3f}  yaw={yaw:.3f}" if all(
                     isinstance(v, (int, float)) for v in [px, py, yaw]
@@ -153,24 +160,20 @@ class RadioBridge:
             else:
                 pose_str = "—"
 
-            sensors = s["last_sensors"]
-            if sensors:
-                sensor_str = "  ".join(
-                    f"{k}:{'✓' if v else '✗'}" for k, v in sensors.items()
-                )
-            else:
-                sensor_str = "—"
+            sensors = s.get("last_sensors")
+            sensor_str = ("  ".join(
+                f"{k}:{'✓' if v else '✗'}" for k, v in sensors.items()
+            ) if sensors else "—")
 
             lines = [
                 "┌─ Bridge Status ───────────────────────────────────────────────┐",
-                f"│  Local PC → Lab PC   {rx_hz:.1f} pkt/s  (total {s['rx_total']})",
-                f"│  Lab PC → Local PC   {tx_hz:.1f} pkt/s  (total {s['tx_total']})",
+                f"│  Jetson → Local PC   {rx_hz:.1f} pkt/s  (total {s['rx_total']})",
+                f"│  Local PC → Jetson   {tx_hz:.1f} pkt/s  (total {s['tx_total']})",
                 f"│  Pose     {pose_str}",
                 f"│  Sensors  {sensor_str}",
                 "└───────────────────────────────────────────────────────────────┘",
             ]
 
-            # move cursor up to overwrite previous output
             if self._status_lines:
                 print(f"\033[{self._status_lines}A", end="")
             for l in lines:
@@ -203,7 +206,7 @@ class RadioBridge:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=_DEFAULT_CFG)
+    parser.add_argument("--config",       default=_DEFAULT_CFG)
     parser.add_argument("--local-config", default=_DEFAULT_CFG_LOCAL)
     args = parser.parse_args()
     cfg = load_config(args.config, args.local_config)

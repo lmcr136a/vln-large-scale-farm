@@ -31,7 +31,7 @@ PUBLISH_HZ      = 10
 STATUS_INTERVAL = 2.0
 
 # GNSS radio quality: sliding window (seconds)
-GNSS_RADIO_WINDOW = 30.0
+GNSS_RADIO_WINDOW = 10.0
 
 
 # ── UBX helpers ───────────────────────────────────────────
@@ -210,7 +210,7 @@ class RtkGpsNode(Node):
         rate = total / GNSS_RADIO_WINDOW  # packets/sec over window
         bad_ratio = bad / total if total > 0 else 0.0
         # Nominal rate ~1-4 Hz; score saturates at 1.5 Hz
-        rate_score = min(1.0, rate / 1.5)
+        rate_score = min(1.0, rate / 1.5)  # 1.5 Hz saturates to 100% in 10s window
         quality_factor = max(0.0, 1.0 - bad_ratio * 3.0)
         return int(rate_score * quality_factor * 100)
 
@@ -482,22 +482,33 @@ class RtkGpsNode(Node):
             base_str = "waiting for 1005..."
 
         status = s['status_str']
-        line = (
-            f"[FW:{s['fw_ver']:<10s}]  {status:12s}  "
-            f"Lat:{lat_str}  Lon:{lon_str}  Alt:{alt_str}  "
-            f"SV:{s['sv']}  HDOP:{s['hdop']:.1f}  RTCM:{s['rtcm_count']} "
-            f"(bad:{s['rtcm_bad']})  GNSS-Radio:{gnss_quality}%\n"
-            f"[Base]  {base_str}\n"
-            f"[Quality]  {quality}"
-        )
-        if s['rtk_fixed']:
-            print(f"\033[1m\033[38;2;180;245;255m{line}  ✓ FIXED PUBLISHING\033[0m")
-        elif s['rtk_float']:
-            print(f"\033[38;2;100;200;255m{line}  ~ FLOAT PUBLISHING\033[0m")
-        elif status in ('DGPS', '3D Fix'):
-            print(f"\033[38;2;50;80;85m{line}\033[0m")
+        if s["rtk_fixed"]:
+            color  = "\033[38;2;180;245;255m"
+            suffix = "  ✓ FIXED PUBLISHING"
+        elif s["rtk_float"]:
+            color  = "\033[38;2;150;200;230m"
+            suffix = "  ~ FLOAT PUBLISHING"
         else:
-            print(line)
+            color  = "\033[38;2;150;150;150m"
+            suffix = ""
+
+        status_style = "\033[1m"
+        if s["rtk_fixed"]:
+            status_style += "\033[4m"  # underline for fixed
+
+        status_fmt = f"{status_style}{status:12s}\033[22m\033[24m"
+
+        line = (
+            f"{'='*10}\n  {status_fmt}  SV:{s['sv']}"
+            f"\n[Base]  {base_str}"
+            f"\nHDOP:{s['hdop']:.1f}  RTCM:{s['rtcm_count']} "
+            f"\n[Quality]  {quality}"
+            f"\nLat:{lat_str}  Lon:{lon_str}  Alt:{alt_str}  "
+            f"\n[FW:{s['fw_ver']:<10s}]  "
+            f"\n(bad:{s['rtcm_bad']})  GNSS-Radio:{gnss_quality}%\n"
+        )
+
+        print(f"{color}{line}{suffix}\033[0m")
 
     def destroy_node(self):
         self._radio.close()
