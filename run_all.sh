@@ -34,7 +34,7 @@ tmux send-keys -t $SESSION:2 "bash $SCRIPT_DIR/control_panel_jetson.sh" C-m
 
 # Window 3: 2D Map Saver
 tmux new-window -t $SESSION:3 -n "2Dmap"
-tmux send-keys -t $SESSION:3 "python3 tools_control_panel/save_map_glim.py" C-m
+tmux send-keys -t $SESSION:3 "python3 tools_control_panel/mapping/save_map_glim.py" C-m
 
 # Window 4: Obstacle Detection
 tmux new-window -t $SESSION:4 -n "O.D."

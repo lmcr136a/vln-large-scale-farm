@@ -8,9 +8,8 @@
   <script src="https://unpkg.com/konva@9/konva.min.js"></script>
   <link rel="stylesheet" href="styles.css">
   <style>
-    /* Schedule calendar */
     #col-cameras { display: flex; flex-direction: column; }
-    #col-schedule { min-width:220px; }
+
     #sensor-status-bar {
       font-size: 11px;
       color: rgba(255,255,255,0.75);
@@ -18,24 +17,140 @@
       padding: 3px 10px;
       white-space: nowrap;
     }
-    #upcoming-label {
-      font-size:15px; color:white; font-weight:600;
-      margin-bottom:6px; white-space:nowrap;
+
+    /* ── Column 1: Status + Radio + GPS ─────────────────────── */
+    #col-status { min-width: 180px; gap: 3px; }
+
+    .sec-label {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.35);
+      margin-top: 5px;
     }
-    .sched-table { border-collapse:collapse; font-size:8pt; }
-    .sched-table th, .sched-table td {
-      border:1px solid rgba(255,255,255,0.15);
-      padding:2px 5px; text-align:center;
-      color:rgba(255,255,255,0.7);
+    .st-row {
+      display: flex;
+      align-items: baseline;
+      gap: 5px;
+      font-size: 12px;
+      line-height: 1.5;
     }
-    .sched-table th { color:rgba(255,255,255,0.45); font-weight:normal; }
-    .sched-table .sched-time { color:rgba(255,255,255,0.4); font-size:7pt; }
-    .sched-table .sched-cell { cursor:pointer; }
-    .sched-table .sched-cell.active { color:#7cf; font-weight:bold; }
-    .sched-table .sched-cell:hover { background:rgba(255,255,255,0.08); }
-    /* Controls column */
-    #col-controls { min-width:140px; }
-    .run-row { display:flex; gap:6px; align-items:center; }
+    .st-lbl { color: rgba(255,255,255,0.45); flex-shrink: 0; }
+    .st-val { color: rgba(255,255,255,0.9); }
+
+    /* Radio quality inline */
+    .radio-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .radio-lbl { color: rgba(255,255,255,0.45); width: 68px; flex-shrink: 0; }
+    .radio-score { font-weight: 700; }
+
+    /* GPS section */
+    .gps-mode-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 1px 7px;
+      border-radius: 3px;
+      letter-spacing: 0.4px;
+      margin-top: 3px;
+    }
+    .gps-fixed  { background: rgba(0,210,110,0.22); color: #00d26e; border: 1px solid rgba(0,210,110,0.4); }
+    .gps-float  { background: rgba(60,160,255,0.18); color: #3ca0ff; border: 1px solid rgba(60,160,255,0.4); }
+    .gps-dgps   { background: rgba(255,190,40,0.18); color: #ffbe28; border: 1px solid rgba(255,190,40,0.4); }
+    .gps-nofix  { background: rgba(255,70,70,0.15);  color: #ff5050; border: 1px solid rgba(255,70,70,0.3); }
+
+    .gps-coord {
+      font-size: 8px;
+      color: rgba(255,255,255,0.7);
+      line-height: 1.6;
+      font-family: monospace;
+    }
+    .gps-coord .lbl { color: rgba(255,255,255,0.38); }
+    .gps-sv {
+      font-size: 11px;
+      color: rgba(255,255,255,0.65);
+      line-height: 1.5;
+    }
+    .gps-sv span { color: rgba(255,255,255,0.88); }
+
+    /* ── Column 2: Controls ──────────────────────────────────── */
+    #col-controls { min-width: 145px; gap: 7px; }
+    .run-row { display: flex; gap: 6px; align-items: center; }
+    .rec-row { display: flex; gap: 6px; align-items: center; }
+
+    /* ── Column 3: Upcoming schedule ─────────────────────────── */
+    #col-schedule { min-width: 190px; gap: 0; }
+
+    #upcoming-next {
+      font-size: 12pt;
+      font-weight: 700;
+      color: rgba(255,255,255,0.95);
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+    #upcoming-countdown {
+      font-size: 10px;
+      color: rgba(255,255,255,0.45);
+      margin-bottom: 5px;
+    }
+    .upcoming-item {
+      font-size: 8pt;
+      color: rgba(255,255,255,0.6);
+      line-height: 1.7;
+      white-space: nowrap;
+    }
+    #sched-enabled-row {
+      font-size: 9px;
+      color: rgba(255,255,255,0.3);
+      margin-top: 4px;
+    }
+    #sched-enabled-row span {
+      cursor: pointer;
+      color: rgba(100,180,255,0.7);
+      text-decoration: underline;
+    }
+
+    /* ── Column 4: Tmux ──────────────────────────────────────── */
+    #col-tmux { min-width: 155px; gap: 4px; }
+
+    .tmux-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+    }
+    .tmux-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .tdot-ok   { background: #00d26e; }
+    .tdot-fail { background: #ff5050; box-shadow: 0 0 4px rgba(255,80,80,0.6); }
+    .tdot-unkn { background: rgba(255,255,255,0.2); }
+    .tmux-lbl  { flex: 1; color: rgba(255,255,255,0.7); }
+    .tmux-btn  {
+      font-size: 9px;
+      padding: 1px 5px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.18);
+      color: rgba(255,255,255,0.5);
+      border-radius: 3px;
+      cursor: pointer;
+      line-height: 1.4;
+    }
+    .tmux-btn:hover { background: rgba(255,255,255,0.15); color: white; }
+
+    #estop-badge {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
   </style>
 </head>
 <body>
@@ -44,14 +159,14 @@
 
   <div id="top-panel">
 
-    <!-- Cameras + sensor bar -->
+    <!-- Cameras -->
     <div id="col-cameras">
       <div style="display:flex;">
         <div class="panel-col" id="col-back">
-          <img id="back-rgb-image" alt="Back camera" />
+          <img id="back-rgb-image" alt="Back" />
         </div>
         <div class="panel-col" id="col-front">
-          <img id="rgb-image" alt="Front camera" />
+          <img id="rgb-image" alt="Front" />
         </div>
       </div>
       <div id="sensor-status-bar">
@@ -61,57 +176,115 @@
 
     <div class="col-divider"></div>
 
-    <!-- System status -->
-    <div class="panel-col" id="col-sysmon">
-      <div class="sysmon-row"><span class="sysmon-label">WiFi</span><span id="info-wifi">—</span></div>
-      <div class="sysmon-row"><span class="sysmon-label">CPU</span><span id="info-cpu">—</span></div>
-      <div class="sysmon-row"><span class="sysmon-label">SSD</span><span id="info-ssd">—</span></div>
-      <div class="sysmon-row"><span class="sysmon-label">Battery</span><span id="info-battery">—</span></div>
-      <div class="sysmon-row"><span class="sysmon-label">Mode</span><span id="info-mode">—</span></div>
-      <div class="sysmon-row"><span id="estop-indicator" style="font-weight:bold;letter-spacing:1px;">🟢 OK</span></div>
+    <!-- Column 1: Status + Radio + GPS -->
+    <div class="panel-col" id="col-status">
+
+      <div class="st-row">
+        <span class="st-lbl">WiFi</span>
+        <span class="st-val" id="info-wifi">—</span>
+      </div>
+      <div class="st-row">
+        <span class="st-lbl">CPU</span>
+        <span class="st-val" id="info-cpu">—</span>
+      </div>
+      <div class="st-row">
+        <span class="st-lbl">SSD</span>
+        <span class="st-val" id="info-ssd">—</span>
+      </div>
+      <div class="st-row">
+        <span class="st-lbl">Scout Batt</span>
+        <span class="st-val" id="info-battery">—</span>
+      </div>
+      <div class="st-row">
+        <span class="st-lbl">Mode</span>
+        <span class="st-val" id="info-mode">—</span>
+        &nbsp;<span id="estop-badge">🟢</span>
+      </div>
+
+      <div class="sec-label">Radio</div>
+      <div class="radio-row">
+        <span class="radio-lbl">Local PC</span>
+        <span class="radio-score" id="score-radio">—</span>
+      </div>
+      <div class="radio-row">
+        <span class="radio-lbl">GPS Base</span>
+        <span class="radio-score" id="score-gnss">—</span>
+      </div>
+
+      <div class="sec-label">GPS</div>
+      <span id="gps-mode-badge" class="gps-mode-badge gps-nofix">No Fix</span>
+
+      <div class="gps-coord" id="gps-base-line">
+        <span class="lbl">Base </span>—
+      </div>
+      <div class="gps-sv">
+        SV: <span id="gps-sv">—</span> &nbsp; HDOP: <span id="gps-hdop">—</span>
+      </div>
+      <div class="gps-coord">
+        <span class="lbl">Lat </span><span id="gps-lat">—</span>
+        &nbsp;<span class="lbl">Lon </span><span id="gps-lon">—</span>
+        &nbsp;<span class="lbl">Alt </span><span id="gps-alt">—</span>
+      </div>
+
     </div>
 
     <div class="col-divider"></div>
 
-    <!-- Combined controls: Plan Path / Recording / Drive -->
+    <!-- Column 2: Controls -->
     <div class="panel-col" id="col-controls">
+
       <a href="/path_plan.html" class="util-btn" style="text-decoration:none;">🗺 Plan Path</a>
 
-      <div style="height:10px;"></div>
+      <div style="height:6px;"></div>
 
       <div class="rec-row">
-        <span class="sysmon-label">Recording</span>
+        <span class="sysmon-label" style="font-size:11px;">Rec</span>
         <span id="recordingStatus" class="rec-status">Stopped</span>
       </div>
       <div class="rec-row">
-        <input id="dirnameInput" type="text" placeholder="directory name" />
-        <span id="dirnameDisplay" style="display:none;font-size:14px;color:rgba(255,255,255,0.85);"></span>
+        <input id="dirnameInput" type="text" placeholder="directory name" style="font-size:11px;" />
+        <span id="dirnameDisplay" style="display:none;font-size:12px;color:rgba(255,255,255,0.85);"></span>
       </div>
       <div class="rec-row">
         <button id="btn-rec-start" onclick="startRecording()">Start</button>
         <button id="btn-rec-stop"  onclick="stopRecording()" style="display:none;">Stop</button>
       </div>
 
-      <div style="height:10px;"></div>
+      <div style="height:8px;"></div>
 
       <div class="run-row">
-        <button id="autoButton" onclick="runNow()" style="padding:5px 10px;font-size:13px;">▶ Run Now</button>
+        <button id="autoButton" onclick="runNow()"
+                style="padding:5px 10px;font-size:13px;">▶ Run Now</button>
+      </div>
+      <div class="run-row" style="margin-top:4px;">
         <button onclick="emergencyStop()"
-                style="background:#cc0000;color:#fff;font-weight:bold;padding:5px 10px;font-size:13px;">🛑 E-STOP</button>
+                style="background:#cc0000;color:#fff;font-weight:bold;padding:5px 10px;font-size:13px;width:100%;">
+          🛑 E-STOP
+        </button>
+      </div>
+
+    </div>
+
+    <div class="col-divider"></div>
+
+    <!-- Column 3: Upcoming schedule -->
+    <div class="panel-col" id="col-schedule">
+      <div id="upcoming-next">—</div>
+      <div id="upcoming-countdown">—</div>
+      <div id="upcoming-list"></div>
+      <div id="sched-enabled-row">
+        Schedule: <span onclick="toggleScheduleEnabled()" id="sched-enabled-lbl">ON</span>
       </div>
     </div>
 
     <div class="col-divider"></div>
 
-    <!-- Weekly schedule -->
-    <div class="panel-col" id="col-schedule">
-      <div id="upcoming-label">Loading schedule…</div>
-      <div style="margin-bottom:4px;font-size:11px;color:rgba(255,255,255,0.4);">
-        Schedule:
-        <span id="sched-enabled-lbl" onclick="toggleScheduleEnabled()"
-              style="cursor:pointer;color:#7cf;">ON</span>
+    <!-- Column 4: Tmux windows -->
+    <div class="panel-col" id="col-tmux">
+      <div class="sec-label" style="margin-top:0;">Windows</div>
+      <div id="tmux-rows">
+        <!-- populated by JS -->
       </div>
-      <div id="weekly-calendar"></div>
     </div>
 
   </div>

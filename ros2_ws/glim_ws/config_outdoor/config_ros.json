@@ -64,7 +64,7 @@
     // Extension modules
     "extension_modules": [
         "libmemory_monitor.so",
-        "libstandard_viewer.so",
+        // "libstandard_viewer.so",
         "librviz_viewer.so",
         // "libinit_pose_viewer.so",
         "liblocalizer_ext.so",

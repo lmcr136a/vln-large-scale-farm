@@ -87,4 +87,24 @@ def run(waypoints, get_robot_pose, params=None):
                        'completed': False,
                        'status': f'Moving Forward: {dist:.2f}m Speed={stage}'}
 
+    # Final orientation — rotate to target yaw if last waypoint has one
+    last_wp = waypoints[-1] if waypoints else None
+    if last_wp and 'yaw' in last_wp:
+        target_yaw = float(last_wp['yaw'])
+        while True:
+            pose = get_robot_pose()
+            if pose is None:
+                yield {'vt': 0.0, 'vr': 0.0, 'dt': CONTROL_DT,
+                       'completed': False, 'status': 'Waiting for pose'}
+                continue
+            angle_err = (target_yaw - pose['yaw'] + math.pi) % (2 * math.pi) - math.pi
+            if abs(angle_err) <= ori_tol_r:
+                break
+            vr, stage = _pick_vel(math.degrees(abs(angle_err)), r_stages)
+            vr *= 1 if angle_err > 0 else -1
+            side = 'Left' if angle_err > 0 else 'Right'
+            yield {'vt': 0.0, 'vr': vr, 'dt': CONTROL_DT,
+                   'completed': False,
+                   'status': f'Final orientation {side}: {math.degrees(abs(angle_err)):.1f}°'}
+
     yield {'vt': 0.0, 'vr': 0.0, 'dt': 0.0, 'completed': True, 'status': ''}

@@ -72,7 +72,10 @@ class Scheduler:
                 mission_file = os.path.join(os.path.dirname(self._cfg_path), mission_file)
             with open(mission_file, encoding='utf-8') as f:
                 mission = json.load(f)
-            return mission.get('waypoints', [])
+            waypoints = mission.get('waypoints', [])
+            if mission.get('isLoop') and 'start' in mission:
+                waypoints = waypoints + [mission['start']]
+            return waypoints
         except FileNotFoundError:
             log.warning('mission.json not found')
             return []

@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  control.js  -  Optimized version
+//  control.js
 //  ★ All setInterval image polling removed
 //  ★ SocketIO push: front_frame / back_frame / map_image / robot_pose
 //  ★ Konva.js: map zoom/pan + canvas layering (map layer / dynamic layer)
@@ -11,15 +11,14 @@ const socket = io(`http://${host}:8000`, {
 });
 
 // ── State ─────────────────────────────────────────────────────
-const keyState    = {};
-let isAutoMode    = false;
-let pathNodes     = [];
-let currentMapMeta = null;   // { resolution, origin_x, origin_y, width, height }
-let isFirstMap     = true;   // center stage on first map load
-let robotPose      = null;   // { x, y, yaw }
+const keyState     = {};
+let isAutoMode     = false;
+let pathNodes      = [];
+let currentMapMeta = null;
+let isFirstMap     = true;
+let robotPose      = null;
 
 // ── Konva Stage / Layer Initialization ───────────────────────
-// Declared here, initialized in DOMContentLoaded to ensure container has real dimensions
 let stage, mapLayer, dynLayer, mapImage;
 
 const ZOOM_MIN  = 0.1;
@@ -53,7 +52,6 @@ function initStage() {
   }
   const stageW = container.clientWidth  || 800;
   const stageH = container.clientHeight || 600;
-  console.log(`[Konva] Stage init: ${stageW}x${stageH}`);
 
   stage = new Konva.Stage({
     container: 'map-konva-container',
@@ -62,9 +60,7 @@ function initStage() {
     draggable: true,
   });
 
-  // Bottom Layer: map image (redrawn only when updated)
   mapLayer = new Konva.Layer();
-  // Top Layer: robot icon + waypoints (redrawn on every update)
   dynLayer = new Konva.Layer();
   stage.add(mapLayer);
   stage.add(dynLayer);
@@ -72,13 +68,9 @@ function initStage() {
   mapImage = new Konva.Image({ x: 0, y: 0, listening: false });
   mapLayer.add(mapImage);
 
-  // ── Mouse Wheel Zoom ────────────────────────────────────────
   stage.container().addEventListener('wheel', onWheel, { passive: false });
-
-  // ── Map click → waypoint ────────────────────────────────────
   stage.on('click', onMapClick);
 
-  // ── Resize handler ──────────────────────────────────────────
   window.addEventListener('resize', () => {
     stage.width(container.clientWidth);
     stage.height(container.clientHeight);
@@ -86,18 +78,12 @@ function initStage() {
   });
 }
 
-// Script is loaded at bottom of <body>, so DOM is already ready - call directly
 initStage();
 
-// ── Util: World coordinates → Stage pixel coordinates ────────
-// Image saved with np.flipud → row 0 = world Y_max (canvas top).
-// So world +Y → canvas up (decreasing py).
-//   px =         (wx - origin_x) / resolution
-//   py = height - (wy - origin_y) / resolution   ← Y flip
+// ── Util: World → Stage pixel ─────────────────────────────────
 function worldToStagePixel(wx, wy) {
   if (!currentMapMeta) return null;
   const { resolution, origin_x, origin_y, height, rot_angle } = currentMapMeta;
-  // Apply same PCA rotation as save_map_glim._rotate_xy
   const c =  Math.cos(rot_angle), s = Math.sin(rot_angle);
   const rx =  c * wx + s * wy;
   const ry = -s * wx + c * wy;
@@ -106,19 +92,17 @@ function worldToStagePixel(wx, wy) {
   return { x: px, y: py };
 }
 
-// ── Util: Stage click coordinates → World coordinates ────────
+// ── Util: Stage click → World ─────────────────────────────────
 function stageClickToWorld(stageX, stageY) {
   if (!currentMapMeta) return null;
   const { resolution, origin_x, origin_y, height } = currentMapMeta;
   const wx = origin_x + stageX * resolution;
-  const wy = origin_y + (height - stageY) * resolution;  // Y flip
+  const wy = origin_y + (height - stageY) * resolution;
   return { x: wx, y: wy };
 }
 
-// ── Map Click — disabled for path editing (use /path_plan.html) ──
 function onMapClick(e) {
-  // Map click is intentionally disabled on the control panel.
-  // Use the Path Planner page to set start point and waypoints.
+  // Disabled on control panel — use /path_plan.html
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -129,12 +113,12 @@ socket.on('connect', () => {
   loadMission();
   if (typeof initSchedule === 'function') initSchedule();
 });
-socket.on('disconnect', () => console.log('Socket.IO disconnected'));
+socket.on('disconnect',    () => console.log('Socket.IO disconnected'));
 socket.on('connect_error', (e) => console.error('Connection error:', e));
 
 setInterval(() => socket.emit('heartbeat'), 500);
 
-// ── Keyboard Input (blocked during autonomous mode) ───────────
+// ── Keyboard Input ────────────────────────────────────────────
 window.addEventListener('blur', () => {
   for (const key in keyState) {
     if (keyState[key]) { keyState[key] = false; socket.emit('keyup', key); }
@@ -154,10 +138,9 @@ window.addEventListener('keyup', (e) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-//  ★ SocketIO Push Events (fully replaces HTTP polling)
+//  SocketIO Push Events
 // ═══════════════════════════════════════════════════════════════
 
-// ── RGB Camera Frames ─────────────────────────────────────────
 socket.on('front_frame', (data) => {
   document.getElementById('rgb-image').src = 'data:image/jpeg;base64,' + data.data;
 });
@@ -165,7 +148,6 @@ socket.on('back_frame', (data) => {
   document.getElementById('back-rgb-image').src = 'data:image/jpeg;base64,' + data.data;
 });
 
-// ── Map Image (server pushes only when changed) ──────────────
 socket.on('map_updated', (data) => {
   currentMapMeta = {
     resolution: data.resolution,
@@ -200,50 +182,34 @@ socket.on('map_updated', (data) => {
       });
       stage.batchDraw();
     }
-
     redrawDynLayer();
   };
 
   const img = new window.Image();
   img.onload = () => applyImage(img);
-
   if (data.image_data) {
-    // Jetson online: image embedded directly in the socket event
     img.src = 'data:image/png;base64,' + data.image_data;
   } else {
-    // Jetson offline: fetch cached saved_map.png from lab PC
     img.src = `/saved_map.png?v=${data.version}`;
   }
-
   console.log(`[map] ${data.width}\u00d7${data.height} rot=${(data.rot_angle*180/Math.PI).toFixed(1)}deg ${data.image_data ? '(live)' : '(saved)'}`);
 });
 
-// ── Robot Pose (10Hz) ─────────────────────────────────────────
 socket.on('robot_pose', (data) => {
-  const yawDeg = data.yaw != null ? (data.yaw * 180 / Math.PI).toFixed(1) : 'N/A';
-  const rotDeg = currentMapMeta ? (currentMapMeta.rot_angle * 180 / Math.PI).toFixed(1) : 'N/A';
-  console.log(`[robot_pose] x=${data.x?.toFixed(2)} y=${data.y?.toFixed(2)} yaw=${yawDeg}deg  rot_angle=${rotDeg}deg`);
-
   const isFirst = robotPose === null;
   robotPose = data;
-
   if (isFirst && currentMapMeta && pathNodes.length === 0) {
     pathNodes.push({ worldX: data.x, worldY: data.y, reached: false });
   }
-
   redrawDynLayer();
 });
 
-// ── sysmon ────────────────────────────────────────────────────
-const sysmonDiv = document.getElementById('sysmon'); // kept for fallback
 socket.on('sysmon', (data) => {
   if (!data || typeof data !== 'object') return;
-  const { cpu, mem, used_gb, total_gb, used_pct } = data;
-
-  const cpuEl  = document.getElementById('info-cpu');
-  const ssdEl  = document.getElementById('info-ssd');
-
-  if (cpuEl)  cpuEl.textContent  = typeof cpu  === 'number' ? `${cpu.toFixed(1)}%` : '—';
+  const { cpu, used_gb, total_gb } = data;
+  const cpuEl = document.getElementById('info-cpu');
+  const ssdEl = document.getElementById('info-ssd');
+  if (cpuEl) cpuEl.textContent = typeof cpu === 'number' ? `${cpu.toFixed(1)}%` : '—';
   if (ssdEl && typeof used_gb === 'number' && typeof total_gb === 'number') {
     const usedTB  = (used_gb  / 1024).toFixed(1);
     const totalTB = (total_gb / 1024).toFixed(1);
@@ -260,26 +226,37 @@ socket.on('robot_status', (data) => {
 });
 
 socket.on('robot_telemetry', (data) => {
-  const battEl    = document.getElementById('info-battery');
-  const modeEl    = document.getElementById('info-mode');
-  const estopEl   = document.getElementById('estop-indicator');
-  const sensorsEl = document.getElementById('info-sensors');
-  const wifiEl    = document.getElementById('info-wifi');
+  const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v ?? '—'; };
 
-  if (battEl)  battEl.textContent  = data.battery >= 0 ? `${data.battery.toFixed(1)}%` : '—';
-  if (modeEl)  modeEl.textContent  = data.mode || '—';
-  if (estopEl) {
-    estopEl.textContent = data.estop ? '🔴 E-STOP' : '🟢 OK';
-    estopEl.style.color = data.estop ? '#ff4444' : '#44ff88';
+  set('info-battery', data.battery >= 0 ? `${data.battery.toFixed(1)}%` : null);
+  set('info-mode',    data.mode);
+
+  const estop = document.getElementById('estop-badge');
+  if (estop) {
+    estop.textContent = data.estop ? '🔴' : '🟢';
+    estop.title = data.estop ? 'E-STOP active' : 'OK';
   }
-  if (sensorsEl && data.sensors) {
-    sensorsEl.textContent = Object.entries(data.sensors)
+
+  if (data.sensors) {
+    const s = document.getElementById('info-sensors');
+    if (s) s.textContent = Object.entries(data.sensors)
       .map(([k, v]) => `${k}:${v ? '✓' : '✗'}`).join('  ');
   }
-  if (wifiEl) {
-    const inet = data.internet === true ? '🌐✓' : data.internet === false ? '🌐✗' : '';
-    wifiEl.textContent = (data.wifi && data.wifi !== '—' ? data.wifi : '—') + (inet ? '  ' + inet : '');
-  }
+
+  // WiFi name + internet quality %
+  const inetQ    = data.internet_quality != null ? ` (${data.internet_quality}%)` : '';
+  const wifiName = (data.wifi && data.wifi !== '—') ? data.wifi : '—';
+  set('info-wifi', wifiName + inetQ);
+
+  // Radio quality scores
+  updateRadioScore('score-radio', data.radio_quality);
+  updateRadioScore('score-gnss',  data.gps_status?.gnss_radio_quality);
+
+  // GPS panel
+  if (data.gps_status) updateGpsPanel(data.gps_status);
+
+  // Tmux panel
+  if (data.tmux_status) updateTmuxPanel(data.tmux_status);
 });
 
 socket.on('waypoint_reached', (data) => {
@@ -294,16 +271,14 @@ socket.on('waypoint_reached', (data) => {
 //  Draw Dynamic Layer (robot + waypoints)
 // ═══════════════════════════════════════════════════════════════
 function redrawDynLayer() {
-  if (!dynLayer) return;  // Konva not yet initialized - skip
+  if (!dynLayer) return;
   dynLayer.destroyChildren();
 
-  // Always recompute pixel positions from world coords so map resizes stay correct
   const visibleNodes = pathNodes.map(n => {
     const p = worldToStagePixel(n.worldX, n.worldY);
     return p ? { ...n, stageX: p.x, stageY: p.y } : null;
   }).filter(Boolean);
 
-  // ── Waypoint lines ─────────────────────────────────────────
   if (visibleNodes.length > 1) {
     const pts = [];
     visibleNodes.forEach(n => pts.push(n.stageX, n.stageY));
@@ -316,13 +291,10 @@ function redrawDynLayer() {
     }));
   }
 
-  // ── Waypoint markers ───────────────────────────────────────
   visibleNodes.forEach((n, i) => {
     const isStart = i === 0;
     const isEnd   = i === visibleNodes.length - 1;
-
     if (isStart || isEnd) {
-      // Square: start=white, end=blue
       const S = 10;
       dynLayer.add(new Konva.Rect({
         x: n.stageX - S / 2, y: n.stageY - S / 2,
@@ -332,7 +304,6 @@ function redrawDynLayer() {
         listening: false,
       }));
     } else {
-      // Intermediate destination: small gray circle
       dynLayer.add(new Konva.Circle({
         x: n.stageX, y: n.stageY,
         radius: n.reached ? 5 : 4,
@@ -343,27 +314,21 @@ function redrawDynLayer() {
     }
   });
 
-  // ── Robot icon: dot + heading line ────────────────────────
   if (robotPose && currentMapMeta) {
     const p = worldToStagePixel(robotPose.x, robotPose.y);
     if (p) {
-      // yaw: subtract map rotation to get heading in rotated (image) frame
       const yawRad = robotPose.yaw - currentMapMeta.rot_angle;
       const headLen = 6;
       const dx =  Math.cos(yawRad) * headLen;
       const dy = -Math.sin(yawRad) * headLen;
 
-      // Center dot
       dynLayer.add(new Konva.Circle({
         x: p.x, y: p.y,
         radius: 3,
         fill: 'rgba(255,100,0,0.95)',
-        stroke: 'white',
-        strokeWidth: 1,
+        stroke: 'white', strokeWidth: 1,
         listening: false,
       }));
-
-      // Heading arrow
       dynLayer.add(new Konva.Arrow({
         points: [p.x, p.y, p.x + dx, p.y + dy],
         pointerLength: 4,
@@ -380,7 +345,7 @@ function redrawDynLayer() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Auto Mode Toggle
+//  Auto Mode
 // ═══════════════════════════════════════════════════════════════
 function runNow() {
   if (isAutoMode) {
@@ -405,6 +370,9 @@ function resetMapZoom() {
   stage.batchDraw();
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  Recording
+// ═══════════════════════════════════════════════════════════════
 function setRecordingState(active, dirname) {
   const statusEl  = document.getElementById('recordingStatus');
   const inputEl   = document.getElementById('dirnameInput');
@@ -457,9 +425,90 @@ async function loadMission() {
   } catch {}
 }
 
-function updateAutoButton() {
-  const btn = document.getElementById('autoButton');
-  if (!btn) return;
-  btn.textContent = isAutoMode ? '⏹ Stop' : '▶ Run Now';
-  btn.classList.toggle('active-auto', isAutoMode);
+// ═══════════════════════════════════════════════════════════════
+//  Radio Quality Score (colored text)
+// ═══════════════════════════════════════════════════════════════
+function _scoreColor(score) {
+  if (score == null) return 'rgba(255,255,255,0.3)';
+  if (score >= 80) return '#00d26e';
+  if (score >= 60) return '#7ecf40';
+  if (score >= 40) return '#f0c040';
+  if (score >= 20) return '#f08030';
+  return '#ff5050';
+}
+
+function updateRadioScore(id, score) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = score != null ? `${score}%` : '—';
+  el.style.color = _scoreColor(score);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  GPS Panel
+// ═══════════════════════════════════════════════════════════════
+function updateGpsPanel(g) {
+  const badge = document.getElementById('gps-mode-badge');
+  if (badge) {
+    badge.textContent = g.rtk_mode || 'No Fix';
+    badge.className = 'gps-mode-badge ' + (
+      g.rtk_fixed                                         ? 'gps-fixed' :
+      g.rtk_float                                         ? 'gps-float' :
+      (g.rtk_mode === 'DGPS' || g.rtk_mode === '3D Fix') ? 'gps-dgps'  :
+                                                            'gps-nofix'
+    );
+  }
+
+  const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v ?? '—'; };
+
+  set('gps-sv',   g.sv);
+  set('gps-hdop', g.hdop != null ? g.hdop.toFixed(1) : null);
+  set('gps-lat',  g.lat  != null ? g.lat.toFixed(6)  : null);
+  set('gps-lon',  g.lon  != null ? g.lon.toFixed(6)  : null);
+  set('gps-alt',  g.alt  != null ? `${g.alt.toFixed(1)}m` : null);
+
+  const baseLine = document.getElementById('gps-base-line');
+  if (baseLine) {
+    if (g.base_lat != null) {
+      baseLine.innerHTML =
+        `<span class="lbl">Base Fixed &nbsp;</span>` +
+        `<span class="lbl">Lat </span>${g.base_lat.toFixed(6)} ` +
+        `<span class="lbl">Lon </span>${g.base_lon.toFixed(6)} ` +
+        `<span class="lbl">Alt </span>${g.base_alt != null ? g.base_alt.toFixed(1) + 'm' : '—'}`;
+    } else {
+      baseLine.innerHTML = `<span class="lbl">Base </span>not fixed`;
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Tmux Panel
+// ═══════════════════════════════════════════════════════════════
+const TMUX_WINDOW_LABELS = {
+  slam:      'SLAM',
+  map_saver: '2D Map',
+  obstacle:  'Safety',
+  gps:       'GPS Node',
+  lidar:     'LiDAR',
+  imu:       'IMU',
+};
+
+function updateTmuxPanel(status) {
+  const container = document.getElementById('tmux-rows');
+  if (!container) return;
+  const keys = Object.keys(TMUX_WINDOW_LABELS).filter(k => k in status);
+  container.innerHTML = keys.map(key => {
+    const alive = status[key];
+    const dot = alive === true ? 'tdot-ok' : alive === false ? 'tdot-fail' : 'tdot-unkn';
+    return `<div class="tmux-row">
+      <div class="tmux-dot ${dot}"></div>
+      <div class="tmux-lbl">${TMUX_WINDOW_LABELS[key]}</div>
+      <button class="tmux-btn" onclick="restartWindow('${key}')">↺</button>
+    </div>`;
+  }).join('');
+}
+
+function restartWindow(key) {
+  if (!confirm(`Restart "${TMUX_WINDOW_LABELS[key] || key}"?`)) return;
+  socket.emit('command', { cmd: 'restart_window', window: key });
 }
