@@ -89,6 +89,7 @@ class TmuxMonitor:
     """
 
     _DEFAULTS = {
+        "jetson_agent": {"check": "jetson_main.py", "window": "Main"},
         "slam":      {"check": "glim_rosnode",   "cmd": "bash launch_files/launch_slam.sh",             "window": "SLAM"},
         "map_saver": {"check": "save_map_glim",  "cmd": "python3 tools_control_panel/mapping/save_map_glim.py", "window": "2Dmap"},
         "obstacle":  {"check": "safety_checker", "cmd": "python3 tools_scout_control/safety_checker.py","window": "O.D."},
