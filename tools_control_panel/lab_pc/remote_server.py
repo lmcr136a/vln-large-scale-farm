@@ -25,8 +25,6 @@ from server_to_panel import ServerToPanel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("remote_server")
 
-# Suppress Flask/werkzeug per-request logs (Socket.IO polling is very noisy).
-# Disconnect/error events are handled via Socket.IO callbacks, not HTTP logs.
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 CFG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../config/farm_config.yaml"))
@@ -37,8 +35,8 @@ class RemoteServer:
         self.cfg = load_config(config_path)
         self._config_path = os.path.expanduser(config_path)
         cfg_dir = os.path.dirname(self._config_path)
-        self._paths_file   = os.path.join(cfg_dir, self.cfg["paths"].get("paths_file",   "paths.json"))
-        self._mission_file = os.path.join(cfg_dir, self.cfg["paths"].get("mission_file", "mission.json"))
+        self._paths_file    = os.path.join(cfg_dir, self.cfg["paths"].get("paths_file",   "paths.json"))
+        self._mission_file  = os.path.join(cfg_dir, self.cfg["paths"].get("mission_file", "mission.json"))
         self._schedule_file = os.path.join(cfg_dir, "schedule.json")
         self._path_nodes       = self._load_paths()
         self._path_mode        = False
@@ -54,7 +52,7 @@ class RemoteServer:
             ping_interval=self.cfg["server"]["ping_interval"],
             ping_timeout=self.cfg["server"]["ping_timeout"],
             max_http_buffer_size=self.cfg["server"].get("max_http_buffer_size", 10_000_000),
-            allow_upgrades=False,  # werkzeug does not support WebSocket upgrade
+            allow_upgrades=False,
         )
 
         self._register_routes()
@@ -114,7 +112,6 @@ class RemoteServer:
                 except Exception as e:
                     log.error(f"Mission read error: {e}")
                     return jsonify({"start": None, "waypoints": []})
-            # POST: save mission and push waypoints to Jetson
             data      = req.get_json(force=True)
             start     = data.get("start")
             waypoints = data.get("waypoints", [])
@@ -126,7 +123,6 @@ class RemoteServer:
             except Exception as e:
                 log.error(f"Mission save error: {e}")
                 return jsonify({"ok": False})
-            # Full path to Jetson: start + waypoints [+ start if loop]
             full_path = ([start] if start else []) + waypoints
             if is_loop and start:
                 full_path.append(start)
@@ -193,7 +189,15 @@ class RemoteServer:
         def on_estop():
             self._to_robot({"cmd": "estop"})
 
-        # control.js emits socket.emit('keydown', key) — key is a raw string
+        @sio.on("command")
+        def on_command(data):
+            # Generic command passthrough from browser → Jetson.
+            # Handles: restart_window, and any future commands.
+            if not isinstance(data, dict):
+                return
+            log.info(f"[cmd] {data.get('cmd')} from panel")
+            self._to_robot(data)
+
         @sio.on("keydown")
         def on_keydown(key: str):
             VEL = self.cfg["autonomous"]
@@ -214,7 +218,6 @@ class RemoteServer:
         def on_start(data):
             waypoints = data.get("waypoints", [])
             if not waypoints:
-                # Browser pathNodes empty — load from saved mission file
                 try:
                     with open(self._mission_file) as f:
                         mission = json.load(f)
@@ -270,7 +273,6 @@ class RemoteServer:
         @sio.on("set_quality")
         def on_set_quality(data):
             level = data.get("level", "low")
-            # Tell Jetson to adjust streaming quality
             self._to_robot_internet({"type": "quality", "level": level})
 
     # ── Bridge events (Local PC radio relay → Lab PC) ─────────────────────────
@@ -296,7 +298,7 @@ class RemoteServer:
             elif mtype == "event":
                 event = msg.get("event")
                 if event == "robot_pose":
-                    return  # handled exclusively via inet_pose (extrinsic-corrected)
+                    return
                 sio.emit(event, msg.get("data", {}), namespace="/")
 
     # ── Internet events (Jetson direct) ───────────────────────────────────────
@@ -314,37 +316,35 @@ class RemoteServer:
         def inet_ping(data):
             sio.emit("pong_rtt", {}, to=request.sid)
 
-        # Events emitted by internet_comm.py
         @sio.on("telemetry")
         def inet_telemetry(data):
             self._forward_telemetry(data)
 
-        @sio.on("robot_event", )
+        @sio.on("robot_event")
         def inet_event(data):
             event = data.get("event")
             if event == "robot_pose":
-                return  # handled exclusively via inet_pose (extrinsic-corrected)
+                return
             sio.emit(event, data.get("data", {}), namespace="/")
 
-        @sio.on("rgb_frame", )
+        @sio.on("rgb_frame")
         def inet_rgb(data):
             cam = data.get("camera", "front")
             event = "front_frame" if cam == "front" else "back_frame"
             sio.emit(event, {"data": data["data"]}, namespace="/")
 
-        @sio.on("pose", )
+        @sio.on("pose")
         def inet_pose(data):
             sio.emit("robot_pose", self._correct_yaw(data), namespace="/")
 
-        @sio.on("pointcloud", )
+        @sio.on("pointcloud")
         def inet_pointcloud(data):
             sio.emit("pointcloud_update", data, namespace="/")
 
-        @sio.on("map_frame", )
+        @sio.on("map_frame")
         def inet_map_frame(data):
             import base64
             meta = data.get("meta", {})
-            # Persist to disk so the fallback path has an up-to-date saved map
             try:
                 png_bytes = base64.b64decode(data.get("data", ""))
                 save_dir  = self._monitor._saved_map_dir
@@ -367,15 +367,13 @@ class RemoteServer:
                 "image_data": data.get("data", ""),
             }, namespace="/")
 
-        # Commands from panel → Jetson via internet
-        @sio.on("to_robot", )
+        @sio.on("to_robot")
         def inet_to_robot(data):
-            sio.emit("command", data, )
+            sio.emit("command", data)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _correct_yaw(self, data: dict) -> dict:
-        """Apply lidar extrinsic yaw offset to a raw pose dict {x, y, yaw}."""
         ext = self.cfg.get("lidar_extrinsics", {})
         yaw_offset = math.radians(ext.get("rotation", [0, 0, 0])[2])
         if yaw_offset == 0.0:
@@ -385,7 +383,6 @@ class RemoteServer:
         return {**data, "yaw": corrected}
 
     def _send_map_to_client(self, sid: str):
-        """Send the latest saved map directly to a single client (e.g. on reconnect)."""
         import base64
         save_dir   = self._monitor._saved_map_dir
         png_path   = os.path.join(save_dir, "saved_map.png")
@@ -429,38 +426,43 @@ class RemoteServer:
             log.error(f"paths.json write error: {e}")
 
     def _forward_telemetry(self, data: dict):
-        """Unpack telemetry dict and emit status fields to panel clients."""
+        """Forward all telemetry fields to panel clients."""
         self.sio.emit("robot_telemetry", {
-            "battery":     data.get("batt", -1),
-            "sensors":     data.get("sensors", {}),
-            "storage_pct": data.get("storage_pct", -1),
-            "mode":        data.get("mode", "idle"),
-            "estop":       data.get("estop", False),
-            "wifi":        data.get("wifi", "—"),
-            "internet":    data.get("internet", False),
+            # original fields
+            "battery":          data.get("batt", -1),
+            "sensors":          data.get("sensors", {}),
+            "storage_pct":      data.get("storage_pct", -1),
+            "mode":             data.get("mode", "idle"),
+            "estop":            data.get("estop", False),
+            "wifi":             data.get("wifi", "—"),
+            "internet":         data.get("internet", False),
+            # new fields
+            "radio_quality":    data.get("radio_quality"),
+            "internet_quality": data.get("internet_quality"),
+            "internet_rtt_ms":  data.get("internet_rtt_ms"),
+            "gps_status":       data.get("gps_status"),
+            "tmux_status":      data.get("tmux_status"),
         }, namespace="/")
 
     def _to_robot(self, cmd: dict):
-        """Send command via radio bridge AND internet (whichever is connected)."""
         if self._bridge_connected:
             self.sio.emit("to_robot", cmd, namespace="/bridge")
         if self._inet_connected and self._inet_sid:
-            self.sio.emit("command", cmd, to=self._inet_sid, )
+            self.sio.emit("command", cmd, to=self._inet_sid)
         if not self._bridge_connected and not self._inet_connected:
             log.warning(f"No robot connection — command dropped: {cmd.get('cmd')}")
 
     def _to_robot_internet(self, msg: dict):
-        """Send command to Jetson via direct internet connection."""
         mtype = msg.get("type")
         if mtype == "quality":
-            self.sio.emit("quality", msg, )
+            self.sio.emit("quality", msg)
         else:
-            self.sio.emit("command", msg, )
+            self.sio.emit("command", msg)
 
     def _push_config_update(self, updates: dict):
         try:
             with open(self._config_path) as f:
-                cfg = yaml.safe_load(f)    # raw read — preserve relative paths on disk
+                cfg = yaml.safe_load(f)
             self._deep_update(cfg, updates)
             with open(self._config_path, "w") as f:
                 yaml.dump(cfg, f)
@@ -478,7 +480,6 @@ class RemoteServer:
                 base[k] = v
 
     def run(self):
-        import threading
         threading.Thread(target=self._monitor.monitor_loop, daemon=True).start()
         log.info(f"Remote server on :{self.cfg['server']['port']}")
         self.sio.run(
