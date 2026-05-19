@@ -8,7 +8,7 @@ from geometry_msgs.msg import Twist
 
 log = logging.getLogger(__name__)
 
-KB_DECAY = 0.3   # seconds — stop if no keyboard command received
+KB_DECAY = 0.5   # seconds — stop if no keyboard command received
 
 
 class Commander:

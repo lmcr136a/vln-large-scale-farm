@@ -129,7 +129,7 @@ class TmuxMonitor:
     _DEFAULTS = {
         "jetson_agent": {"check": "jetson_main.py", "window": "Main"},
         "slam":      {"check": "glim_rosnode",   "cmd": "bash launch_files/launch_slam.sh",             "window": "SLAM"},
-        "map_saver": {"check": "save_map_glim",  "cmd": "python3 tools_control_panel/save_map_glim.py", "window": "2Dmap"},
+        "map_saver": {"check": "save_map_glim",  "cmd": "python3 tools_control_panel/mapping/save_map_glim.py", "window": "2Dmap"},
         "obstacle":  {"check": "safety_checker", "cmd": "python3 tools_scout_control/safety_checker.py","window": "O.D."},
         "gps":       {"check": "rtk_gps_node",   "cmd": "python3 scripts/rtk_gps_node.py",              "pane":   "Sensors.2"},
         "lidar":     {"check": "robosense",       "cmd": "bash launch_files/launch_robosense.sh",        "pane":   "Sensors.0"},
@@ -513,10 +513,10 @@ def main():
                      for k, v in snap.items()),
                     key=lambda x: -x[1],
                 )
-                log.info(
-                    f"Telemetry packet {len(pkt.encode())}B | " +
-                    " | ".join(f"{k}:{v}B" for k, v in breakdown)
-                )
+                # log.info(
+                #     f"Telemetry packet {len(pkt.encode())}B | " +
+                #     " | ".join(f"{k}:{v}B" for k, v in breakdown)
+                # )
 
             radio.send({"type": "telemetry", "data": snap})
             internet.send_telemetry(snap)

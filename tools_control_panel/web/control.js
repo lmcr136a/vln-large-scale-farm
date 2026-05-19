@@ -119,22 +119,37 @@ socket.on('connect_error', (e) => console.error('Connection error:', e));
 setInterval(() => socket.emit('heartbeat'), 500);
 
 // ── Keyboard Input ────────────────────────────────────────────
+const _keyTimers = {};  // repeat timers while key is held
+
 window.addEventListener('blur', () => {
   for (const key in keyState) {
-    if (keyState[key]) { keyState[key] = false; socket.emit('keyup', key); }
+    if (keyState[key]) {
+      keyState[key] = false;
+      socket.emit('keyup', key);
+      clearInterval(_keyTimers[key]);
+      delete _keyTimers[key];
+    }
   }
 });
 window.addEventListener('keydown', (e) => {
   if (document.activeElement.tagName === 'INPUT') return;
   if (isAutoMode) return;
   const key = e.key;
-  if (!keyState[key]) { keyState[key] = true; socket.emit('keydown', key); }
+  if (keyState[key]) return;  // already held
+  keyState[key] = true;
+  socket.emit('keydown', key);
+  // Repeat every 150ms so commander KB_DECAY doesn't expire while key is held
+  _keyTimers[key] = setInterval(() => socket.emit('keydown', key), 150);
 });
 window.addEventListener('keyup', (e) => {
   if (document.activeElement.tagName === 'INPUT') return;
   if (isAutoMode) return;
   const key = e.key;
-  if (keyState[key]) { keyState[key] = false; socket.emit('keyup', key); }
+  if (!keyState[key]) return;
+  keyState[key] = false;
+  socket.emit('keyup', key);
+  clearInterval(_keyTimers[key]);
+  delete _keyTimers[key];
 });
 
 // ═══════════════════════════════════════════════════════════════
