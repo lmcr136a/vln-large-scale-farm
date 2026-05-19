@@ -144,37 +144,60 @@ window.addEventListener('keyup', (e) => {
 // ── Camera mode: 'radio' (default) or 'stream' ───────────────
 let cameraMode = 'radio';
 
+// 1×1 black JPEG used when no radio signal
+const _BLACK_FRAME = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVIP/2Q==';
+
+let _lastRadioFrameTime = 0;
+const RADIO_FRAME_TIMEOUT = 9;  // seconds (= 3 × RADIO_INTERVAL)
+
+function _applyBlackIfNoSignal() {
+  if (cameraMode !== 'radio') return;
+  const img = document.getElementById('rgb-image');
+  if (!img) return;
+  const elapsed = (Date.now() - _lastRadioFrameTime) / 1000;
+  if (_lastRadioFrameTime === 0 || elapsed > RADIO_FRAME_TIMEOUT) {
+    img.src = _BLACK_FRAME;
+  }
+}
+setInterval(_applyBlackIfNoSignal, 1000);
+
 function toggleCameraMode() {
   cameraMode = cameraMode === 'radio' ? 'stream' : 'radio';
-  const btn    = document.getElementById('camera-toggle');
-  const backEl = document.getElementById('col-back');
+  const btn      = document.getElementById('camera-toggle');
+  const backEl   = document.getElementById('col-back');
   const frontImg = document.getElementById('rgb-image');
   if (cameraMode === 'radio') {
     btn.textContent = '📡 Radio';
     btn.classList.remove('streaming');
-    if (backEl)  backEl.style.display = 'none';
+    if (backEl)   backEl.style.display = 'none';
     if (frontImg) frontImg.classList.add('radio-mode');
+    _lastRadioFrameTime = 0;  // reset so black shows immediately
+    _applyBlackIfNoSignal();
   } else {
     btn.textContent = '📷 Streaming';
     btn.classList.add('streaming');
-    if (backEl)  backEl.style.display = '';
+    if (backEl)   backEl.style.display = '';
     if (frontImg) frontImg.classList.remove('radio-mode');
   }
 }
 
-// Init: hide back camera in default radio mode (script runs after DOM is ready)
+// Init: radio mode by default
 (function initCameraMode() {
   const backEl   = document.getElementById('col-back');
   const frontImg = document.getElementById('rgb-image');
   if (backEl)   backEl.style.display = 'none';
-  if (frontImg) frontImg.classList.add('radio-mode');
+  if (frontImg) {
+    frontImg.classList.add('radio-mode');
+    frontImg.src = _BLACK_FRAME;
+  }
 })();
 
 socket.on('radio_frame', (data) => {
   if (cameraMode !== 'radio') return;
-  if (data.camera !== 'front') return;
+  if (data.camera !== 'back') return;
   const img = document.getElementById('rgb-image');
   if (img) img.src = 'data:image/jpeg;base64,' + data.data;
+  _lastRadioFrameTime = Date.now();
 });
 
 socket.on('front_frame', (data) => {

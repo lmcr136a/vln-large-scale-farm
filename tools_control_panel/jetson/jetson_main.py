@@ -43,20 +43,27 @@ BEST_EFFORT_QOS = QoSProfile(
 
 
 def _scale_jpeg_b64(b64: str, width: int) -> str | None:
-    """Decode a JPEG base64 string, scale to given width (preserving ratio), re-encode."""
+    """Scale a JPEG base64 string to given width using OpenCV (always on Jetson)."""
     try:
-        import io
         import base64 as _b64
-        from PIL import Image
-        raw = _b64.b64decode(b64)
-        img = Image.open(io.BytesIO(raw)).convert('RGB')
-        w, h = img.size
+        import numpy as _np
+        import cv2 as _cv2
+        raw  = _b64.b64decode(b64)
+        arr  = _np.frombuffer(raw, dtype=_np.uint8)
+        img  = _cv2.imdecode(arr, _cv2.IMREAD_COLOR)
+        if img is None:
+            log.warning("_scale_jpeg_b64: imdecode returned None")
+            return None
+        h, w = img.shape[:2]
         new_h = max(1, round(h * width / w))
-        img = img.resize((width, new_h), Image.LANCZOS)
-        buf = io.BytesIO()
-        img.save(buf, format='JPEG', quality=50)
-        return _b64.b64encode(buf.getvalue()).decode()
-    except Exception:
+        small = _cv2.resize(img, (width, new_h), interpolation=_cv2.INTER_AREA)
+        ok, buf = _cv2.imencode('.jpg', small, [_cv2.IMWRITE_JPEG_QUALITY, 50])
+        if not ok:
+            log.warning("_scale_jpeg_b64: imencode failed")
+            return None
+        return _b64.b64encode(buf.tobytes()).decode()
+    except Exception as e:
+        log.warning(f"_scale_jpeg_b64: {e}")
         return None
 
 
@@ -78,8 +85,8 @@ class RecorderProxy:
                 self._internet.send_rgb_b64(b64, camera)
                 if self._telemetry:
                     self._telemetry.touch(f"zed_{camera}")
-                # Radio: front only, rate-limited
-                if camera == "front" and self._radio:
+                # Radio: physically-front camera (labeled 'back' in config), rate-limited
+                if camera == "back" and self._radio:
                     now = time.time()
                     if now - self._last_radio >= self.RADIO_INTERVAL:
                         self._last_radio = now
@@ -87,7 +94,7 @@ class RecorderProxy:
                         if small:
                             self._radio.send({
                                 "type":   "radio_frame",
-                                "camera": "front",
+                                "camera": "back",
                                 "data":   small,
                             })
 

@@ -53,10 +53,14 @@ class RadioBridge:
         self._tx_lock = threading.Lock()
         self._running = False
         self._stats   = {
-            "rx_total":    0,
-            "tx_total":    0,
-            "rx_window":   0,
-            "tx_window":   0,
+            "rx_total_pkts":  0,
+            "tx_total_pkts":  0,
+            "rx_window_pkts": 0,
+            "tx_window_pkts": 0,
+            "rx_total_bytes":  0,
+            "tx_total_bytes":  0,
+            "rx_window_bytes": 0,
+            "tx_window_bytes": 0,
             "last_rx":     {},
             "last_pose":   None,
         }
@@ -88,8 +92,10 @@ class RadioBridge:
                     continue
 
                 self._sio.emit("from_robot", msg, namespace="/bridge")
-                self._stats["rx_total"]  += 1
-                self._stats["rx_window"] += 1
+                self._stats["rx_total_pkts"]   += 1
+                self._stats["rx_window_pkts"]  += 1
+                self._stats["rx_total_bytes"]  += len(line)
+                self._stats["rx_window_bytes"] += len(line)
                 mtype = msg.get("type", "unknown")
                 data  = msg.get("data", msg)
                 if isinstance(data, dict):
@@ -117,8 +123,10 @@ class RadioBridge:
         with self._tx_lock:
             try:
                 self._ser.write(data)
-                self._stats["tx_total"]  += 1
-                self._stats["tx_window"] += 1
+                self._stats["tx_total_pkts"]   += 1
+                self._stats["tx_window_pkts"]  += 1
+                self._stats["tx_total_bytes"]  += len(data)
+                self._stats["tx_window_bytes"] += len(data)
             except serial.SerialTimeoutException:
                 log.error("Serial TX: Write timeout")
             except Exception as e:
@@ -144,10 +152,14 @@ class RadioBridge:
         while self._running:
             time.sleep(interval)
             s = self._stats
-            rx_hz = s["rx_window"] / interval
-            tx_hz = s["tx_window"] / interval
-            s["rx_window"] = 0
-            s["tx_window"] = 0
+            rx_hz  = s["rx_window_pkts"]  / interval
+            tx_hz  = s["tx_window_pkts"]  / interval
+            rx_kbs = s["rx_window_bytes"] / interval / 1024
+            tx_kbs = s["tx_window_bytes"] / interval / 1024
+            s["rx_window_pkts"]  = 0
+            s["tx_window_pkts"]  = 0
+            s["rx_window_bytes"] = 0
+            s["tx_window_bytes"] = 0
 
             pose = s["last_pose"]
             if pose and isinstance(pose, dict):
@@ -166,12 +178,12 @@ class RadioBridge:
             ) if sensors else "—")
 
             lines = [
-                "┌─ Bridge Status ───────────────────────────────────────────────┐",
-                f"│  Jetson → Local PC   {rx_hz:.1f} pkt/s  (total {s['rx_total']})",
-                f"│  Local PC → Jetson   {tx_hz:.1f} pkt/s  (total {s['tx_total']})",
+                "┌─ Bridge Status ────────────────────────────────────────────────────┐",
+                f"│  Jetson → Local PC   {rx_hz:.1f} pkt/s  {rx_kbs:.1f} KB/s  (total {s['rx_total_pkts']} pkts  {s['rx_total_bytes']//1024} KB)",
+                f"│  Local PC → Jetson   {tx_hz:.1f} pkt/s  {tx_kbs:.1f} KB/s  (total {s['tx_total_pkts']} pkts  {s['tx_total_bytes']//1024} KB)",
                 f"│  Pose     {pose_str}",
                 f"│  Sensors  {sensor_str}",
-                "└───────────────────────────────────────────────────────────────┘",
+                "└────────────────────────────────────────────────────────────────────┘",
             ]
 
             if self._status_lines:
