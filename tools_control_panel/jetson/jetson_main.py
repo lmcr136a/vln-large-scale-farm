@@ -78,33 +78,22 @@ class SocketIOProxy:
 from config_loader import load_config
 
 
-# ── State file used to track which tmux window jetson_main is in ──────────────
-_JETSON_STATE_FILE = '/tmp/jetson_main_window'
-
-
 class TmuxMonitor:
     """
     Polls tmux windows for process liveness and can restart them via send-keys.
-    Also supports self-restart of jetson_main.py via alternating staging windows.
+    Self-restart of jetson_main.py stays in window Main (index 2).
     """
 
     _DEFAULTS = {
         "jetson_agent": {"check": "jetson_main.py", "window": "Main"},
         "slam":      {"check": "glim_rosnode",   "cmd": "bash launch_files/launch_slam.sh",             "window": "SLAM"},
-        "map_saver": {"check": "save_map_glim",  "cmd": "python3 tools_control_panel/mapping/save_map_glim.py", "window": "2Dmap"},
+        "map_saver": {"check": "save_map_glim",  "cmd": "python3 tools_control_panel/save_map_glim.py", "window": "2Dmap"},
         "obstacle":  {"check": "safety_checker", "cmd": "python3 tools_scout_control/safety_checker.py","window": "O.D."},
         "gps":       {"check": "rtk_gps_node",   "cmd": "python3 scripts/rtk_gps_node.py",              "pane":   "Sensors.2"},
         "lidar":     {"check": "robosense",       "cmd": "bash launch_files/launch_robosense.sh",        "pane":   "Sensors.0"},
         "imu":       {"check": "xsens",           "cmd": "bash launch_files/launch_xsens.sh",           "pane":   "Sensors.1"},
     }
 
-    # Window 5 ("---") is idle by default → first staging choice.
-    # Window 3 ("2Dmap") is used when jetson_main is already in window 5.
-    _STAGING = {
-        5: {"name": "2Dmap", "index": 3},
-        3: {"name": "---",   "index": 5},
-    }
-    _DEFAULT_STAGING = {"name": "---", "index": 5}
     _JETSON_RESTART_CMD = "bash launch_files/control_panel_jetson.sh"
     _RESTART_DELAY_S    = 10
 
@@ -132,7 +121,7 @@ class TmuxMonitor:
         t = f"{self._session}:{target}"
         try:
             subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
-            time.sleep(1.2)
+            time.sleep(3.0)
             subprocess.run(["tmux", "send-keys", "-t", t, spec["cmd"], "Enter"], timeout=3)
             log.info(f"TmuxMonitor: restarted {key} in {t}")
             return True
@@ -142,59 +131,25 @@ class TmuxMonitor:
 
     def restart_jetson_main(self) -> bool:
         """
-        Restart jetson_main.py without losing connection:
-        1. Read state file to find the current window (default: 2 / Web).
-        2. Pick the alternate staging window (5 → 3, or 3 → 5, or default → 5).
-        3. Write the new window index to the state file.
-        4. Send 'sleep N && control_panel_jetson.sh' to the staging window.
-        5. Kill the current jetson_main.py (this process will terminate here).
-        After N seconds the new instance starts in the staging window.
+        Restart jetson_main.py in window Main (index 2):
+        1. Spawn a background shell that waits 2 s then sends the restart command
+           to window Main — by then the old process has died and the shell is free.
+        2. Kill the current jetson_main.py — this process terminates here.
+        After _RESTART_DELAY_S seconds the new instance starts in window Main.
         """
+        t = f"{self._session}:Main"
+        restart_cmd = f"sleep {self._RESTART_DELAY_S} && {self._JETSON_RESTART_CMD}"
         try:
-            with open(_JETSON_STATE_FILE) as f:
-                current_win = int(f.read().strip())
-        except Exception:
-            current_win = 0  # unknown — treat as default
-
-        staging = self._STAGING.get(current_win, self._DEFAULT_STAGING)
-        staging_name  = staging["name"]
-        staging_index = staging["index"]
-
-        log.info(f"restart_jetson_main: current_win={current_win} → staging={staging_name}({staging_index})")
-
-        try:
-            # Persist new window BEFORE killing so the next instance can read it
-            with open(_JETSON_STATE_FILE, 'w') as f:
-                f.write(str(staging_index))
-
-            t = f"{self._session}:{staging_name}"
-
-            # Interrupt anything currently running in the staging window
-            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
-            time.sleep(0.4)
-
-            # Queue: sleep then restart
-            subprocess.run(
-                ["tmux", "send-keys", "-t", t,
-                 f"sleep {self._RESTART_DELAY_S} && {self._JETSON_RESTART_CMD}",
-                 "Enter"],
-                timeout=3,
+            # Background shell sends the command once the pane is free
+            subprocess.Popen(
+                ["bash", "-c", f'sleep 2 && tmux send-keys -t "{t}" "{restart_cmd}" Enter']
             )
-
-            time.sleep(0.5)  # ensure sleep command is running before we die
-
-            # Kill ourselves — this process terminates from here
+            time.sleep(0.3)
+            # Kill current process — exits from here
             subprocess.run(["pkill", "-f", "jetson_main.py"], timeout=3)
             return True
-
         except Exception as e:
             log.error(f"restart_jetson_main: {e}")
-            # Restore state file on failure
-            try:
-                with open(_JETSON_STATE_FILE, 'w') as f:
-                    f.write(str(current_win))
-            except Exception:
-                pass
             return False
 
     def _poll_loop(self):
