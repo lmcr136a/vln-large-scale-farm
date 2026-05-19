@@ -4,6 +4,7 @@ import logging
 import os
 import signal
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -76,6 +77,75 @@ class SocketIOProxy:
 
 
 from config_loader import load_config
+
+
+class TmuxMonitor:
+    """
+    Polls tmux windows for process liveness and can restart them via send-keys.
+    Window specs loaded from cfg['tmux'] if present.
+    """
+
+    # Default process check strings per window name
+    _DEFAULTS = {
+        "slam":      {"check": "glim_rosnode",   "cmd": "bash launch_files/launch_slam.sh",          "window": "SLAM"},
+        "map_saver": {"check": "save_map_glim",  "cmd": "python3 tools_control_panel/save_map_glim.py", "window": "2Dmap"},
+        "obstacle":  {"check": "safety_checker", "cmd": "python3 tools_scout_control/safety_checker.py", "window": "O.D."},
+        "gps":       {"check": "rtk_gps_node",   "cmd": "python3 scripts/rtk_gps_node.py",           "pane": "Sensors.2"},
+        "lidar":     {"check": "robosense",       "cmd": "bash launch_files/launch_robosense.sh",     "pane": "Sensors.0"},
+        "imu":       {"check": "xsens",           "cmd": "bash launch_files/launch_xsens.sh",         "pane": "Sensors.1"},
+    }
+
+    def __init__(self, session: str, cfg_windows: dict | None = None):
+        self._session = session
+        self._windows = dict(self._DEFAULTS)
+        if cfg_windows:
+            for k, v in cfg_windows.items():
+                self._windows.setdefault(k, {}).update(v)
+        self._status: dict = {}
+        self._lock = threading.Lock()
+        threading.Thread(target=self._poll_loop, daemon=True).start()
+
+    def get_status(self) -> dict:
+        with self._lock:
+            return dict(self._status)
+
+    def restart(self, key: str) -> bool:
+        spec = self._windows.get(key)
+        if not spec:
+            return False
+        target = spec.get("pane") or spec.get("window")
+        if not target:
+            return False
+        t = f"{self._session}:{target}"
+        try:
+            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
+            time.sleep(1.2)
+            subprocess.run(["tmux", "send-keys", "-t", t, spec["cmd"], "Enter"], timeout=3)
+            log.info(f"TmuxMonitor: restarted {key} in {t}")
+            return True
+        except Exception as e:
+            log.error(f"TmuxMonitor restart {key}: {e}")
+            return False
+
+    def _poll_loop(self):
+        while True:
+            status = {}
+            for key, spec in self._windows.items():
+                check = spec.get("check", "")
+                try:
+                    r = subprocess.run(
+                        ["pgrep", "-f", check],
+                        capture_output=True, timeout=2
+                    )
+                    status[key] = r.returncode == 0
+                except Exception:
+                    status[key] = None   # unknown
+            with self._lock:
+                self._status = status
+            time.sleep(5)
+
+
+
 
 
 def pc2_to_numpy(msg: PointCloud2) -> np.ndarray:
@@ -167,6 +237,15 @@ def main():
 
     proxy     = SocketIOProxy(radio, internet, uploader, telemetry)
 
+    # Tmux monitor (optional — gracefully disabled if tmux is not available)
+    tmux_session = cfg.get("tmux", {}).get("session", "vln")
+    tmux_cfg_windows = cfg.get("tmux", {}).get("windows", None)
+    try:
+        tmux_monitor = TmuxMonitor(tmux_session, tmux_cfg_windows)
+    except Exception as e:
+        log.warning(f"TmuxMonitor init failed: {e}")
+        tmux_monitor = None
+
     _rosbag_proc = [None]
     _rec_lock    = threading.Lock()
     _rec_active  = [False]
@@ -228,6 +307,10 @@ def main():
             start_rec_cb(cmd.get("dirname", "manual"))
         elif ctype == "stop_recording":
             stop_rec_cb()
+        elif ctype == "restart_window" and tmux_monitor:
+            key = cmd.get("window", "")
+            ok = tmux_monitor.restart(key)
+            log.info(f"restart_window '{key}': {'ok' if ok else 'failed'}")
         else:
             commander.handle(cmd)
 
@@ -390,8 +473,13 @@ def main():
                 "manual" if commander.is_manual() else
                 "idle"
             )
-            snap["estop"]    = commander.is_estopped()
-            snap["internet"] = internet.connected
+            snap["estop"]            = commander.is_estopped()
+            snap["internet"]         = internet.connected
+            snap["radio_quality"]    = radio.get_quality()
+            snap["internet_quality"] = internet.get_quality()
+            snap["internet_rtt_ms"]  = internet.get_rtt_ms()
+            if tmux_monitor:
+                snap["tmux_status"] = tmux_monitor.get_status()
             radio.send({"type": "telemetry", "data": snap})
             internet.send_telemetry(snap)
             time.sleep(interval)

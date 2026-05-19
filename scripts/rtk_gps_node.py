@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-rtk_gps_node.py (enhanced)
+rtk_gps_node.py
   - Bridges RTCM corrections (with CRC validation) from radio → F9P
   - Parses NMEA GGA + UBX diagnostics (NAV-PVT, NAV-SIG)
-  - Publishes sensor_msgs/NavSatFix on /gps/fix (RTK Fixed only)
+  - Publishes sensor_msgs/NavSatFix on /gps/fix (RTK Fixed AND Float)
+  - Publishes std_msgs/String JSON on /gps/rtk_status with full diagnostics
   - Displays: status, base station info, signal quality, firmware version
 """
 
+import collections
+import json
 import threading
 import struct
 import time
@@ -16,15 +19,19 @@ import serial
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import NavSatFix, NavSatStatus
+from std_msgs.msg import String
 
 # ── Port config ────────────────────────────────────────────
 RADIO_PORT = '/dev/serial/by-id/usb-FTDI_FT231X_USB_UART_DU0E6KL6-if00-port0'
-F9P_PORT   = '/dev/ttyACM0'   # u-blox F9P GNSS receiver
+F9P_PORT   = '/dev/ttyACM0'
 BAUD_RADIO = 57600
 BAUD_F9P   = 115200
 
 PUBLISH_HZ      = 10
-STATUS_INTERVAL = 2.0   # seconds between console prints
+STATUS_INTERVAL = 2.0
+
+# GNSS radio quality: sliding window (seconds)
+GNSS_RADIO_WINDOW = 30.0
 
 
 # ── UBX helpers ───────────────────────────────────────────
@@ -70,7 +77,6 @@ def _parse_rtcm_1005(pkt: bytes) -> tuple:
     y = s38(pos) * 0.0001; pos += 38
     pos += 2
     z = s38(pos) * 0.0001
-    # ECEF to LLH
     a = 6378137.0; f = 1.0 / 298.257223563
     b = a * (1 - f)
     e2 = (a*a - b*b) / (a*a)
@@ -87,8 +93,6 @@ def _configure_f9p(ser: serial.Serial) -> str:
     """Configure F9P and return firmware version."""
     time.sleep(0.5)
     ser.reset_input_buffer()
-
-    # Query firmware version
     fw_ver = "unknown"
     ser.write(_ubx_packet(0x0A, 0x04))
     time.sleep(0.5)
@@ -97,10 +101,7 @@ def _configure_f9p(ser: serial.Serial) -> str:
         i = data.find(b'\xb5\x62\x0a\x04')
         if len(data) >= i + 50:
             fw_ver = data[i+6:i+46].decode('ascii', errors='ignore').strip('\x00')
-
     ser.reset_input_buffer()
-
-    # Config keys: (key, value, format)
     cfg_keys = [
         (0x10770001, 1,   'B'),
         (0x10770002, 1,   'B'),
@@ -109,13 +110,13 @@ def _configure_f9p(ser: serial.Serial) -> str:
         (0x10730004, 1,   'B'),
         (0x10A3002E, 1,   'B'),
         (0x20030001, 0,   'B'),
-        (0x20140011, 3,   'B'),   # ★ DGNSSMODE = allow Fixed
-        (0x20110021, 0,   'B'),   # DYNMODEL
-        (0x30210001, 200, 'H'),   # RATE-MEAS
-        (0x30210002, 1,   'H'),   # RATE-NAV
-        (0x1031001f, 1,   'B'),   # GPS_ENA (corrected key)
-        (0x10310025, 1,   'B'),   # GLO_ENA (corrected key)
-        (0x10310021, 1,   'B'),   # GAL_ENA (corrected key)
+        (0x20140011, 3,   'B'),
+        (0x20110021, 0,   'B'),
+        (0x30210001, 200, 'H'),
+        (0x30210002, 1,   'H'),
+        (0x1031001f, 1,   'B'),
+        (0x10310025, 1,   'B'),
+        (0x10310021, 1,   'B'),
     ]
     payload = struct.pack('<BBH', 0, 1, 0)
     for key, val, fmt in cfg_keys:
@@ -127,7 +128,6 @@ def _configure_f9p(ser: serial.Serial) -> str:
         print(f'[F9P] Config ACK. Firmware: {fw_ver}')
     else:
         print(f'[F9P] Config NAK. Firmware: {fw_ver}')
-
     ser.reset_input_buffer()
     return fw_ver
 
@@ -146,11 +146,11 @@ def _nmea_to_decimal(value: str, direction: str):
         return None
 
 _GGA_FIX_MAP = {
-    0: (NavSatStatus.STATUS_NO_FIX,   False),
-    1: (NavSatStatus.STATUS_FIX,      False),
-    2: (NavSatStatus.STATUS_SBAS_FIX, False),
-    4: (NavSatStatus.STATUS_GBAS_FIX, True),
-    5: (NavSatStatus.STATUS_GBAS_FIX, False),
+    0: (NavSatStatus.STATUS_NO_FIX,   'No Fix',    False, False),
+    1: (NavSatStatus.STATUS_FIX,      '3D Fix',    False, False),
+    2: (NavSatStatus.STATUS_SBAS_FIX, 'DGPS',      False, False),
+    4: (NavSatStatus.STATUS_GBAS_FIX, 'RTK Fixed', True,  True),
+    5: (NavSatStatus.STATUS_GBAS_FIX, 'RTK Float', True,  False),
 }
 
 
@@ -158,24 +158,28 @@ class RtkGpsNode(Node):
     def __init__(self):
         super().__init__('rtk_gps_node')
 
-        self._pub = self.create_publisher(NavSatFix, '/gps/fix', 10)
-        self._timer = self.create_timer(1.0 / PUBLISH_HZ, self._publish_cb)
-        self._status_timer = self.create_timer(STATUS_INTERVAL, self._print_status)
+        self._pub        = self.create_publisher(NavSatFix, '/gps/fix', 10)
+        self._status_pub = self.create_publisher(String, '/gps/rtk_status', 10)
+        self._timer        = self.create_timer(1.0 / PUBLISH_HZ, self._publish_cb)
+        self._status_timer = self.create_timer(STATUS_INTERVAL, self._publish_status)
+        self._print_timer  = self.create_timer(STATUS_INTERVAL, self._print_status)
 
         self._state_lock = threading.Lock()
         self._state = {
             'lat': None, 'lon': None, 'alt': None,
             'hdop': 99.9, 'sv': 0,
-            'rtk_fixed': False, 'status_str': 'No Fix',
+            'rtk_fixed': False, 'rtk_float': False, 'status_str': 'No Fix',
             'rtcm_count': 0, 'rtcm_bad': 0,
-            # UBX diagnostics
             'carrSoln': None, 'hAcc': None, 'vAcc': None,
             'strong': 0, 'cr_used': 0, 'l2_cr': 0,
-            # Base station
             'base_id': None, 'base_lat': None, 'base_lon': None, 'base_alt': None,
-            # Firmware
             'fw_ver': 'unknown',
+            '_nav_status': NavSatStatus.STATUS_NO_FIX,
         }
+
+        # Sliding window for GNSS radio quality: (timestamp, is_bad)
+        self._rtcm_window: collections.deque = collections.deque()
+        self._rtcm_window_lock = threading.Lock()
 
         try:
             self._radio = serial.Serial(RADIO_PORT, BAUD_RADIO, timeout=0.1)
@@ -189,6 +193,26 @@ class RtkGpsNode(Node):
 
         threading.Thread(target=self._bridge_thread, daemon=True).start()
         threading.Thread(target=self._f9p_thread,    daemon=True).start()
+
+    def _gnss_radio_quality(self) -> int:
+        """Return 0-100 score for GPS base <-> GNSS radio link from RTCM receive stats."""
+        now = time.time()
+        cutoff = now - GNSS_RADIO_WINDOW
+        with self._rtcm_window_lock:
+            # Evict old entries
+            while self._rtcm_window and self._rtcm_window[0][0] < cutoff:
+                self._rtcm_window.popleft()
+            total = len(self._rtcm_window)
+            bad   = sum(1 for _, is_bad in self._rtcm_window if is_bad)
+
+        if total == 0:
+            return 0
+        rate = total / GNSS_RADIO_WINDOW  # packets/sec over window
+        bad_ratio = bad / total if total > 0 else 0.0
+        # Nominal rate ~1-4 Hz; score saturates at 1.5 Hz
+        rate_score = min(1.0, rate / 1.5)
+        quality_factor = max(0.0, 1.0 - bad_ratio * 3.0)
+        return int(rate_score * quality_factor * 100)
 
     # ── RTCM bridge: radio → F9P (with CRC validation) ────
     def _bridge_thread(self):
@@ -206,7 +230,6 @@ class RtkGpsNode(Node):
                     break
                 if i > 0:
                     rtcm_buf = rtcm_buf[i:]
-
                 if len(rtcm_buf) < 3:
                     break
                 plen = ((rtcm_buf[1] & 0x03) << 8) | rtcm_buf[2]
@@ -220,13 +243,15 @@ class RtkGpsNode(Node):
                 pkt = rtcm_buf[:total]
                 calc = _crc24q(pkt[:-3])
                 rx = (pkt[-3] << 16) | (pkt[-2] << 8) | pkt[-1]
+
                 if calc != rx:
                     with self._state_lock:
                         self._state['rtcm_bad'] += 1
+                    with self._rtcm_window_lock:
+                        self._rtcm_window.append((time.time(), True))
                     rtcm_buf = rtcm_buf[1:]
                     continue
 
-                # Valid RTCM frame
                 mt = ((pkt[3] << 4) | (pkt[4] >> 4)) & 0xFFF
                 if mt == 1005:
                     r = _parse_rtcm_1005(pkt)
@@ -238,6 +263,8 @@ class RtkGpsNode(Node):
                 self._f9p.write(pkt)
                 with self._state_lock:
                     self._state['rtcm_count'] += 1
+                with self._rtcm_window_lock:
+                    self._rtcm_window.append((time.time(), False))
                 rtcm_buf = rtcm_buf[total:]
 
     # ── F9P reader: NMEA + UBX ────────────────────────────
@@ -249,7 +276,6 @@ class RtkGpsNode(Node):
             if chunk:
                 buf += chunk
 
-            # Parse mixed NMEA + UBX
             while buf:
                 i_n = buf.find(b'$')
                 i_u = buf.find(b'\xb5\x62')
@@ -289,12 +315,11 @@ class RtkGpsNode(Node):
                     buf = buf[total:]
                     self._handle_ubx(cls, mid, payload)
 
-            # Poll NAV-PVT / NAV-SIG every 2 seconds
             now = time.time()
             if now - last_poll[0] >= 2.0:
                 try:
-                    self._f9p.write(_ubx_packet(0x01, 0x07))   # NAV-PVT
-                    self._f9p.write(_ubx_packet(0x01, 0x43))   # NAV-SIG
+                    self._f9p.write(_ubx_packet(0x01, 0x07))
+                    self._f9p.write(_ubx_packet(0x01, 0x43))
                     last_poll[0] = now
                 except Exception:
                     pass
@@ -312,24 +337,23 @@ class RtkGpsNode(Node):
             sv = int(parts[7]) if parts[7] else 0
             hdop = float(parts[8]) if parts[8] else 99.9
             alt = float(parts[9]) if parts[9] else None
-
             if lat is None or lon is None or alt is None:
                 return
-            _fix_status, is_fixed = _GGA_FIX_MAP.get(fix, (NavSatStatus.STATUS_NO_FIX, False))
-            fix_labels = {0:'No Fix', 1:'3D Fix', 2:'DGPS', 4:'RTK Fixed', 5:'RTK Float'}
+            _fix_status, status_str, has_rtk, is_fixed = _GGA_FIX_MAP.get(
+                fix, (NavSatStatus.STATUS_NO_FIX, f'Fix={fix}', False, False))
             with self._state_lock:
                 self._state.update({
                     'lat': lat, 'lon': lon, 'alt': alt,
                     'hdop': hdop, 'sv': sv,
                     'rtk_fixed': is_fixed,
-                    'status_str': fix_labels.get(fix, f'Fix={fix}'),
+                    'rtk_float': has_rtk and not is_fixed,
+                    'status_str': status_str,
                     '_nav_status': _fix_status,
                 })
         except Exception:
             pass
 
     def _handle_ubx(self, cls: int, mid: int, payload: bytes):
-        """Parse UBX-NAV-PVT and UBX-NAV-SIG for diagnostics."""
         if cls == 0x01 and mid == 0x07 and len(payload) >= 92:  # NAV-PVT
             flags = payload[21]
             with self._state_lock:
@@ -362,21 +386,28 @@ class RtkGpsNode(Node):
                 self._state['cr_used'] = cr_used
                 self._state['l2_cr'] = l2_cr
 
-    # ── Publish callback (10 Hz, RTK Fixed only) ──────────
+    # ── Publish NavSatFix (RTK Fixed AND Float) ───────────
     def _publish_cb(self):
         with self._state_lock:
             s = dict(self._state)
-        if not s['rtk_fixed'] or s['lat'] is None:
+        if s['lat'] is None:
+            return
+        # Publish for RTK Fixed or Float (not bare 3D fix or no-fix)
+        if not (s['rtk_fixed'] or s['rtk_float']):
             return
         msg = NavSatFix()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'gps'
         msg.status.status = s.get('_nav_status', NavSatStatus.STATUS_GBAS_FIX)
-        msg.status.service = NavSatStatus.SERVICE_GPS | NavSatStatus.SERVICE_GLONASS | NavSatStatus.SERVICE_GALILEO
-        msg.latitude = s['lat']
+        msg.status.service = (NavSatStatus.SERVICE_GPS |
+                              NavSatStatus.SERVICE_GLONASS |
+                              NavSatStatus.SERVICE_GALILEO)
+        msg.latitude  = s['lat']
         msg.longitude = s['lon']
-        msg.altitude = s['alt']
-        sigma_h = s['hdop'] * 0.3
+        msg.altitude  = s['alt']
+        # Float: larger covariance; Fixed: tighter
+        scale = 1.0 if s['rtk_fixed'] else 3.0
+        sigma_h = s['hdop'] * 0.3 * scale
         sigma_v = sigma_h * 1.5
         msg.position_covariance = [
             sigma_h**2, 0.0, 0.0,
@@ -386,25 +417,67 @@ class RtkGpsNode(Node):
         msg.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
         self._pub.publish(msg)
 
-    # ── Status print (every 2 s) ──────────────────────────
+    # ── Publish full RTK status JSON ──────────────────────
+    def _publish_status(self):
+        with self._state_lock:
+            s = dict(self._state)
+        gnss_quality = self._gnss_radio_quality()
+
+        carr_map = {0: 'None', 1: 'Float', 2: 'Fixed', None: 'Unknown'}
+        status = {
+            'rtk_mode':      s['status_str'],
+            'rtk_fixed':     s['rtk_fixed'],
+            'rtk_float':     s['rtk_float'],
+            'lat':           s['lat'],
+            'lon':           s['lon'],
+            'alt':           s['alt'],
+            'hdop':          s['hdop'],
+            'sv':            s['sv'],
+            'h_acc':         s['hAcc'],
+            'v_acc':         s['vAcc'],
+            'carr_soln':     carr_map.get(s['carrSoln'], 'Unknown'),
+            'strong_sv':     s['strong'],
+            'cr_used':       s['cr_used'],
+            'l2_cr':         s['l2_cr'],
+            'rtcm_count':    s['rtcm_count'],
+            'rtcm_bad':      s['rtcm_bad'],
+            'gnss_radio_quality': gnss_quality,
+            'base_id':       s['base_id'],
+            'base_lat':      s['base_lat'],
+            'base_lon':      s['base_lon'],
+            'base_alt':      s['base_alt'],
+            'fw_ver':        s['fw_ver'],
+        }
+        # Baseline distance (rough metres)
+        if s['lat'] is not None and s['base_lat'] is not None:
+            status['baseline_m'] = round(
+                math.sqrt((s['lat'] - s['base_lat'])**2 +
+                          (s['lon'] - s['base_lon'])**2) * 111000, 1)
+        else:
+            status['baseline_m'] = None
+
+        msg = String()
+        msg.data = json.dumps(status)
+        self._status_pub.publish(msg)
+
+    # ── Console status print ──────────────────────────────
     def _print_status(self):
         with self._state_lock:
             s = dict(self._state)
+        gnss_quality = self._gnss_radio_quality()
 
         lat_str = f"{s['lat']:.8f}" if s['lat'] is not None else '---'
         lon_str = f"{s['lon']:.8f}" if s['lon'] is not None else '---'
         alt_str = f"{s['alt']:.2f} m" if s['alt'] is not None else '---'
-
-        # Quality line
         carr_map = {0:'None', 1:'Float', 2:'FIXED', None:'---'}
         quality = (f"carrSoln:{carr_map.get(s['carrSoln'], '---'):6s}  "
                    f"hAcc:{s['hAcc'] if s['hAcc'] else '-':<6}  "
                    f"strong:{s['strong']}  cr-used:{s['cr_used']}  L2-cr:{s['l2_cr']}")
-
-        # Base station line
         if s['base_lat'] is not None:
-            baseline = math.sqrt((s['lat'] - s['base_lat'])**2 + (s['lon'] - s['base_lon'])**2) * 111000  # rough m conversion
-            base_str = f"id:{s['base_id']}  {s['base_lat']:.6f},{s['base_lon']:.6f}  alt:{s['base_alt']:.1f}m  baseline:{baseline:.1f}m"
+            baseline = math.sqrt((s['lat'] - s['base_lat'])**2 +
+                                 (s['lon'] - s['base_lon'])**2) * 111000
+            base_str = (f"id:{s['base_id']}  {s['base_lat']:.6f},{s['base_lon']:.6f}  "
+                        f"alt:{s['base_alt']:.1f}m  baseline:{baseline:.1f}m")
         else:
             base_str = "waiting for 1005..."
 
@@ -412,14 +485,16 @@ class RtkGpsNode(Node):
         line = (
             f"[FW:{s['fw_ver']:<10s}]  {status:12s}  "
             f"Lat:{lat_str}  Lon:{lon_str}  Alt:{alt_str}  "
-            f"SV:{s['sv']}  HDOP:{s['hdop']:.1f}  RTCM:{s['rtcm_count']} (bad:{s['rtcm_bad']})\n"
+            f"SV:{s['sv']}  HDOP:{s['hdop']:.1f}  RTCM:{s['rtcm_count']} "
+            f"(bad:{s['rtcm_bad']})  GNSS-Radio:{gnss_quality}%\n"
             f"[Base]  {base_str}\n"
             f"[Quality]  {quality}"
         )
-
         if s['rtk_fixed']:
-            print(f"\033[1m\033[38;2;180;245;255m{line}  ✓ PUBLISHING\033[0m")
-        elif status in ('RTK Float', 'DGPS', '3D Fix'):
+            print(f"\033[1m\033[38;2;180;245;255m{line}  ✓ FIXED PUBLISHING\033[0m")
+        elif s['rtk_float']:
+            print(f"\033[38;2;100;200;255m{line}  ~ FLOAT PUBLISHING\033[0m")
+        elif status in ('DGPS', '3D Fix'):
             print(f"\033[38;2;50;80;85m{line}\033[0m")
         else:
             print(line)

@@ -19,12 +19,16 @@ RTT_HIGH   = 0.08   # < 80ms  → high
 RTT_MEDIUM = 0.25   # < 250ms → medium, else low
 QUALITY_CHECK_INTERVAL = 15.0
 
+# Map quality level + RTT → 0-100 score
+_QUALITY_SCORE = {"high": 95, "medium": 60, "low": 25}
+
 
 class InternetComm:
     def __init__(self, lab_url: str, on_command=None):
         self._url        = lab_url
         self._on_command = on_command
         self._quality    = "medium"
+        self._last_rtt_ms: float | None = None
         self._last_rgb: dict[str, float] = {}
         self._sio        = socketio.Client(reconnection=True, reconnection_delay=5, logger=False)
         self._connected  = False
@@ -33,6 +37,15 @@ class InternetComm:
     @property
     def connected(self) -> bool:
         return self._connected
+
+    def get_quality(self) -> int:
+        """Return 0-100 internet quality score (Tailscale link to lab PC)."""
+        if not self._connected:
+            return 0
+        return _QUALITY_SCORE.get(self._quality, 0)
+
+    def get_rtt_ms(self) -> float | None:
+        return self._last_rtt_ms
 
     # ── Send API ──────────────────────────────────────────────────────────────
 
@@ -143,6 +156,8 @@ class InternetComm:
         time.sleep(2.0)  # wait for connection to stabilize
         while self._connected:
             rtt = self._measure_rtt()
+            if rtt is not None:
+                self._last_rtt_ms = round(rtt * 1000, 1)
             if rtt is None:
                 level = "low"
             elif rtt < RTT_HIGH:

@@ -12,6 +12,9 @@ from geometry_msgs.msg import Twist, PoseStamped
 from . import autonomous_driving
 from .auto_nav_logger import create_session_logger
 
+PUBLISH_HZ      = 20.0          # cmd_vel publish rate
+WATCHDOG_TIMEOUT = 0.3          # zero vel if control loop silent for this long
+
 
 def _quat_to_yaw(x, y, z, w):
     return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y ** 2 + z ** 2))
@@ -33,6 +36,12 @@ class AutonomousController(Node):
         self._stop_event   = threading.Event()
         self._thread       = None
 
+        # shared target velocity + watchdog
+        self._vel_lock      = threading.Lock()
+        self._target_vt     = 0.0
+        self._target_vr     = 0.0
+        self._vel_updated_at = 0.0   # timestamp of last control-loop update
+
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          durability=DurabilityPolicy.VOLATILE,
                          history=HistoryPolicy.KEEP_LAST, depth=1)
@@ -40,6 +49,12 @@ class AutonomousController(Node):
         pose_topic = self.config['ros2']['topics'].get('pose', '/corrected_pose')
         self.create_subscription(PoseStamped, pose_topic, self._pose_callback, qos)
         self.get_logger().info(f'AutonomousController ready — listening on {pose_topic}')
+
+        # publisher thread runs always; only sends non-zero when active
+        self._pub_thread = threading.Thread(target=self._publish_loop, daemon=True)
+        self._pub_thread.start()
+
+    # ── Pose ──────────────────────────────────────────────────────────────────
 
     def _pose_callback(self, msg: PoseStamped):
         p, q = msg.pose.position, msg.pose.orientation
@@ -54,6 +69,35 @@ class AutonomousController(Node):
     def get_current_pose(self):
         with self._pose_lock:
             return dict(self._current_pose) if self._current_pose else None
+
+    # ── Velocity publisher (runs continuously at PUBLISH_HZ) ──────────────────
+
+    def _publish_loop(self):
+        interval = 1.0 / PUBLISH_HZ
+        while True:
+            twist = Twist()
+            with self._vel_lock:
+                age = time.time() - self._vel_updated_at
+                if self._active and age < WATCHDOG_TIMEOUT:
+                    twist.linear.x  = self._target_vt
+                    twist.angular.z = self._target_vr
+                # else: zero twist (watchdog triggered or not active)
+            self.pub.publish(twist)
+            time.sleep(interval)
+
+    def _set_vel(self, vt: float, vr: float):
+        with self._vel_lock:
+            self._target_vt      = vt
+            self._target_vr      = vr
+            self._vel_updated_at = time.time()
+
+    def _zero_vel(self):
+        with self._vel_lock:
+            self._target_vt      = 0.0
+            self._target_vr      = 0.0
+            self._vel_updated_at = 0.0   # let watchdog keep it zero
+
+    # ── Control ───────────────────────────────────────────────────────────────
 
     def is_active(self):
         return self._active
@@ -134,20 +178,14 @@ class AutonomousController(Node):
                     vr = cmd.get('vr', 0.0)
                     dt = cmd.get('dt', autonomous_driving.CONTROL_DT)
 
-                    if dt <= 0:
-                        self._zero_vel()
-                        continue
+                    self._set_vel(vt, vr)
 
-                    twist           = Twist()
-                    twist.linear.x  = vt
-                    twist.angular.z = vr
-
-                    deadline = time.time() + dt
-                    while time.time() < deadline:
-                        if self._stop_event.is_set():
-                            return
-                        self.pub.publish(twist)
-                        time.sleep(min(0.05, max(0.0, deadline - time.time())))
+                    if dt > 0:
+                        deadline = time.time() + dt
+                        while time.time() < deadline:
+                            if self._stop_event.is_set():
+                                return
+                            time.sleep(0.01)
 
         except Exception as e:
             import traceback
@@ -169,6 +207,3 @@ class AutonomousController(Node):
             self.get_logger().info('Finished')
             logger.info('Session ended')
             print('[drive_loop] finished', flush=True)
-
-    def _zero_vel(self):
-        self.pub.publish(Twist())
