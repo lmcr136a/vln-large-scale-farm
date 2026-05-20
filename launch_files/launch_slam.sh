@@ -11,6 +11,6 @@ echo "SLAM Mode: $MODE Work Space Dir: $WORKSPACE_DIR"
 
 ros2 run glim_ros glim_rosnode \
   --ros-args \
-  -p config_path:=$WORKSPACE_DIR/ros2_ws/glim_ws/config_outdoor
+  -p config_path:=$WORKSPACE_DIR/ros2_ws/glim_ws/config_indoor
 
 trap "kill $CONVERTER_PID 2>/dev/null" EXIT
