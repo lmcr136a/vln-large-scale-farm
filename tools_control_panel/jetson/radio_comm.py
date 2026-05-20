@@ -6,7 +6,7 @@ import time
 import logging
 
 log = logging.getLogger(__name__)
-MAX_BYTES     = 1900
+MAX_BYTES     = 2500
 PING_INTERVAL = 10.0   # seconds between pings
 PING_HISTORY  = 6      # keep last 6 results (= last 60 s)
 
