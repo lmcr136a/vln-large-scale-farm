@@ -129,7 +129,7 @@ class TmuxMonitor:
     _DEFAULTS = {
         "jetson_agent": {"check": "jetson_main.py", "window": "Main"},
         "slam":      {"check": "glim_rosnode",   "cmd": "bash launch_files/launch_slam.sh",             "window": "SLAM"},
-        "map_saver": {"check": "save_map_glim",  "cmd": "python3 tools_control_panel/mapping/save_map_glim.py", "window": "2Dmap"},
+        "map_saver": {"check": "save_map_glim",  "cmd": "python3 tools_control_panel/save_map_glim.py", "window": "2Dmap"},
         "obstacle":  {"check": "safety_checker", "cmd": "python3 tools_scout_control/safety_checker.py","window": "O.D."},
         "gps":       {"check": "rtk_gps_node",   "cmd": "python3 scripts/rtk_gps_node.py",              "pane":   "Sensors.2"},
         "lidar":     {"check": "robosense",       "cmd": "bash launch_files/launch_robosense.sh",        "pane":   "Sensors.0"},
@@ -162,6 +162,10 @@ class TmuxMonitor:
             return False
         t = f"{self._session}:{target}"
         try:
+            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
+            time.sleep(1.0)
+            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
+            time.sleep(1.0)
             subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
             time.sleep(3.0)
             subprocess.run(["tmux", "send-keys", "-t", t, spec["cmd"], "Enter"], timeout=3)
@@ -337,6 +341,8 @@ def main():
                                       stop_recording=stop_rec_cb)
     commander = Commander(cmd_vel_pub, auto_ctrl, cfg_path)
 
+    _restart_lock = threading.Lock()  # prevents double-fire from radio+internet
+
     def on_command(cmd):
         ctype = cmd.get("cmd")
         if ctype == "start_recording":
@@ -346,11 +352,9 @@ def main():
         elif ctype == "restart_window":
             key = cmd.get("window", "")
             if key == "jetson_agent":
-                # Self-restart via staging window — process dies after this call
-                if tmux_monitor:
+                if tmux_monitor and _restart_lock.acquire(blocking=False):
                     log.info("Self-restart requested via browser")
                     tmux_monitor.restart_jetson_main()
-                    # If we reach here, pkill hasn't landed yet — just wait
                     time.sleep(5)
             elif tmux_monitor:
                 ok = tmux_monitor.restart(key)
@@ -513,10 +517,10 @@ def main():
                      for k, v in snap.items()),
                     key=lambda x: -x[1],
                 )
-                # log.info(
-                #     f"Telemetry packet {len(pkt.encode())}B | " +
-                #     " | ".join(f"{k}:{v}B" for k, v in breakdown)
-                # )
+                log.info(
+                    f"Telemetry packet {len(pkt.encode())}B | " +
+                    " | ".join(f"{k}:{v}B" for k, v in breakdown)
+                )
 
             radio.send({"type": "telemetry", "data": snap})
             internet.send_telemetry(snap)
@@ -546,6 +550,7 @@ def main():
     shutdown.wait()
 
     log.info("Shutting down")
+    stop_rec_cb()  # stop rosbag + camera recording if active
     if recorder:
         try:
             recorder.stop_recording()
