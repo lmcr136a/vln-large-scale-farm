@@ -200,7 +200,10 @@ class RemoteServer:
 
         @sio.on("keydown")
         def on_keydown(key: str):
-            VEL = self.cfg["autonomous"]
+            try:
+                VEL = load_config(self._config_path).get("autonomous", self.cfg["autonomous"])
+            except Exception:
+                VEL = self.cfg["autonomous"]
             vx, vz = 0.0, 0.0
             if key == "ArrowUp":      vx =  VEL["linear_speed"]
             elif key == "ArrowDown":  vx = -VEL["linear_speed"]
@@ -472,6 +475,7 @@ class RemoteServer:
             self._deep_update(cfg, updates)
             with open(self._config_path, "w") as f:
                 yaml.dump(cfg, f)
+            self._deep_update(self.cfg, updates)  # keep in-memory cfg in sync
             log.info(f"Config saved: {list(updates.keys())}")
         except Exception as e:
             log.error(f"Config save error: {e}")

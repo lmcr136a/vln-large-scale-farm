@@ -162,12 +162,9 @@ class TmuxMonitor:
             return False
         t = f"{self._session}:{target}"
         try:
-            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
-            time.sleep(1.0)
-            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
-            time.sleep(1.0)
-            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
-            time.sleep(3.0)
+            for i in range(5):
+                subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
+                time.sleep(2.0)
             subprocess.run(["tmux", "send-keys", "-t", t, spec["cmd"], "Enter"], timeout=3)
             log.info(f"TmuxMonitor: restarted {key} in {t}")
             return True
@@ -517,10 +514,10 @@ def main():
                      for k, v in snap.items()),
                     key=lambda x: -x[1],
                 )
-                log.info(
-                    f"Telemetry packet {len(pkt.encode())}B | " +
-                    " | ".join(f"{k}:{v}B" for k, v in breakdown)
-                )
+                # log.info(
+                #     f"Telemetry packet {len(pkt.encode())}B | " +
+                #     " | ".join(f"{k}:{v}B" for k, v in breakdown)
+                # )
 
             radio.send({"type": "telemetry", "data": snap})
             internet.send_telemetry(snap)
