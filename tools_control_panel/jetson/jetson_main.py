@@ -164,7 +164,7 @@ class TmuxMonitor:
         try:
             for i in range(5):
                 subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
-                time.sleep(2.0)
+                time.sleep(1.0)
             subprocess.run(["tmux", "send-keys", "-t", t, spec["cmd"], "Enter"], timeout=3)
             log.info(f"TmuxMonitor: restarted {key} in {t}")
             return True
@@ -187,18 +187,16 @@ class TmuxMonitor:
         """
         t = f"{self._session}:Main"
         restart_cmd = f"sleep {self._RESTART_DELAY_S} && {self._JETSON_RESTART_CMD}"
-        try:
-            # Background shell sends the command once the pane is free
-            subprocess.Popen(
-                ["bash", "-c", f'sleep 2 && tmux send-keys -t "{t}" "{restart_cmd}" Enter']
-            )
-            time.sleep(0.3)
-            # Kill current process — exits from here
+        # Background shell sends the command once the pane is free
+        subprocess.Popen(
+            ["bash", "-c", f'sleep 8 && tmux send-keys -t "{t}" "{restart_cmd}" Enter']
+        )
+        time.sleep(0.3)
+        # Kill current process — exits from here
+        for i in range(5):
             subprocess.run(["pkill", "-f", "jetson_main.py"], timeout=3)
-            return True
-        except Exception as e:
-            log.error(f"restart_jetson_main: {e}")
-            return False
+            time.sleep(1)
+        return True
 
     def _poll_loop(self):
         while True:
