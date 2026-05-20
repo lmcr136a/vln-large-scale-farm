@@ -162,41 +162,40 @@ class TmuxMonitor:
             return False
         t = f"{self._session}:{target}"
         try:
-            for i in range(5):
-                subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
-                time.sleep(1.0)
+            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
+            time.sleep(1.0)
+            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
+            time.sleep(1.0)
+            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
+            time.sleep(3.0)
             subprocess.run(["tmux", "send-keys", "-t", t, spec["cmd"], "Enter"], timeout=3)
             log.info(f"TmuxMonitor: restarted {key} in {t}")
             return True
         except Exception as e:
             log.error(f"TmuxMonitor restart {key}: {e}")
-            for i in range(10):
-                subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
-                time.sleep(2.0)
-            subprocess.run(["tmux", "send-keys", "-t", t, spec["cmd"], "Enter"], timeout=3)
-            log.info(f"TmuxMonitor: restarted {key} in {t}")
             return False
 
     def restart_jetson_main(self) -> bool:
         """
-        Restart jetson_main.py in window Main (index 2):
-        1. Spawn a background shell that waits 2 s then sends the restart command
-           to window Main — by then the old process has died and the shell is free.
-        2. Kill the current jetson_main.py — this process terminates here.
-        After _RESTART_DELAY_S seconds the new instance starts in window Main.
+        Restart jetson_main.py using window 5 ("---") as staging:
+        1. Send restart command to window 5 (always idle).
+        2. Kill current jetson_main.py — process terminates here.
+        After _RESTART_DELAY_S seconds the new instance starts in window 5.
         """
-        t = f"{self._session}:Main"
+        staging = f"{self._session}:---"
         restart_cmd = f"sleep {self._RESTART_DELAY_S} && {self._JETSON_RESTART_CMD}"
-        # Background shell sends the command once the pane is free
-        subprocess.Popen(
-            ["bash", "-c", f'sleep 8 && tmux send-keys -t "{t}" "{restart_cmd}" Enter']
-        )
-        time.sleep(0.3)
-        # Kill current process — exits from here
-        for i in range(5):
+        try:
+            # Clear any input in window 5, then send restart command
+            subprocess.run(["tmux", "send-keys", "-t", staging, "C-c", ""], timeout=3)
+            time.sleep(0.5)
+            subprocess.run(["tmux", "send-keys", "-t", staging, restart_cmd, "Enter"], timeout=3)
+            time.sleep(0.5)
+            # Kill current process — exits from here
             subprocess.run(["pkill", "-f", "jetson_main.py"], timeout=3)
-            time.sleep(1)
-        return True
+            return True
+        except Exception as e:
+            log.error(f"restart_jetson_main: {e}")
+            return False
 
     def _poll_loop(self):
         while True:
@@ -488,7 +487,6 @@ def main():
     except Exception as e:
         log.warning(f"ZED recorder init failed: {e}")
 
-    _telem_size_last = [0.0]
 
     def telemetry_loop():
         interval = 1.0 / TELEMETRY_HZ
@@ -508,16 +506,6 @@ def main():
             if tmux_monitor:
                 snap["tmux_status"] = tmux_monitor.get_status()
 
-            # Periodic size breakdown — helps diagnose bandwidth usage
-            now_t = time.time()
-            if now_t - _telem_size_last[0] >= 60.0:
-                _telem_size_last[0] = now_t
-                pkt = json.dumps({"type": "telemetry", "data": snap}, separators=(',', ':'))
-                breakdown = sorted(
-                    ((k, len(json.dumps(v, separators=(',', ':')).encode()))
-                     for k, v in snap.items()),
-                    key=lambda x: -x[1],
-                )
 
             radio.send({"type": "telemetry", "data": snap})
             internet.send_telemetry(snap)
@@ -544,7 +532,10 @@ def main():
     threading.Thread(target=executor.spin, daemon=True).start()
 
     log.info(f"Jetson agent running (config: {cfg_path})")
-    shutdown.wait()
+    try:
+        shutdown.wait()
+    except OSError:
+        pass  # Python 3.10 known issue: SIGTERM during Event.wait()
 
     log.info("Shutting down")
     stop_rec_cb()  # stop rosbag + camera recording if active

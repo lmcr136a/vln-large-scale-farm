@@ -401,25 +401,30 @@ function redrawDynLayer() {
   if (robotPose && currentMapMeta) {
     const p = worldToStagePixel(robotPose.x, robotPose.y);
     if (p) {
+      const res      = currentMapMeta.resolution;  // m/px from map_state.json
+      const r_px     = 0.3  / res;                 // ROBOT_RADIUS_M  = 0.3m
+      const arrow_px = 0.46 / res;                 // ROBOT_ARROW_LEN_M = 0.46m
+      const lw       = Math.max(1, r_px * 0.25);
+
       const yawRad = robotPose.yaw - currentMapMeta.rot_angle;
-      const headLen = 6;
-      const dx =  Math.cos(yawRad) * headLen;
-      const dy = -Math.sin(yawRad) * headLen;
+      const dx =  Math.cos(yawRad) * arrow_px;
+      const dy = -Math.sin(yawRad) * arrow_px;
 
       dynLayer.add(new Konva.Circle({
         x: p.x, y: p.y,
-        radius: 3,
-        fill: 'rgba(255,100,0,0.95)',
-        stroke: 'white', strokeWidth: 1,
+        radius: r_px,
+        fill: 'rgba(0,0,255,0.85)',
+        stroke: 'rgba(255,255,0,0.95)',
+        strokeWidth: lw,
         listening: false,
       }));
       dynLayer.add(new Konva.Arrow({
         points: [p.x, p.y, p.x + dx, p.y + dy],
-        pointerLength: 4,
-        pointerWidth: 3,
-        fill: 'rgba(255,100,0,0.95)',
-        stroke: 'rgba(255,100,0,0.95)',
-        strokeWidth: 1.5,
+        pointerLength: r_px * 0.5,
+        pointerWidth:  r_px * 0.4,
+        fill:   'rgba(255,255,0,0.95)',
+        stroke: 'rgba(255,255,0,0.95)',
+        strokeWidth: lw,
         listening: false,
       }));
     }
