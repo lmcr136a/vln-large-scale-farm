@@ -100,17 +100,18 @@
     .gps-dgps  { background: rgba(255,190,40,0.18);     color: #b8ae97; border: 1px solid rgba(224,216,197,0.4); }
     .gps-nofix { background: rgba(255,70,70,0.15);      color: #8d7676; border: 1px solid rgba(214,174,174,0.3); }
 
-    /* Small coordinate values (8px) */
+    /* Small coordinate values (6pt) */
     .gps-coord {
-      font-size: 8px;
+      font-size: 6pt;
       color: rgba(255,255,255,0.7);
       line-height: 1.6;
       font-family: monospace;
     }
     .lbl { color: rgba(255,255,255,0.38); }
 
-    /* Base line: inherits 10pt, coord values inside use .gps-coord */
+    /* Base line: same 6pt as coord values */
     #gps-base-line {
+      font-size: 6pt;
       color: rgba(255,255,255,0.7);
       line-height: 1.5;
     }
