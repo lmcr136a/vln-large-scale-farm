@@ -24,6 +24,8 @@ def _wifi_ssid() -> str:
 
 
 def _at_station(pose, cfg: dict) -> bool:
+    if "station_pose" not in cfg:
+        return False
     sx, sy = cfg["station_pose"]
     if isinstance(pose, dict):
         px, py = pose.get("x", 0.0), pose.get("y", 0.0)

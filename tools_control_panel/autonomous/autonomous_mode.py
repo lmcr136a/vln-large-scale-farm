@@ -75,14 +75,21 @@ class AutonomousController(Node):
     def _publish_loop(self):
         interval = 1.0 / PUBLISH_HZ
         while True:
-            twist = Twist()
             with self._vel_lock:
-                age = time.time() - self._vel_updated_at
-                if self._active and age < WATCHDOG_TIMEOUT:
-                    twist.linear.x  = self._target_vt
-                    twist.angular.z = self._target_vr
-                # else: zero twist (watchdog triggered or not active)
-            self.pub.publish(twist)
+                active  = self._active
+                age     = time.time() - self._vel_updated_at
+                tgt_vt  = self._target_vt
+                tgt_vr  = self._target_vr
+
+            if active:
+                twist = Twist()
+                if age < WATCHDOG_TIMEOUT:
+                    twist.linear.x  = tgt_vt
+                    twist.angular.z = tgt_vr
+                # else zero twist — watchdog expired, stop robot
+                self.pub.publish(twist)
+            # inactive: publish nothing — commander handles manual cmd_vel
+
             time.sleep(interval)
 
     def _set_vel(self, vt: float, vr: float):
