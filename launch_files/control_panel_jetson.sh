@@ -35,11 +35,4 @@ cd "$WORKSPACE_DIR"
 python3 -u tools_control_panel/jetson/jetson_main.py &
 JETSON_PID=$!
 
-echo ""
-echo "✅ Jetson agent running"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Config : $TOOLS_DIR/config/farm_config.yaml"
-echo "  Radio  : /dev/ttyTHS1"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Press Ctrl+C to stop"
 wait

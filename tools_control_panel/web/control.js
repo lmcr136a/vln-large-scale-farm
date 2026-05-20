@@ -559,9 +559,8 @@ function updateGpsPanel(g) {
   const baseLine = document.getElementById('gps-base-line');
   if (baseLine) {
     if (g.base_lat != null) {
-      // "Base Fixed" label at inherited 10pt; coordinate values small via .gps-coord
       baseLine.innerHTML =
-        `Base Fixed &nbsp;` +
+        `Base Fixed<br>` +
         `<span class="lbl">Lat </span><span class="gps-coord">${g.base_lat.toFixed(6)}</span> ` +
         `<span class="lbl">Lon </span><span class="gps-coord">${g.base_lon.toFixed(6)}</span> ` +
         `<span class="lbl">Alt </span><span class="gps-coord">${g.base_alt != null ? g.base_alt.toFixed(1) + 'm' : '—'}</span>`;

@@ -177,21 +177,16 @@ class TmuxMonitor:
 
     def restart_jetson_main(self) -> bool:
         """
-        Restart jetson_main.py using window 5 ("---") as staging:
-        1. Send restart command to window 5 (always idle).
-        2. Kill current jetson_main.py — process terminates here.
-        After _RESTART_DELAY_S seconds the new instance starts in window 5.
+        Signal control_panel_jetson.sh directly → triggers cleanup() trap →
+        kills scout + jetson cleanly with sleep 1 (same as manual Ctrl+C).
+        Shell then reads buffered restart command.
         """
-        staging = f"{self._session}:---"
-        restart_cmd = f"sleep {self._RESTART_DELAY_S} && {self._JETSON_RESTART_CMD}"
+        t = f"{self._session}:Main"
+        restart_cmd = f"sleep 5 && {self._JETSON_RESTART_CMD}"
         try:
-            # Clear any input in window 5, then send restart command
-            subprocess.run(["tmux", "send-keys", "-t", staging, "C-c", ""], timeout=3)
-            time.sleep(0.5)
-            subprocess.run(["tmux", "send-keys", "-t", staging, restart_cmd, "Enter"], timeout=3)
-            time.sleep(0.5)
-            # Kill current process — exits from here
-            subprocess.run(["pkill", "-f", "jetson_main.py"], timeout=3)
+            subprocess.run(["tmux", "send-keys", "-t", t, restart_cmd, "Enter"], timeout=3)
+            time.sleep(0.3)
+            subprocess.run(["pkill", "-f", "control_panel_jetson.sh"], timeout=3)
             return True
         except Exception as e:
             log.error(f"restart_jetson_main: {e}")
@@ -329,8 +324,8 @@ def main():
         if recorder:
             try:
                 recorder.stop_recording()
-            except Exception as e:
-                log.error(f"Camera recording stop failed: {e}")
+            except Exception:
+                pass  # recorder may already be partially destroyed
         if _rosbag_proc[0]:
             _rosbag_proc[0].terminate()
             _rosbag_proc[0] = None
