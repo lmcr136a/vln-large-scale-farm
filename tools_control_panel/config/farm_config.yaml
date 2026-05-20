@@ -12,6 +12,7 @@ paths:
 radio:
   serial_port: '/dev/ttyTHS1'
   baud_rate: 57600
+  image_width: 100 
 
 # ── Internet (Tailscale, Jetson -> Lab PC) ────────────────────────────────────
 # jetson1: 100.78.219.75        jetson2: 100.86.199.73        office-koala: 100.81.132.24

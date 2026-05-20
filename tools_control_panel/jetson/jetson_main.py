@@ -69,13 +69,13 @@ def _scale_jpeg_b64(b64: str, width: int) -> str | None:
 
 class RecorderProxy:
     RADIO_INTERVAL = 3.0   # seconds between radio frames
-    RADIO_WIDTH    = 60    # output width in pixels → 60×34 for 16:9
 
-    def __init__(self, internet, telemetry=None, radio=None):
-        self._internet   = internet
-        self._telemetry  = telemetry
-        self._radio      = radio
-        self._last_radio = 0.0
+    def __init__(self, internet, telemetry=None, radio=None, image_width=60):
+        self._internet    = internet
+        self._telemetry   = telemetry
+        self._radio       = radio
+        self._last_radio  = 0.0
+        self._radio_width = image_width  # read from cfg['radio']['image_width']
 
     def emit(self, event: str, data=None, namespace=None):
         if event in ("front_frame", "back_frame") and data:
@@ -90,7 +90,7 @@ class RecorderProxy:
                     now = time.time()
                     if now - self._last_radio >= self.RADIO_INTERVAL:
                         self._last_radio = now
-                        small = _scale_jpeg_b64(b64, self.RADIO_WIDTH)
+                        small = _scale_jpeg_b64(b64, self._radio_width)
                         if small:
                             self._radio.send({
                                 "type":   "radio_frame",
@@ -170,6 +170,11 @@ class TmuxMonitor:
             return True
         except Exception as e:
             log.error(f"TmuxMonitor restart {key}: {e}")
+            for i in range(10):
+                subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
+                time.sleep(2.0)
+            subprocess.run(["tmux", "send-keys", "-t", t, spec["cmd"], "Enter"], timeout=3)
+            log.info(f"TmuxMonitor: restarted {key} in {t}")
             return False
 
     def restart_jetson_main(self) -> bool:
@@ -471,7 +476,8 @@ def main():
         from sensor.recorder import MultiSensorRecorder
         rec_cfg  = cfg["recording"]
         recorder = MultiSensorRecorder(base_node, output_base_dir=cfg["paths"]["data_dir"])
-        rec_proxy = RecorderProxy(internet, telemetry, radio)
+        radio_img_w = cfg.get("radio", {}).get("image_width", 60)
+        rec_proxy = RecorderProxy(internet, telemetry, radio, image_width=radio_img_w)
         for cam in rec_cfg.get("zed_cameras", []):
             recorder.add_zed_camera(
                 serial_number=cam["serial"],
@@ -514,10 +520,6 @@ def main():
                      for k, v in snap.items()),
                     key=lambda x: -x[1],
                 )
-                # log.info(
-                #     f"Telemetry packet {len(pkt.encode())}B | " +
-                #     " | ".join(f"{k}:{v}B" for k, v in breakdown)
-                # )
 
             radio.send({"type": "telemetry", "data": snap})
             internet.send_telemetry(snap)
