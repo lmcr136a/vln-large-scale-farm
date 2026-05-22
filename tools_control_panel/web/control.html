@@ -116,14 +116,14 @@
     }
 
     /* ── Safety Checker Widget ───────────────────────────────── */
-    #col-safety { display:flex; align-items:center; justify-content:center; padding:4px; }
+    #col-safety { display:flex; align-items:stretch; justify-content:center; padding:4px; }
     .sc-wrap {
       background: white;
       display: grid;
       grid-template-columns: 1fr 2fr 1fr;
       grid-template-rows: 1fr 1fr 1fr;
-      width: 54px;
-      height: 81px;
+      height: 100%;
+      aspect-ratio: 2 / 3;
       border-radius: 3px;
       gap: 1px;
       padding: 1px;
