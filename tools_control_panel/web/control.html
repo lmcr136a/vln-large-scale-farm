@@ -222,21 +222,6 @@
 
   <div id="top-panel">
 
-    <!-- Safety Checker -->
-    <div id="col-safety">
-      <div class="sc-wrap">
-        <div id="sc-front-left"  class="sc-zone"></div>
-        <div id="sc-front"       class="sc-zone"></div>
-        <div id="sc-front-right" class="sc-zone"></div>
-        <div id="sc-left"        class="sc-zone"></div>
-        <div id="sc-robot"       class="sc-robot"></div>
-        <div id="sc-right"       class="sc-zone"></div>
-        <div id="sc-back-left"   class="sc-zone"></div>
-        <div id="sc-back"        class="sc-zone"></div>
-        <div id="sc-back-right"  class="sc-zone"></div>
-      </div>
-    </div>
-
     <!-- Cameras -->
     <div id="col-cameras">
       <div style="display:flex;">
@@ -248,12 +233,26 @@
         </div>
       </div>
       <div id="sensor-status-bar">
+
+        <!-- Safety Checker -->
+        <div id="col-safety">
+          <div class="sc-wrap">
+            <div id="sc-front-left"  class="sc-zone"></div>
+            <div id="sc-front"       class="sc-zone"></div>
+            <div id="sc-front-right" class="sc-zone"></div>
+            <div id="sc-left"        class="sc-zone"></div>
+            <div id="sc-robot"       class="sc-robot"></div>
+            <div id="sc-right"       class="sc-zone"></div>
+            <div id="sc-back-left"   class="sc-zone"></div>
+            <div id="sc-back"        class="sc-zone"></div>
+            <div id="sc-back-right"  class="sc-zone"></div>
+          </div>
+        </div>
+
         <button id="camera-toggle" onclick="toggleCameraMode()">📡 Radio</button>
         <span id="info-sensors">—</span>
-      </div>
-    </div>
 
-    <div class="col-divider"></div>
+        <div class="col-divider"></div>
 
     <!-- Column 1A: System (12pt) -->
     <div class="panel-col" id="col-sys">
