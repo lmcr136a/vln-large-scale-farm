@@ -35,34 +35,42 @@ from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import String
 
-PRINT_DEBUG    = True
+PRINT_DEBUG    = False
 DEBUG_INTERVAL = 5.0              # seconds between debug renders
-DEBUG_MAX_PTS  = 20_000           # max points sampled for visualization
-DEBUG_OUT      = '/tmp/safety_debug.png'
+DEBUG_MAX_PTS  = 10_000           # max points sampled for visualization
+DEBUG_OUT      = './safety_debug.png'
 
 PUBLISH_HZ  = 5.0
 
-# LiDAR → robot frame extrinsic
-# LiDAR x = robot y, LiDAR y = -robot x, z unchanged
+# ── LiDAR extrinsic (robot frame mapping) ────────────────────
+# Edit to match your LiDAR mounting orientation.
+# Input:  px, py, pz  = raw LiDAR point coordinates
+# Output: x,  y,  z   = robot frame coordinates
+#
+#   x = y   # lidar's x is actual y of the robot
+#   y = -x
+#   z = z
+
 def _to_robot_frame(pts: np.ndarray) -> np.ndarray:
     out = np.empty_like(pts)
-    out[:, 0] =  pts[:, 1]   # robot x = lidar y
-    out[:, 1] = -pts[:, 0]   # robot y = -lidar x
-    out[:, 2] =  pts[:, 2]
+    out[:, 0] =  pts[:, 1]   # x = y
+    out[:, 1] = -pts[:, 0]   # y = -x
+    out[:, 2] =  pts[:, 2]   # z = z
     return out
 
 # Geometry (metres)
 ROBOT_HALF  = 0.30   # half side of 60×60 cm robot
-SIDE_SPAN   = 0.45   # ±45 cm y-range covered by side zones
-Z_MIN       = -0.40  # m
-Z_MAX       =  0.20  # m
+SIDE_SPAN   = 0.20   # ±20 cm y-range covered by side zones
+Z_MIN       = -0.2  # m — points below this are ignored
+Z_MAX       =  0.20  # m — points above this are ignored
 
 # (color, near, far) — distance FROM robot edge, metres
 BANDS = [
-    ('red',    0.30, 0.40),
-    ('yellow', 0.40, 0.50),
-    ('green',  0.50, 0.60),
+    ('red',    0.00, 0.10),   # right at edge → 0.30~0.40m from center
+    ('yellow', 0.10, 0.20),   # 0.40~0.50m from center
+    ('green',  0.20, 0.30),   # 0.50~0.60m from center
 ]
+MIN_PTS = 5   # minimum points in a zone to trigger detection (noise filter)
 
 ZONES    = ['front', 'front_right', 'right', 'back_right',
             'back',  'back_left',   'left',  'front_left']
@@ -91,19 +99,19 @@ def detect_zones(pts: np.ndarray) -> dict:
 
         # Right
         m = (x >= near) & (x < far) & (np.abs(y) <= SIDE_SPAN)
-        if m.any(): update('right', color)
+        if m.sum() >= MIN_PTS: update('right', color)
 
         # Left
         m = (x <= -near) & (x > -far) & (np.abs(y) <= SIDE_SPAN)
-        if m.any(): update('left', color)
+        if m.sum() >= MIN_PTS: update('left', color)
 
         # Front
         m = (y >= near) & (y < far) & (np.abs(x) <= SIDE_SPAN)
-        if m.any(): update('front', color)
+        if m.sum() >= MIN_PTS: update('front', color)
 
         # Back
         m = (y <= -near) & (y > -far) & (np.abs(x) <= SIDE_SPAN)
-        if m.any(): update('back', color)
+        if m.sum() >= MIN_PTS: update('back', color)
 
         # Corners — Chebyshev distance from robot corner
         for zone, sx, sy in [
@@ -117,7 +125,7 @@ def detect_zones(pts: np.ndarray) -> dict:
                 continue
             d = np.maximum(sx * x[in_quad] - ROBOT_HALF,
                            sy * y[in_quad] - ROBOT_HALF)
-            if ((d >= dn) & (d < df)).any():
+            if ((d >= dn) & (d < df)).sum() >= MIN_PTS:
                 update(zone, color)
 
     return result
@@ -158,28 +166,36 @@ def _draw_debug(pts: np.ndarray, result: dict) -> None:
                 ('front', -SIDE_SPAN,  n, 2 * SIDE_SPAN, w),
                 ('back',  -SIDE_SPAN, -f, 2 * SIDE_SPAN, w),
             ]:
-                det = result.get(zone)
+                det    = result.get(zone)
+                active = PRIORITY.get(det, 0) >= PRIORITY[color]
                 ax1.add_patch(mpatches.Rectangle(
                     (rx, ry), rw, rh,
-                    fc=CLRS.get(det, CLRS[None]),
+                    fc=CLRS[color],
                     ec='white', lw=0.3,
-                    alpha=ALPHA.get(det, 0.12)))
+                    alpha=0.65 if active else 0.12))
 
-            # 4 corners: square in the quadrant region
+            # 4 corners: L-shape = two rectangles, always positive dims
             for zone, sx, sy in [
                 ('front_right',  1,  1), ('front_left', -1,  1),
                 ('back_right',   1, -1), ('back_left',  -1, -1),
             ]:
-                det = result.get(zone)
-                x0 = sx * SIDE_SPAN if sx > 0 else -f
-                y0 = sy * SIDE_SPAN if sy > 0 else -f
-                cw = (f - SIDE_SPAN)
-                ch = (f - SIDE_SPAN)
+                det    = result.get(zone)
+                active = PRIORITY.get(det, 0) >= PRIORITY[color]
+                kw = dict(fc=CLRS[color], ec='white', lw=0.3,
+                          alpha=0.65 if active else 0.12)
+
+                # anchor = lower-left corner (min x, min y), dims always positive
+                # Part 1: strip along sx axis
+                x1 = n  if sx > 0 else -f        # left edge
+                y1 = SIDE_SPAN if sy > 0 else -f  # bottom edge
                 ax1.add_patch(mpatches.Rectangle(
-                    (x0, y0), sx * cw, sy * ch,
-                    fc=CLRS.get(det, CLRS[None]),
-                    ec='white', lw=0.3,
-                    alpha=ALPHA.get(det, 0.12)))
+                    (x1, y1), w, f - SIDE_SPAN, **kw))
+
+                # Part 2: strip along sy axis (no overlap with Part 1)
+                x2 = SIDE_SPAN if sx > 0 else -n  # left edge
+                y2 = n if sy > 0 else -f           # bottom edge
+                ax1.add_patch(mpatches.Rectangle(
+                    (x2, y2), n - SIDE_SPAN, w, **kw))
 
         # Robot body
         ax1.add_patch(mpatches.Rectangle(
@@ -258,7 +274,7 @@ class SafetyChecker(Node):
                 with self._lock:
                     self._latest = {z: None for z in ZONES}
                 return
-            pts = pts[(pts[:, 2] >= Z_MIN) & (pts[:, 2] <= Z_MAX)]
+            pts = pts[(pts[:, 2] > Z_MIN) & (pts[:, 2] < Z_MAX)]
             pts = _to_robot_frame(pts)
             result = detect_zones(pts) if pts.size > 0 else {z: None for z in ZONES}
             with self._lock:

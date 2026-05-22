@@ -10,40 +10,35 @@ import json
 import os
 import yaml
 import threading
-from scipy.ndimage import uniform_filter, binary_dilation
+from scipy.ndimage import uniform_filter
 from PIL import Image, ImageDraw
 import tf2_ros
 from tf2_ros import TransformException
 from rclpy.duration import Duration
 
 current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MAP_UPDATE_RATE    = 5.0
+MAP_UPDATE_RATE    = 10.0
 TARGET_FRAME       = 'map'
 IMAGE_RES_MUL      = 2
+MIN_POINTS_CELL    = 2
+MAX_HEIGHT_M       = 1.0   # ignore points above this height from local ground (robot clearance)
 
-## Min Z + BAND_LOW ~ Min Z + BAND_HIGH: If Points > MIN_POINTS_BAND => Obstacle
-BAND_LOW           = 0.1
-BAND_HIGH          = 1.5
-MIN_POINTS_BAND    = 2
-MIN_POINTS_CELL    = 1
-
-STEP_THRESHOLD     = 0.1
-STEP_MIN_PTS       = 2
-
+Z_COLOR_RANGE      = 0.6
 
 ROBOT_ACTUAL_SIZE  = 0.6
 ROBOT_RADIUS_M     = ROBOT_ACTUAL_SIZE / 2.0
 ROBOT_ARROW_LEN_M  = 0.46
 
 COLOR_TRAJECTORY   = (100, 255, 170)
-COLOR_ROBOT_CIRCLE = (200, 156, 126)
-COLOR_ARROW        = (177, 177, 177)
+COLOR_ROBOT_CIRCLE = (0, 0, 255)
+COLOR_ARROW        = (255, 255, 0)
 
-POINT_SAMPLE_RATIO = 0.99
-PIXEL_GRID_SIZE    = 0.05
-Z_COLOR_RANGE      = 0.1
-MEDIAN_FILTER_SIZE = int(2 // PIXEL_GRID_SIZE)
+POINT_SAMPLE_RATIO = 1.0
+PIXEL_GRID_SIZE = 0.2
 
+
+SMOOTH_RADIUS_M    = 10   # neighbor range (m)
+MEDIAN_FILTER_SIZE = max(3, int(SMOOTH_RADIUS_M / PIXEL_GRID_SIZE))
 
 
 def _quat_to_rot(qx, qy, qz, qw):
@@ -123,7 +118,6 @@ def build_occupancy_grid(pts, iu, iv, grid_w, grid_h):
     flat      = iv * grid_w + iu
 
     sort_idx   = np.lexsort((pts[:, 2], flat))
-    s_flat     = flat[sort_idx]
     s_z        = pts[sort_idx, 2]
 
     cell_count = np.bincount(flat, minlength=num_cells)
@@ -133,72 +127,34 @@ def build_occupancy_grid(pts, iu, iv, grid_w, grid_h):
     valid     = cell_count >= MIN_POINTS_CELL
     valid_idx = np.where(valid)[0]
 
-    z_low_flat  = np.full(num_cells, np.nan, dtype=np.float32)
-    z_high_flat = np.full(num_cells, np.nan, dtype=np.float32)
-
+    z_low_flat = np.full(num_cells, np.nan, dtype=np.float32)
     if valid_idx.size > 0:
         p10_offset = np.floor(cell_count[valid_idx] * 0.10).astype(int)
         p10_global = cell_start[valid_idx] + p10_offset
-        z_low_flat[valid_idx]  = s_z[p10_global]
-        z_high_flat[valid_idx] = s_z[cell_end[valid_idx] - 1]
+        z_low_flat[valid_idx] = s_z[p10_global]
 
     z_low    = z_low_flat.reshape(grid_h, grid_w)
-    z_high   = z_high_flat.reshape(grid_h, grid_w)
     hit_mask = valid.reshape(grid_h, grid_w)
 
-    z_low_per_pt = z_low_flat[flat]
-    in_band = (
-        np.isfinite(z_low_per_pt) &
-        (pts[:, 2] >= z_low_per_pt + BAND_LOW) &
-        (pts[:, 2] <= z_low_per_pt + BAND_HIGH)
-    )
-    count_band = np.bincount(flat[in_band], minlength=num_cells).reshape(grid_h, grid_w)
+    z_low_filled = np.where(np.isnan(z_low), 0.0, z_low)
+    z_low_smooth = uniform_filter(z_low_filled, size=MEDIAN_FILTER_SIZE, mode='nearest')
 
-    z_low_filled  = np.where(np.isnan(z_low), 0.0, z_low)
-    z_low_smooth  = uniform_filter(z_low_filled, size=MEDIAN_FILTER_SIZE, mode='nearest')
-    step_reliable = (cell_count >= STEP_MIN_PTS).reshape(grid_h, grid_w)
-    step_diff     = np.where(step_reliable, np.abs(z_low - z_low_smooth), 0.0)
-    step_obstacle = step_reliable & (step_diff >= STEP_THRESHOLD)
-
-    band_obstacle = count_band >= MIN_POINTS_BAND
-    obs_mask      = step_obstacle | band_obstacle
-
-    overhang = (
-        hit_mask &
-        (count_band < MIN_POINTS_BAND) &
-        np.isfinite(z_low) &
-        (z_high >= z_low + BAND_HIGH)
-    )
-    obs_mask &= ~overhang
-
-    grid = np.full((grid_h, grid_w), -1, dtype=np.int8)
-    grid[hit_mask] = 0
-    grid[obs_mask] = 1
-
+    grid  = np.where(hit_mask, 0, -1).astype(np.int8)
     z_rel = np.where(hit_mask, (z_low - z_low_smooth).astype(np.float32), np.nan)
 
     return grid, z_rel
 
 
-_FREE_ANCHORS = np.array([
-    [20,  8,   2],
-    [70, 35,  10],
-    [110, 60, 20],
-], dtype=np.float32)
-
-_OBS_ANCHORS = np.array([
-    [15, 50,  15],
-    [40, 120, 40],
-    [80, 210, 80],
-], dtype=np.float32)
+_COLOR_LOW  = np.array([20,  20,  50],  dtype=np.float32)  # low relative height
+_COLOR_HIGH = np.array([255, 200, 200], dtype=np.float32)  # high relative height
 
 
-def _interp_anchors(t, anchors):
-    seg   = np.where(t < 0.5, 0, 1)
-    t_seg = np.where(t < 0.5, t / 0.5, (t - 0.5) / 0.5)
-    c0 = anchors[seg]
-    c1 = anchors[seg + 1]
-    return np.clip(c0 + (c1 - c0) * t_seg[:, np.newaxis], 0, 255).astype(np.uint8)
+def _height_color(t: np.ndarray) -> np.ndarray:
+    """t: (N,) float 0-1 → (N, 3) uint8, linear gradient low→high."""
+    return np.clip(
+        _COLOR_LOW + (_COLOR_HIGH - _COLOR_LOW) * t[:, np.newaxis],
+        0, 255
+    ).astype(np.uint8)
 
 
 def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, output_path, world_rot_angle=0.0, robot_pos=None):
@@ -214,13 +170,9 @@ def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, output_path, world_r
 
         arr = np.full((*grid.shape, 3), 30, dtype=np.uint8)
 
-        free_mask = (grid == 0)
-        if free_mask.any():
-            arr[free_mask] = _interp_anchors(t_full[free_mask], _FREE_ANCHORS)
-
-        obs_mask_2d = (grid == 1)
-        if obs_mask_2d.any():
-            arr[obs_mask_2d] = _interp_anchors(t_full[obs_mask_2d], _OBS_ANCHORS)
+        observed = (grid >= 0)
+        if observed.any():
+            arr[observed] = _height_color(t_full[observed])
 
         base = Image.fromarray(np.flipud(arr), mode='RGB')
         img  = base.resize(
@@ -363,8 +315,7 @@ class ContinuousPointCloudMapper(Node):
         self._status_timer = self.create_timer(5.0,  self._print_status)
         self._params_timer = self.create_timer(0.2,  self._write_map_params)
 
-        print(f'[Mapper] Ready  frame="{TARGET_FRAME}"  cell={PIXEL_GRID_SIZE}m  '
-              f'band=[{BAND_LOW},{BAND_HIGH}]m  step={STEP_THRESHOLD}m')
+        print(f'[Mapper] Ready  frame="{TARGET_FRAME}"  cell={PIXEL_GRID_SIZE}m')
 
     def _print_status(self):
         if self.map_version > 0:
@@ -478,6 +429,13 @@ class ContinuousPointCloudMapper(Node):
 
         iu = np.clip(((pts_r[:, 0] - u_min) / PIXEL_GRID_SIZE).astype(int), 0, grid_w - 1)
         iv = np.clip(((pts_r[:, 1] - v_min) / PIXEL_GRID_SIZE).astype(int), 0, grid_h - 1)
+
+        # Filter out points above robot clearance height from local ground
+        cell_idx   = iv * grid_w + iu
+        z_floor    = np.full(grid_w * grid_h, np.inf, dtype=np.float32)
+        np.minimum.at(z_floor, cell_idx, pts_r[:, 2].astype(np.float32))
+        keep       = pts_r[:, 2] <= z_floor[cell_idx] + MAX_HEIGHT_M
+        pts_r, iu, iv = pts_r[keep], iu[keep], iv[keep]
 
         grid, z_rel = build_occupancy_grid(pts_r, iu, iv, grid_w, grid_h)
 
