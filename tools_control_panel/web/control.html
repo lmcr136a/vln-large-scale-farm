@@ -8,7 +8,20 @@
   <script src="https://unpkg.com/konva@9/konva.min.js"></script>
   <link rel="stylesheet" href="styles.css">
   <style>
-    #col-cameras { display: flex; flex-direction: column; }
+    #col-cameras {
+      align-self: stretch;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 2px;
+      box-sizing: border-box;
+    }
+    #col-cameras img {
+      height: 100%;
+      width: auto;
+      object-fit: contain;
+      display: block;
+    }
 
     #sensor-status-bar {
       font-size: 11px;
@@ -116,17 +129,24 @@
     }
 
     /* ── Safety Checker Widget ───────────────────────────────── */
-    #col-safety { display:flex; align-items:stretch; padding:4px; box-sizing:border-box; }
+    #col-safety {
+      align-self: stretch;
+      display: flex;
+      align-items: center;
+      padding: 3px 2px;
+      box-sizing: border-box;
+    }
     .sc-wrap {
       background: white;
       display: grid;
       grid-template-columns: 1fr 2fr 1fr;
       grid-template-rows: 1fr 1fr 1fr;
+      height: 100%;
       aspect-ratio: 2 / 3;
-      min-height: 0;
       border-radius: 3px;
       gap: 1px;
       padding: 1px;
+      box-sizing: border-box;
     }
     .sc-zone  { background: rgba(255,255,255,0.15); border-radius: 2px; transition: background 0.2s; }
     .sc-robot { background: #888; border-radius: 2px; }
@@ -222,35 +242,30 @@
 
   <div id="top-panel">
 
-    <!-- Cameras -->
-    <div id="col-cameras">
-      <div style="display:flex;">
-        <div class="panel-col" id="col-back">
-          <img id="back-rgb-image" alt="Back" />
-        </div>
-        <div class="panel-col" id="col-front">
-          <img id="rgb-image" alt="Front" />
+    <div id="sensor-status-bar">
+
+      <!-- Col 1: Safety Checker -->
+      <div id="col-safety">
+        <div class="sc-wrap">
+          <div id="sc-front-left"  class="sc-zone"></div>
+          <div id="sc-front"       class="sc-zone"></div>
+          <div id="sc-front-right" class="sc-zone"></div>
+          <div id="sc-left"        class="sc-zone"></div>
+          <div id="sc-robot"       class="sc-robot"></div>
+          <div id="sc-right"       class="sc-zone"></div>
+          <div id="sc-back-left"   class="sc-zone"></div>
+          <div id="sc-back"        class="sc-zone"></div>
+          <div id="sc-back-right"  class="sc-zone"></div>
         </div>
       </div>
-      <div id="sensor-status-bar">
 
-        <!-- Safety Checker -->
-        <div id="col-safety">
-          <div class="sc-wrap">
-            <div id="sc-front-left"  class="sc-zone"></div>
-            <div id="sc-front"       class="sc-zone"></div>
-            <div id="sc-front-right" class="sc-zone"></div>
-            <div id="sc-left"        class="sc-zone"></div>
-            <div id="sc-robot"       class="sc-robot"></div>
-            <div id="sc-right"       class="sc-zone"></div>
-            <div id="sc-back-left"   class="sc-zone"></div>
-            <div id="sc-back"        class="sc-zone"></div>
-            <div id="sc-back-right"  class="sc-zone"></div>
-          </div>
-        </div>
-
+      <!-- Col 2: Camera streams -->
+      <div id="col-cameras">
+        <img id="back-rgb-image" alt="Back" />
+        <img id="rgb-image" alt="Front" />
         <button id="camera-toggle" onclick="toggleCameraMode()">📡 Radio</button>
         <span id="info-sensors">—</span>
+      </div>
 
         <div class="col-divider"></div>
 
