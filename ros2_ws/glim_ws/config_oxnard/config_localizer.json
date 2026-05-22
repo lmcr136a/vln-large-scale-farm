@@ -1,6 +1,6 @@
 {
   "localizer": {
-    "map_path": "", //"/home/nahyeon/box/saved_map_oxnard/",
+    "map_path": "/home/nahyeon/box/saved_map_oxnard/",
     "output_map_path": "~/tmp/dump",
     "map_frame": "map",
     "lidar_frame": "livox_frame",
