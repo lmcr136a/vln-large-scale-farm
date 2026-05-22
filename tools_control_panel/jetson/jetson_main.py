@@ -374,11 +374,14 @@ def main():
 
     base_node.create_subscription(PointCloud2, pc_topic, pc_callback, BEST_EFFORT_QOS)
 
-    _safety_status: list = [{}]
+    _safety_status: list    = [{}]
+    _safety_last_t: list    = [0.0]
+    _SAFETY_TIMEOUT         =  1.5   # seconds — clear panel if no message
 
     def safety_cb(msg: _StdString):
         try:
             _safety_status[0] = json.loads(msg.data)
+            _safety_last_t[0] = time.time()
         except Exception:
             pass
 
@@ -509,7 +512,11 @@ def main():
             snap["radio_rtt_ms"]     = radio.get_rtt_ms()
             snap["internet_quality"] = internet.get_quality()
             snap["internet_rtt_ms"]  = internet.get_rtt_ms()
-            snap["safety_status"]    = _safety_status[0]
+            snap["safety_status"]    = (
+                _safety_status[0]
+                if time.time() - _safety_last_t[0] < _SAFETY_TIMEOUT
+                else {}
+            )
             if tmux_monitor:
                 snap["tmux_status"] = tmux_monitor.get_status()
 

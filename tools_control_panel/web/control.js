@@ -543,9 +543,9 @@ function updateSafetyPanel(s) {
   for (const [zone, id] of Object.entries(map)) {
     const el = document.getElementById(id);
     if (!el) continue;
-    el.className = 'sc-zone';
+    el.className = 'sc-zone';  // always reset first
     const c = s[zone];
-    if (c === 'red')    el.classList.add('sc-red');
+    if      (c === 'red')    el.classList.add('sc-red');
     else if (c === 'yellow') el.classList.add('sc-yellow');
     else if (c === 'green')  el.classList.add('sc-green');
   }
