@@ -26,9 +26,11 @@ source "$WORKSPACE_DIR/ros2_ws/scout_ws/install/setup.bash"
 echo "$WORKSPACE_DIR/ros2_ws/scout_ws/install/setup.bash"
 ros2 launch scout_base scout_mini_base.launch.py &
 SCOUT_PID=$!
+
+python3 tools_control_panel/sensor/safety_checker.py &
+SAFETY_PID=$!
+
 sleep 2
-
-
 echo ""
 echo "🤖 Starting Jetson agent..."
 cd "$WORKSPACE_DIR"

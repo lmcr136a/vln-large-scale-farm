@@ -37,8 +37,8 @@ tmux new-window -t $SESSION:3 -n "2Dmap"
 tmux send-keys -t $SESSION:3 "python3 tools_control_panel/mapping/save_map_glim.py" C-m
 
 # Window 4: Obstacle Detection
-tmux new-window -t $SESSION:4 -n "O.D."
-tmux send-keys -t $SESSION:4 "python3 tools_scout_control/safety_checker.py" C-m
+tmux new-window -t $SESSION:4 -n "---"
+tmux send-keys -t $SESSION:4 "echo ''" C-m
 
 # Window 5: Status Info
 tmux new-window -t "$SESSION:5" -n "---"
