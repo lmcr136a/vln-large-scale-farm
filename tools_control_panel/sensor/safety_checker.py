@@ -70,7 +70,7 @@ BANDS = [
     ('yellow', 0.10, 0.20),   # 0.40~0.50m from center
     ('green',  0.20, 0.30),   # 0.50~0.60m from center
 ]
-MIN_PTS = 5   # minimum points in a zone to trigger detection (noise filter)
+MIN_PTS = 10   # minimum points in a zone to trigger detection (noise filter)
 
 ZONES    = ['front', 'front_right', 'right', 'back_right',
             'back',  'back_left',   'left',  'front_left']
