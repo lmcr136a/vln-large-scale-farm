@@ -178,29 +178,29 @@ setInterval(_applyBlackIfNoSignal, 1000);
 
 function toggleCameraMode() {
   cameraMode = cameraMode === 'radio' ? 'stream' : 'radio';
-  const btn      = document.getElementById('camera-toggle');
-  const backEl   = document.getElementById('col-back');
+  const btn     = document.getElementById('camera-toggle');
+  const backImg = document.getElementById('back-rgb-image');
   const frontImg = document.getElementById('rgb-image');
   if (cameraMode === 'radio') {
     btn.textContent = '📡 Radio';
     btn.classList.remove('streaming');
-    if (backEl)   backEl.style.display = 'none';
+    if (backImg)  backImg.style.display = 'none';
     if (frontImg) frontImg.classList.add('radio-mode');
-    _lastRadioFrameTime = 0;  // reset so black shows immediately
+    _lastRadioFrameTime = 0;
     _applyBlackIfNoSignal();
   } else {
     btn.textContent = '📷 Streaming';
     btn.classList.add('streaming');
-    if (backEl)   backEl.style.display = '';
+    if (backImg)  backImg.style.display = '';
     if (frontImg) frontImg.classList.remove('radio-mode');
   }
 }
 
 // Init: radio mode by default
 (function initCameraMode() {
-  const backEl   = document.getElementById('col-back');
+  const backImg  = document.getElementById('back-rgb-image');
   const frontImg = document.getElementById('rgb-image');
-  if (backEl)   backEl.style.display = 'none';
+  if (backImg)  backImg.style.display = 'none';
   if (frontImg) {
     frontImg.classList.add('radio-mode');
     frontImg.src = _BLACK_FRAME;

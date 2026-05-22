@@ -11,16 +11,30 @@
     #col-cameras {
       align-self: stretch;
       display: flex;
-      align-items: center;
-      gap: 4px;
-      padding: 3px 2px;
+      flex-direction: column;
+      padding: 2px 2px;
       box-sizing: border-box;
+      gap: 2px;
     }
-    #col-cameras img {
+    #col-cameras-imgs {
+      display: flex;
+      align-items: stretch;
+      gap: 2px;
+      flex: 1;
+      min-height: 0;
+    }
+    #col-cameras-imgs img {
       height: 100%;
       width: auto;
       object-fit: contain;
       display: block;
+    }
+    #col-cameras-ctrl {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 9px;
+      line-height: 1;
     }
 
     #sensor-status-bar {
@@ -261,10 +275,14 @@
 
       <!-- Col 2: Camera streams -->
       <div id="col-cameras">
-        <img id="back-rgb-image" alt="Back" />
-        <img id="rgb-image" alt="Front" />
-        <button id="camera-toggle" onclick="toggleCameraMode()">📡 Radio</button>
-        <span id="info-sensors">—</span>
+        <div id="col-cameras-imgs">
+          <img id="back-rgb-image" alt="Back" />
+          <img id="rgb-image" alt="Front" />
+        </div>
+        <div id="col-cameras-ctrl">
+          <button id="camera-toggle" onclick="toggleCameraMode()">📡 Radio</button>
+          <span id="info-sensors">—</span>
+        </div>
       </div>
 
         <div class="col-divider"></div>
