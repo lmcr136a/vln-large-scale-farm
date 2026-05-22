@@ -18,6 +18,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import PointCloud2, Image
+from std_msgs.msg import String as _StdString
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -373,6 +374,16 @@ def main():
 
     base_node.create_subscription(PointCloud2, pc_topic, pc_callback, BEST_EFFORT_QOS)
 
+    _safety_status: list = [{}]
+
+    def safety_cb(msg: _StdString):
+        try:
+            _safety_status[0] = json.loads(msg.data)
+        except Exception:
+            pass
+
+    base_node.create_subscription(_StdString, '/safety_checker', safety_cb, 10)
+
     def pointcloud_loop():
         while True:
             time.sleep(pc_interval)
@@ -498,6 +509,7 @@ def main():
             snap["radio_rtt_ms"]     = radio.get_rtt_ms()
             snap["internet_quality"] = internet.get_quality()
             snap["internet_rtt_ms"]  = internet.get_rtt_ms()
+            snap["safety_status"]    = _safety_status[0]
             if tmux_monitor:
                 snap["tmux_status"] = tmux_monitor.get_status()
 

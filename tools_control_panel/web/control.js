@@ -341,6 +341,9 @@ socket.on('robot_telemetry', (data) => {
 
   // Tmux panel
   if (data.tmux_status) updateTmuxPanel(data.tmux_status);
+
+  // Safety checker
+  if (data.safety_status) updateSafetyPanel(data.safety_status);
 });
 
 socket.on('waypoint_reached', (data) => {
@@ -524,6 +527,28 @@ function _scoreColor(score) {
   if (score >= 40) return '#f0c040';
   if (score >= 20) return '#f08030';
   return '#ff5050';
+}
+
+function updateSafetyPanel(s) {
+  const map = {
+    'front':       'sc-front',
+    'front_right': 'sc-front-right',
+    'right':       'sc-right',
+    'back_right':  'sc-back-right',
+    'back':        'sc-back',
+    'back_left':   'sc-back-left',
+    'left':        'sc-left',
+    'front_left':  'sc-front-left',
+  };
+  for (const [zone, id] of Object.entries(map)) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.className = 'sc-zone';
+    const c = s[zone];
+    if (c === 'red')    el.classList.add('sc-red');
+    else if (c === 'yellow') el.classList.add('sc-yellow');
+    else if (c === 'green')  el.classList.add('sc-green');
+  }
 }
 
 function updateRadioScore(id, score) {

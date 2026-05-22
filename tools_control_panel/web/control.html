@@ -115,7 +115,24 @@
       line-height: 1.5;
     }
 
-    /* ── Column 2: Controls ──────────────────────────────────── */
+    /* ── Safety Checker Widget ───────────────────────────────── */
+    #col-safety { display:flex; align-items:center; justify-content:center; padding:4px; }
+    .sc-wrap {
+      background: white;
+      display: grid;
+      grid-template-columns: 1fr 2fr 1fr;
+      grid-template-rows: 1fr 1fr 1fr;
+      width: 54px;
+      height: 81px;
+      border-radius: 3px;
+      gap: 1px;
+      padding: 1px;
+    }
+    .sc-zone  { background: rgba(255,255,255,0.15); border-radius: 2px; transition: background 0.2s; }
+    .sc-robot { background: #888; border-radius: 2px; }
+    .sc-red    { background: rgba(255,60,60,0.92) !important; }
+    .sc-yellow { background: rgba(255,200,0,0.92) !important; }
+    .sc-green  { background: rgba(50,200,50,0.92) !important; }
     #col-controls { min-width: 145px; gap: 7px; }
     .run-row { display: flex; gap: 6px; align-items: center; }
     .rec-row { display: flex; gap: 6px; align-items: center; }
@@ -204,6 +221,21 @@
   <div id="map-konva-container"></div>
 
   <div id="top-panel">
+
+    <!-- Safety Checker -->
+    <div id="col-safety">
+      <div class="sc-wrap">
+        <div id="sc-front-left"  class="sc-zone"></div>
+        <div id="sc-front"       class="sc-zone"></div>
+        <div id="sc-front-right" class="sc-zone"></div>
+        <div id="sc-left"        class="sc-zone"></div>
+        <div id="sc-robot"       class="sc-robot"></div>
+        <div id="sc-right"       class="sc-zone"></div>
+        <div id="sc-back-left"   class="sc-zone"></div>
+        <div id="sc-back"        class="sc-zone"></div>
+        <div id="sc-back-right"  class="sc-zone"></div>
+      </div>
+    </div>
 
     <!-- Cameras -->
     <div id="col-cameras">
