@@ -96,7 +96,7 @@ public:
       default_init_z_   = cfg.param<double>("localizer", "default_init_pose_z",       0.0);
       default_init_yaw_ = cfg.param<double>("localizer", "default_init_pose_yaw_deg", 0.0);
       has_default_init_ = true;
-      const double roll  = cfg.param<double>("localizer", "mount_roll_deg",  180.0);
+      const double roll  = cfg.param<double>("localizer", "mount_roll_deg",  0.0);
       const double pitch = cfg.param<double>("localizer", "mount_pitch_deg", 0.0);
       const double yaw   = cfg.param<double>("localizer", "mount_yaw_deg",   0.0);
       mount_R_ = (Eigen::AngleAxisd(yaw   * M_PI / 180.0, Eigen::Vector3d::UnitZ())

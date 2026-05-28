@@ -529,25 +529,78 @@ function _scoreColor(score) {
   return '#ff5050';
 }
 
+// ── Safety checker SVG init ──────────────────────────────────
+(function initSafetySVG() {
+  const NS = 'http://www.w3.org/2000/svg';
+  const g  = document.getElementById('sc-zones');
+  if (!g) return;
+
+  // Screen space: forward=up(-Y_svg), right=right(+X_svg)
+  // θ_svg measured CCW from +X_svg; SVG Y is flipped so we negate sin
+  // Zone wedge angles in degrees (CCW from right = +X_svg)
+  const ZONES_DEF = [
+    { id: 'sc-front',       t1:  67.5, t2: 112.5 },
+    { id: 'sc-front-left',  t1: 112.5, t2: 157.5 },
+    { id: 'sc-left',        t1: 157.5, t2: 202.5 },
+    { id: 'sc-back-left',   t1: 202.5, t2: 247.5 },
+    { id: 'sc-back',        t1: 247.5, t2: 292.5 },
+    { id: 'sc-back-right',  t1: 292.5, t2: 337.5 },
+    { id: 'sc-right',       t1: 337.5, t2: 382.5 },
+    { id: 'sc-front-right', t1:  22.5, t2:  67.5 },
+  ];
+
+  // 3 bands: (r_inner, r_outer) normalised so outermost = 0.95
+  // Robot body radius = 0.30, band edges at 0.40, 0.50, 0.60 in robot units
+  // Scale: 0.60 → 0.95  ⟹  factor = 0.95/0.60
+  const S = 0.95 / 0.60;
+  const BANDS = [
+    { name: 'green',  r0: 0.50 * S, r1: 0.60 * S },
+    { name: 'yellow', r0: 0.40 * S, r1: 0.50 * S },
+    { name: 'red',    r0: 0.30 * S, r1: 0.40 * S },
+  ];
+
+  function pt(r, deg) {
+    const rad = deg * Math.PI / 180;
+    return [r * Math.cos(rad), -r * Math.sin(rad)];  // SVG Y flipped
+  }
+
+  function wedgePath(r0, r1, t1, t2) {
+    const [x0, y0] = pt(r0, t1), [x1, y1] = pt(r1, t1);
+    const [x2, y2] = pt(r1, t2), [x3, y3] = pt(r0, t2);
+    const large = (t2 - t1) > 180 ? 1 : 0;
+    return `M${x0},${y0} L${x1},${y1} A${r1},${r1} 0 ${large},0 ${x2},${y2} L${x3},${y3} A${r0},${r0} 0 ${large},1 ${x0},${y0} Z`;
+  }
+
+  // Outermost band drawn first (under), innermost on top
+  for (const band of BANDS) {
+    for (const zone of ZONES_DEF) {
+      const el = document.createElementNS(NS, 'path');
+      el.setAttribute('d', wedgePath(band.r0, band.r1, zone.t1, zone.t2));
+      el.setAttribute('id', `${zone.id}-${band.name}`);
+      el.setAttribute('class', 'sc-wedge');
+      el.setAttribute('stroke', 'rgba(0,0,0,0.3)');
+      el.setAttribute('stroke-width', '0.01');
+      g.appendChild(el);
+    }
+  }
+})();
+
 function updateSafetyPanel(s) {
-  const map = {
-    'front':       'sc-front',
-    'front_right': 'sc-front-right',
-    'right':       'sc-right',
-    'back_right':  'sc-back-right',
-    'back':        'sc-back',
-    'back_left':   'sc-back-left',
-    'left':        'sc-left',
-    'front_left':  'sc-front-left',
-  };
-  for (const [zone, id] of Object.entries(map)) {
-    const el = document.getElementById(id);
-    if (!el) continue;
-    el.className = 'sc-zone';  // always reset first
-    const c = s[zone];
-    if      (c === 'red')    el.classList.add('sc-red');
-    else if (c === 'yellow') el.classList.add('sc-yellow');
-    else if (c === 'green')  el.classList.add('sc-green');
+  const BANDS = ['red', 'yellow', 'green'];
+  const ZONES = ['front', 'front_right', 'right', 'back_right',
+                 'back',  'back_left',   'left',  'front_left'];
+  const PRIORITY = { null: 0, green: 1, yellow: 2, red: 3 };
+
+  for (const zone of ZONES) {
+    const color = s[zone] || null;
+    for (const band of BANDS) {
+      const el = document.getElementById(`sc-${zone.replace('_','-')}-${band}`);
+      if (!el) continue;
+      el.className.baseVal = 'sc-wedge';
+      if (color && PRIORITY[color] >= PRIORITY[band]) {
+        el.classList.add(`sc-${color}`);
+      }
+    }
   }
 }
 

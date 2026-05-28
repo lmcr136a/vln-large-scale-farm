@@ -150,23 +150,15 @@
       padding: 3px 2px;
       box-sizing: border-box;
     }
-    .sc-wrap {
-      background: white;
-      display: grid;
-      grid-template-columns: 1fr 2fr 1fr;
-      grid-template-rows: 1fr 1fr 1fr;
+    #sc-svg {
       height: 100%;
-      aspect-ratio: 2 / 3;
-      border-radius: 3px;
-      gap: 1px;
-      padding: 1px;
-      box-sizing: border-box;
+      aspect-ratio: 1 / 1;
+      display: block;
     }
-    .sc-zone  { background: rgba(255,255,255,0.15); border-radius: 2px; transition: background 0.2s; }
-    .sc-robot { background: #888; border-radius: 2px; }
-    .sc-red    { background: rgba(255,60,60,0.92) !important; }
-    .sc-yellow { background: rgba(255,200,0,0.92) !important; }
-    .sc-green  { background: rgba(50,200,50,0.92) !important; }
+    .sc-wedge { fill: rgba(255,255,255,0.08); transition: fill 0.2s; }
+    .sc-wedge.sc-red    { fill: rgba(255,60,60,0.85); }
+    .sc-wedge.sc-yellow { fill: rgba(255,200,0,0.85); }
+    .sc-wedge.sc-green  { fill: rgba(50,200,50,0.85); }
     #col-controls { min-width: 145px; gap: 7px; }
     .run-row { display: flex; gap: 6px; align-items: center; }
     .rec-row { display: flex; gap: 6px; align-items: center; }
@@ -260,17 +252,20 @@
 
       <!-- Col 1: Safety Checker -->
       <div id="col-safety">
-        <div class="sc-wrap">
-          <div id="sc-front-left"  class="sc-zone"></div>
-          <div id="sc-front"       class="sc-zone"></div>
-          <div id="sc-front-right" class="sc-zone"></div>
-          <div id="sc-left"        class="sc-zone"></div>
-          <div id="sc-robot"       class="sc-robot"></div>
-          <div id="sc-right"       class="sc-zone"></div>
-          <div id="sc-back-left"   class="sc-zone"></div>
-          <div id="sc-back"        class="sc-zone"></div>
-          <div id="sc-back-right"  class="sc-zone"></div>
-        </div>
+      <!-- Safety checker SVG: forward=up, 8 wedge zones × 3 bands -->
+      <svg id="sc-svg" viewBox="-1 -1 2 2" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <!-- clip to circle for clean outer edge -->
+          <clipPath id="sc-clip"><circle cx="0" cy="0" r="0.95"/></clipPath>
+        </defs>
+        <g clip-path="url(#sc-clip)" id="sc-zones"></g>
+        <!-- Robot body square: ±0.30 of 1.0 unit = ±0.30 -->
+        <rect x="-0.30" y="-0.30" width="0.60" height="0.60"
+              fill="#888" stroke="rgba(255,255,255,0.5)" stroke-width="0.02"/>
+        <!-- Forward arrow -->
+        <polygon points="0,-0.18 0.08,-0.04 -0.08,-0.04"
+                 fill="white" opacity="0.9"/>
+      </svg>
       </div>
 
       <!-- Col 2: Camera streams -->
