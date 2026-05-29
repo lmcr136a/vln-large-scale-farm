@@ -35,7 +35,7 @@ from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import String
 
-PRINT_DEBUG    = True
+PRINT_DEBUG    = False
 DEBUG_INTERVAL = 5.0
 DEBUG_MAX_PTS  = 1_000
 DEBUG_OUT      = './safety_debug.png'

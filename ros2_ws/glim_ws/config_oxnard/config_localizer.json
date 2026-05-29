@@ -1,18 +1,18 @@
 {
   "localizer": {
-    "map_path": "/home/nahyeon/box/saved_map_oxnard/",
+    "map_path": "/home/nahyeon/box/saved_maps/oxnard/",
     "output_map_path": "~/tmp/dump",
     "map_frame": "map",
     "lidar_frame": "livox_frame",
     "vgicp_voxel_resolution": 1.0,
     "prior_inf_scale_trans": 1e3,
     "prior_inf_scale_rot": 1e2,
-    "mount_roll_deg": 180.0,
+    "mount_roll_deg": 0.0,
     "mount_pitch_deg": 0.0,
     "mount_yaw_deg": 0.0,
-    "default_init_pose_x": 0.43,
-    "default_init_pose_y": -1.26,
-    "default_init_pose_z": 0.12,
-    "default_init_pose_yaw_deg": -146.2
+    "default_init_pose_x": 0.0,
+    "default_init_pose_y": 0.0,
+    "default_init_pose_z": 0.0,
+    "default_init_pose_yaw_deg": 0.0
   }
 }

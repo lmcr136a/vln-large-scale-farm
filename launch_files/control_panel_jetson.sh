@@ -16,6 +16,8 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
+# sudo systemctl restart nvargus-daemon
+
 echo "🚗 Setting up CAN interface..."
 sudo ip link set can0 down 2>/dev/null
 sudo ip link set can0 up type can bitrate 500000
