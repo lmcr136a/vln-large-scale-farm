@@ -16,7 +16,7 @@
   "odometry_estimation": {
     "so_name": "libodometry_estimation_ct.so",
     // ivox params
-    "ivox_resolution": 1.0,
+    "ivox_resolution": 0.05,
     "ivox_min_points_dist": 0.1,
     "ivox_lru_thresh": 200,
     // CT-GICP params

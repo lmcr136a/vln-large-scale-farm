@@ -3,8 +3,8 @@
 import re
 from pathlib import Path
 
-RESOLUTION_FINE   = 0.5   # feature matching / new points
-RESOLUTION_COARSE = 0.5   # global map
+RESOLUTION_FINE   = 0.05   # feature matching / new points
+RESOLUTION_COARSE = 0.05   # global map
 
 # matching/correspondence (fine)
 FINE_KEYS = {

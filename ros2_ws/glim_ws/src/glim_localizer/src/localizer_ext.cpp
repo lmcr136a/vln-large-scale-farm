@@ -514,8 +514,10 @@ private:
     // Transform submap points from sensor local to GLIM world frame
     auto cloud = submap_to_glimworld(*submap);
 
-    // VGICP: find T_savedmap_glimworld
-    const Eigen::Isometry3d T_result = vgicp_world(cloud, T_sg);
+    // Use a wider jump threshold for the first few submaps so the initial
+    // alignment can pull the estimate to the correct region of the map.
+    const double jump_limit = (scan_count_ < 5) ? 30.0 : 5.0;
+    const Eigen::Isometry3d T_result = vgicp_world(cloud, T_sg, jump_limit);
 
     { std::lock_guard<std::mutex> lock(mutex_); T_savedmap_glimworld_ = T_result; }
 
@@ -526,17 +528,16 @@ private:
     // Robot position in saved map frame
     const Eigen::Isometry3d T_savedmap_submap = T_result * submap->T_world_origin;
 
-    if (scan_count_ < 5) {
-      logger->info("#{} [LOCAL]:  ({:.2f}, {:.2f}, {:.2f})", scan_count_ + 1,
-        T_savedmap_submap.translation().x(),
-        T_savedmap_submap.translation().y(),
-        T_savedmap_submap.translation().z());
-    } else {
-      logger->info("#{} [GLOBAL]: ({:.2f}, {:.2f}, {:.2f})", scan_count_ + 1,
-        T_savedmap_submap.translation().x(),
-        T_savedmap_submap.translation().y(),
-        T_savedmap_submap.translation().z());
-    }
+    const double vgicp_delta = (T_result.translation() - T_sg.translation()).norm();
+    const bool vgicp_stalled = vgicp_delta < 1e-4;
+    logger->info("#{} [{}]: ({:.2f}, {:.2f}, {:.2f}) | vgicp_delta={:.4f}m{}",
+      scan_count_ + 1,
+      scan_count_ < 5 ? "INIT" : "LOCALIZED",
+      T_savedmap_submap.translation().x(),
+      T_savedmap_submap.translation().y(),
+      T_savedmap_submap.translation().z(),
+      vgicp_delta,
+      vgicp_stalled ? " [STALLED — check init pose]" : "");
 
     // Note: PriorFactor injection removed intentionally.
     // GLIM runs freely for its own odometry/loop closure.
@@ -709,7 +710,8 @@ private:
   // X(0) = T_savedmap_glimworld (optimized directly)
   Eigen::Isometry3d vgicp_world(
     const std::shared_ptr<gtsam_points::PointCloudCPU>& cloud,
-    const Eigen::Isometry3d& init)
+    const Eigen::Isometry3d& init,
+    double jump_limit = 5.0)
   {
     gtsam::NonlinearFactorGraph g;
     gtsam::Values v;
@@ -725,8 +727,9 @@ private:
     try {
       auto r = gtsam::LevenbergMarquardtOptimizer(g, v, lm).optimize();
       auto opt = Eigen::Isometry3d(r.at<gtsam::Pose3>(X(0)).matrix());
-      if ((opt.translation() - init.translation()).norm() > 5.0) {
-        logger->warn("VGICP jumped too far, rejected");
+      const double delta = (opt.translation() - init.translation()).norm();
+      if (delta > jump_limit) {
+        logger->warn("VGICP jumped too far ({:.3f}m > {:.1f}m), rejected", delta, jump_limit);
         return init;
       }
       return opt;
