@@ -69,18 +69,15 @@ def _scale_jpeg_b64(b64: str, width: int) -> str | None:
 
 
 class RecorderProxy:
-    RADIO_INTERVAL        = 3.0    # seconds between radio frames (normal)
-    RADIO_INTERVAL_MANUAL = 12.0   # during manual driving, back off so the
-                                   # half-duplex radio stays free for commands + pose
-
     def __init__(self, internet, telemetry=None, radio=None, image_width=60,
-                 manual_check=None):
+                 manual_check=None, image_interval=1.5):
         self._internet     = internet
         self._telemetry    = telemetry
         self._radio        = radio
         self._last_radio   = 0.0
-        self._radio_width  = image_width  # read from cfg['radio']['image_width']
-        self._manual_check = manual_check  # callable -> bool, True while driving manually
+        self._radio_width  = image_width      # read from cfg['radio']['image_width']
+        self._manual_check = manual_check     # callable -> bool, True while driving manually
+        self._image_int    = image_interval   # min seconds between radio frames
 
     def emit(self, event: str, data=None, namespace=None):
         if event in ("front_frame", "back_frame") and data:
@@ -90,20 +87,23 @@ class RecorderProxy:
                 self._internet.send_rgb_b64(b64, camera)
                 if self._telemetry:
                     self._telemetry.touch(f"zed_{camera}")
-                # Radio: physically-front camera (labeled 'back' in config), rate-limited
+                # Radio (physically-front camera, labeled 'back' in config):
+                # manual driving has top priority — never send images then, so the
+                # half-duplex link stays clear for commands + pose. Otherwise stream
+                # best-effort: only when enough time has passed AND the TX buffer
+                # has spare capacity (send_bulk drops the frame if the link is busy).
                 if camera == "back" and self._radio:
-                    manual = bool(self._manual_check and self._manual_check())
-                    interval = self.RADIO_INTERVAL_MANUAL if manual else self.RADIO_INTERVAL
-                    now = time.time()
-                    if now - self._last_radio >= interval:
-                        self._last_radio = now
-                        small = _scale_jpeg_b64(b64, self._radio_width)
-                        if small:
-                            self._radio.send({
-                                "type":   "radio_frame",
-                                "camera": "back",
-                                "data":   small,
-                            })
+                    if self._manual_check and self._manual_check():
+                        return
+                    if time.time() - self._last_radio < self._image_int:
+                        return
+                    small = _scale_jpeg_b64(b64, self._radio_width)
+                    if small and self._radio.send_bulk({
+                        "type":   "radio_frame",
+                        "camera": "back",
+                        "data":   small,
+                    }):
+                        self._last_radio = time.time()
 
     def start_background_task(self, *a, **kw): pass
 
@@ -277,7 +277,8 @@ def main():
         topics=cfg["ros2"]["topics"],
     )
     uploader  = StationUploader(cfg_path)
-    radio     = RadioComm(port=cfg["radio"]["serial_port"], baud=cfg["radio"]["baud_rate"])
+    radio     = RadioComm(port=cfg["radio"]["serial_port"], baud=cfg["radio"]["baud_rate"],
+                          bulk_threshold=cfg["radio"].get("bulk_tx_threshold", 64))
     internet  = InternetComm(lab_url=cfg["internet"]["lab_ws_url"])
 
     proxy     = SocketIOProxy(radio, internet, uploader, telemetry)
@@ -497,7 +498,8 @@ def main():
         recorder = MultiSensorRecorder(base_node, output_base_dir=cfg["paths"]["data_dir"])
         radio_img_w = cfg.get("radio", {}).get("image_width", 60)
         rec_proxy = RecorderProxy(internet, telemetry, radio, image_width=radio_img_w,
-                                  manual_check=commander.is_manual)
+                                  manual_check=commander.is_manual,
+                                  image_interval=cfg.get("radio", {}).get("image_interval", 1.5))
         for cam in rec_cfg.get("zed_cameras", []):
             recorder.add_zed_camera(
                 serial_number=cam["serial"],

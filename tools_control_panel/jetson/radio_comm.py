@@ -23,7 +23,7 @@ class RadioComm:
       - If no pong arrives before the next ping fires, that round is marked failed.
     """
 
-    def __init__(self, port: str, baud: int, on_command=None):
+    def __init__(self, port: str, baud: int, on_command=None, bulk_threshold: int = 64):
         self._ser = serial.Serial(
             port=port, baudrate=baud,
             bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
@@ -32,6 +32,7 @@ class RadioComm:
         self._on_command = on_command
         self._tx_lock    = threading.Lock()
         self._running    = False
+        self._bulk_threshold = bulk_threshold  # max TX backlog (bytes) to allow a bulk send
 
         self._ping_lock    = threading.Lock()
         self._ping_history: collections.deque = collections.deque()
@@ -63,6 +64,22 @@ class RadioComm:
                 if self._running:
                     log.error(f"Radio TX: {e}")
                 return False
+
+    def send_bulk(self, payload: dict) -> bool:
+        """
+        Best-effort send for large, low-priority data (e.g. camera frames).
+        Skips the frame whenever the serial TX buffer still holds data, so bulk
+        traffic never delays commands, pose, or telemetry on the shared
+        half-duplex link. Returns True only if the frame was actually written.
+        """
+        if not self._running:
+            return False
+        try:
+            if self._ser.out_waiting > self._bulk_threshold:
+                return False  # no spare capacity right now
+        except Exception:
+            pass
+        return self.send(payload)
 
     def get_quality(self) -> int:
         """Return 0-100 based on pong success rate over last PING_HISTORY pings."""
