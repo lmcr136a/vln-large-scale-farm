@@ -98,13 +98,14 @@ class RadioBridge:
                 self._stats["rx_window_bytes"] += len(line)
                 mtype = msg.get("type", "unknown")
                 data  = msg.get("data", msg)
-                if isinstance(data, dict):
+                if mtype == "pose":
+                    self._stats["last_pose"] = {
+                        "x": msg.get("x"), "y": msg.get("y"), "yaw": msg.get("yaw"),
+                    }
+                elif isinstance(data, dict):
                     self._stats["last_rx"][mtype] = list(data.keys())
-                    if mtype == "telemetry":
-                        if "pose" in data:
-                            self._stats["last_pose"] = data["pose"]
-                        if "sensors" in data:
-                            self._stats["last_sensors"] = data["sensors"]
+                    if mtype == "telemetry" and "sensors" in data:
+                        self._stats["last_sensors"] = data["sensors"]
                 else:
                     self._stats["last_rx"][mtype] = str(data)[:60]
 

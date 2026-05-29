@@ -13,7 +13,7 @@
     // Registration error factors
     "registration_error_factor_type": "VGICP",
     "randomsampling_rate": 0.2,
-    "submap_voxel_resolution": 0.05,
+    "submap_voxel_resolution": 0.1,
     "submap_voxelmap_levels": 1,
     "submap_voxelmap_scaling_factor": 2.0,
     "max_implicit_loop_distance": 210.0,

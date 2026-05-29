@@ -23,6 +23,7 @@
 #include <unordered_map>
 #include <random>
 #include <cmath>
+#include <limits>
 
 #include <spdlog/spdlog.h>
 #include <boost/filesystem.hpp>
@@ -90,6 +91,20 @@ public:
       prior_inf_scale_trans_ = cfg.param<double>     ("localizer", "prior_inf_scale_trans",  prior_inf_scale_trans_);
       prior_inf_scale_rot_   = cfg.param<double>     ("localizer", "prior_inf_scale_rot",    prior_inf_scale_rot_);
 
+      // Map-constraint fusion: inject VGICP results as priors on GLIM's X(i)
+      // so GLIM optimizes against the saved map instead of running free.
+      enable_map_constraint_ = cfg.param<bool>  ("localizer", "enable_map_constraint", false);
+      map_prior_prec_trans_  = cfg.param<double>("localizer", "map_prior_prec_trans", 1e2);
+      map_prior_prec_rot_    = cfg.param<double>("localizer", "map_prior_prec_rot",   1e2);
+
+      // Local yaw search around the init heading (recovers small heading error)
+      enable_yaw_search_    = cfg.param<bool>  ("localizer", "enable_yaw_search",    true);
+      yaw_search_steps_     = cfg.param<int>   ("localizer", "yaw_search_steps",     9);
+      yaw_search_range_deg_ = cfg.param<double>("localizer", "yaw_search_range_deg", 40.0);
+      yaw_search_at_submap_ = cfg.param<int>   ("localizer", "yaw_search_at_submap", 3);
+      yaw_search_pos_tol_   = cfg.param<double>("localizer", "yaw_search_pos_tol",   0.5);
+      coarse_res_scale_     = cfg.param<double>("localizer", "coarse_res_scale",     2.5);
+
       // Default initial pose (used when no /initial_pose topic received)
       default_init_x_   = cfg.param<double>("localizer", "default_init_pose_x",       0.0);
       default_init_y_   = cfg.param<double>("localizer", "default_init_pose_y",       0.0);
@@ -155,9 +170,16 @@ public:
     localization_mode_ = !map_path_.empty();
 
     if (!localization_mode_) {
-      logger->warn("map_path not set — new-mapping mode (no localization)");
+      // No saved map: behave exactly like vanilla GLIM. Force-disable the
+      // map constraint regardless of config so nothing extra runs.
+      enable_map_constraint_ = false;
+      logger->warn("map_path not set — new-mapping mode (no localization, no map constraint)");
       return;
     }
+
+    if (enable_map_constraint_)
+      logger->info("map-constraint fusion ENABLED (prec trans={:.1f}, rot={:.1f})",
+        map_prior_prec_trans_, map_prior_prec_rot_);
 
     backend_thread_ = std::thread([this] { backend_task(); });
     logger->info("Loading saved map in background: {}", map_path_);
@@ -221,6 +243,15 @@ private:
   // -----------------------------------------------------------------------
 
   void on_insert_submap_cb(const glim::SubMap::ConstPtr& submap) {
+    // GLIM assigns X(i) by insertion order (i = submaps.size() at insert time),
+    // not by submap->id. The insert-callback order matches that index, so we
+    // track it here and map submap->id -> GLIM X index.
+    const int glim_x_index = glim_insert_counter_++;
+    {
+      std::lock_guard<std::mutex> lock(x_index_mutex_);
+      submap_to_x_index_[submap->id] = glim_x_index;
+    }
+
     // Track latest GLIM pose without TF
     {
       std::lock_guard<std::mutex> lock(glim_pose_mutex_);
@@ -291,7 +322,7 @@ private:
   {
     const auto factors = output_factors_.get_all_and_clear();
     if (!factors.empty()) {
-      logger->debug("Injecting {} localization priors into GLIM", factors.size());
+      logger->info("Injecting {} map-constraint priors into GLIM", factors.size());
       new_factors.add(factors);
     }
   }
@@ -514,10 +545,38 @@ private:
     // Transform submap points from sensor local to GLIM world frame
     auto cloud = submap_to_glimworld(*submap);
 
-    // Use a wider jump threshold for the first few submaps so the initial
-    // alignment can pull the estimate to the correct region of the map.
-    const double jump_limit = (scan_count_ < 5) ? 30.0 : 5.0;
-    const Eigen::Isometry3d T_result = vgicp_world(cloud, T_sg, jump_limit);
+    Eigen::Isometry3d T_result;
+
+    if (enable_yaw_search_ && !yaw_search_done_) {
+      // Wait for the Nth submap (by then the robot has moved a little, so the
+      // submap is richer), then run the yaw search on that single submap using
+      // the same path that works with a precise init yaw. No accumulation.
+      yaw_accum_count_++;
+      if (yaw_accum_count_ < yaw_search_at_submap_)
+        return;  // skip early sparse submaps; nothing published yet
+
+      logger->info("Running yaw search on {} points (submap id={})...",
+        cloud->size(), submap->id);
+
+      // Reference: the OFF-path result (direct fine fit from init). The dyaw=0
+      // candidate inside the search should match this; if it doesn't, the bug
+      // is in the seed construction, not the search selection.
+      double ref_err;
+      Eigen::Isometry3d ref = vgicp_world_scored(cloud, T_sg, 1e9, ref_err);
+      auto yaw_of = [](const Eigen::Isometry3d& T) {
+        return std::atan2(T.linear()(1, 0), T.linear()(0, 0)) * 180.0 / M_PI;
+      };
+      logger->info("REF (direct fit from init): yaw={:.1f} pos=({:.2f},{:.2f},{:.2f}) err={:.1f}",
+        yaw_of(ref), ref.translation().x(), ref.translation().y(), ref.translation().z(), ref_err);
+
+      T_result = vgicp_world_global_yaw(cloud, T_sg);
+      logger->info("SEARCH result: yaw={:.1f} pos=({:.2f},{:.2f},{:.2f})",
+        yaw_of(T_result), T_result.translation().x(), T_result.translation().y(), T_result.translation().z());
+      yaw_search_done_ = true;
+    } else {
+      const double jump_limit = (scan_count_ < 5) ? 30.0 : 5.0;
+      T_result = vgicp_world(cloud, T_sg, jump_limit);
+    }
 
     { std::lock_guard<std::mutex> lock(mutex_); T_savedmap_glimworld_ = T_result; }
 
@@ -539,9 +598,32 @@ private:
       vgicp_delta,
       vgicp_stalled ? " [STALLED — check init pose]" : "");
 
-    // Note: PriorFactor injection removed intentionally.
-    // GLIM runs freely for its own odometry/loop closure.
-    // T_savedmap_glimworld tracks the transform between frames independently.
+    // Map-constraint fusion: inject T_savedmap_submap as a prior on GLIM's
+    // X(glim_index) so the global optimizer aligns GLIM to the saved map.
+    // Skipped when the VGICP result is unreliable (stalled/rejected) or while
+    // the heading is still being resolved by the yaw search.
+    const bool yaw_ready = !enable_yaw_search_ || yaw_search_done_;
+    if (localization_mode_ && enable_map_constraint_ && yaw_ready &&
+        !vgicp_stalled && scan_count_ >= 2) {
+      int glim_x_index = -1;
+      {
+        std::lock_guard<std::mutex> lock(x_index_mutex_);
+        auto it = submap_to_x_index_.find(submap->id);
+        if (it != submap_to_x_index_.end()) glim_x_index = it->second;
+      }
+      if (glim_x_index >= 0) {
+        gtsam::Vector6 prec;
+        prec << map_prior_prec_rot_, map_prior_prec_rot_, map_prior_prec_rot_,
+                map_prior_prec_trans_, map_prior_prec_trans_, map_prior_prec_trans_;
+        auto noise = gtsam::noiseModel::Diagonal::Precisions(prec);
+        output_factors_.push_back(
+          gtsam::make_shared<gtsam::PriorFactor<gtsam::Pose3>>(
+            X(glim_x_index), gtsam::Pose3(T_savedmap_submap.matrix()), noise));
+        logger->debug("Queued map prior on X({}) for submap id={}", glim_x_index, submap->id);
+      } else {
+        logger->warn("No GLIM X index for submap id={}, prior skipped", submap->id);
+      }
+    }
 
     // Viewer update handled by init_pose_viewer in GUI mode
     // Publish T_glimworld_savedworld for viewer update
@@ -707,18 +789,24 @@ private:
     return cloud;
   }
 
-  // X(0) = T_savedmap_glimworld (optimized directly)
-  Eigen::Isometry3d vgicp_world(
+  // X(0) = T_savedmap_glimworld (optimized directly).
+  // Returns the optimized pose and writes the final graph error into out_error
+  // (lower = better fit). On reject/exception, returns init with a large error.
+  Eigen::Isometry3d vgicp_world_scored(
     const std::shared_ptr<gtsam_points::PointCloudCPU>& cloud,
     const Eigen::Isometry3d& init,
-    double jump_limit = 5.0)
+    double jump_limit,
+    double& out_error,
+    const std::shared_ptr<gtsam_points::GaussianVoxelMapCPU>& voxelmap = nullptr)
   {
+    out_error = std::numeric_limits<double>::max();
+    const auto& vmap = voxelmap ? voxelmap : map_voxelmap_;
     gtsam::NonlinearFactorGraph g;
     gtsam::Values v;
     v.insert(X(0), gtsam::Pose3(init.matrix()));
     g.add(gtsam::make_shared<gtsam_points::IntegratedVGICPFactor>(
       gtsam::Pose3::Identity(), X(0),
-      std::static_pointer_cast<const gtsam_points::GaussianVoxelMap>(map_voxelmap_),
+      std::static_pointer_cast<const gtsam_points::GaussianVoxelMap>(vmap),
       cloud));
     gtsam::LevenbergMarquardtParams lm;
     lm.maxIterations = 50;
@@ -732,8 +820,84 @@ private:
         logger->warn("VGICP jumped too far ({:.3f}m > {:.1f}m), rejected", delta, jump_limit);
         return init;
       }
+      out_error = g.error(r);
       return opt;
     } catch (...) { return init; }
+  }
+
+  // X(0) = T_savedmap_glimworld (optimized directly)
+  Eigen::Isometry3d vgicp_world(
+    const std::shared_ptr<gtsam_points::PointCloudCPU>& cloud,
+    const Eigen::Isometry3d& init,
+    double jump_limit = 5.0)
+  {
+    double err;
+    return vgicp_world_scored(cloud, init, jump_limit, err);
+  }
+
+  // Global yaw search: rotate the (rough) init pose about the saved-map Z axis
+  // through several candidate yaw offsets, run VGICP from each, keep the lowest
+  // error. Used only for the first alignment so a wrong starting heading can be
+  // recovered instead of trusting the supplied yaw.
+  Eigen::Isometry3d vgicp_world_global_yaw(
+    const std::shared_ptr<gtsam_points::PointCloudCPU>& cloud,
+    const Eigen::Isometry3d& init)
+  {
+    Eigen::Isometry3d best = init;
+    double best_err = std::numeric_limits<double>::max();
+
+    // Search a window centered on the init yaw, not the full circle. The seed
+    // heading is roughly correct (a few tens of degrees off at most), so a
+    // dense local sweep is both more accurate and avoids locking onto a wrong
+    // far-off orientation.
+    const int    n     = yaw_search_steps_ > 0 ? yaw_search_steps_ : 8;
+    const double range = yaw_search_range_deg_ * M_PI / 180.0;
+    const double step  = (n > 1) ? (2.0 * range / (n - 1)) : 0.0;
+
+    // Pivot for the yaw rotation: the cloud centroid expressed in the saved-map
+    // frame (init * centroid_glimworld). Rotating about this point keeps the
+    // cloud in place and only changes its heading, instead of swinging it away.
+    Eigen::Vector4d c = Eigen::Vector4d::Zero();
+    for (size_t i = 0; i < cloud->size(); i++) c += cloud->points[i];
+    if (cloud->size() > 0) c /= static_cast<double>(cloud->size());
+    c[3] = 1.0;
+    const Eigen::Vector3d pivot_pt = (init * c).head<3>();
+
+    for (int k = 0; k < n; k++) {
+      const double dyaw = -range + step * k;
+
+      Eigen::Isometry3d Rz = Eigen::Isometry3d::Identity();
+      Rz.linear() = Eigen::AngleAxisd(dyaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+      Eigen::Isometry3d pivot = Eigen::Isometry3d::Identity();
+      pivot.translation() = pivot_pt;
+      const Eigen::Isometry3d seed = pivot * Rz * pivot.inverse() * init;
+
+      // Coarse pre-pass widens the convergence basin, then fine refines.
+      double err_c;
+      Eigen::Isometry3d coarse = vgicp_world_scored(cloud, seed, 1e9, err_c, map_voxelmap_coarse_);
+      double err_f;
+      Eigen::Isometry3d cand = vgicp_world_scored(cloud, coarse, 1e9, err_f);
+
+      auto yaw_of = [](const Eigen::Isometry3d& T) {
+        return std::atan2(T.linear()(1, 0), T.linear()(0, 0)) * 180.0 / M_PI;
+      };
+
+      // The init translation is trusted (only yaw is uncertain). A candidate
+      // whose result drifts far from the init position has locked onto a wrong,
+      // repeated structure elsewhere in the map - reject it even if its error is
+      // low, since a low error far from init is a false match in a small room.
+      const double res_from_init = (cand.translation() - init.translation()).norm();
+      const bool rejected = res_from_init > yaw_search_pos_tol_;
+
+      logger->info("  yaw {:+.1f}deg | seed_yaw={:.1f} res_yaw={:.1f} | "
+                   "res_from_init={:.3f} | coarse={:.1f} fine={:.1f}{}",
+        dyaw * 180.0 / M_PI, yaw_of(seed), yaw_of(cand),
+        res_from_init, err_c, err_f, rejected ? " [REJECTED far]" : "");
+
+      if (!rejected && err_f < best_err) { best_err = err_f; best = cand; }
+    }
+    logger->info("Yaw search best fine error={:.1f}", best_err);
+    return best;
   }
 
   // -----------------------------------------------------------------------
@@ -768,6 +932,20 @@ private:
 
     map_voxelmap_ = std::make_shared<gtsam_points::GaussianVoxelMapCPU>(vgicp_res_);
     map_voxelmap_->insert(*ds);
+
+    // Coarse voxelmap for broad-phase registration: a larger voxel widens the
+    // convergence basin so big initial yaw/position errors get pulled in before
+    // the fine pass refines the result.
+    {
+      const double coarse_res = vgicp_res_ * coarse_res_scale_;
+      auto full = std::make_shared<gtsam_points::PointCloudCPU>();
+      full->add_points(all_pts);
+      auto ds_c = voxel_downsample(*full, coarse_res);
+      add_isotropic_covs(*ds_c, 0.01);
+      map_voxelmap_coarse_ = std::make_shared<gtsam_points::GaussianVoxelMapCPU>(coarse_res);
+      map_voxelmap_coarse_->insert(*ds_c);
+      logger->info("Coarse voxelmap: {} pts (res={:.2f})", ds_c->size(), coarse_res);
+    }
 
     // Store all points for entire_map publishing (original density)
     {
@@ -833,12 +1011,33 @@ private:
   double vgicp_res_, prior_inf_scale_trans_, prior_inf_scale_rot_;
   Eigen::Matrix3d mount_R_;
 
+  // Map-constraint fusion
+  bool   enable_map_constraint_ = false;
+  double map_prior_prec_trans_  = 1e2;
+  double map_prior_prec_rot_    = 1e2;
+
+  // Local yaw search
+  bool   enable_yaw_search_    = true;
+  int    yaw_search_steps_     = 9;
+  double yaw_search_range_deg_ = 40.0;
+  int    yaw_search_at_submap_ = 3;
+  double yaw_search_pos_tol_   = 0.5;
+  bool   yaw_search_done_      = false;
+  int    yaw_accum_count_      = 0;
+
+  // GLIM X(i) index tracking: X index is assigned by insert order, not submap->id
+  std::atomic<int> glim_insert_counter_{0};
+  std::mutex x_index_mutex_;
+  std::unordered_map<int, int> submap_to_x_index_;
+
   // Default initial pose (from config_localizer.json, used in headless mode)
   bool has_default_init_ = false;
   double default_init_x_ = 0.0, default_init_y_ = 0.0;
   double default_init_z_ = 0.0, default_init_yaw_ = 0.0;
 
   std::shared_ptr<gtsam_points::GaussianVoxelMapCPU> map_voxelmap_;
+  std::shared_ptr<gtsam_points::GaussianVoxelMapCPU> map_voxelmap_coarse_;
+  double coarse_res_scale_ = 2.5;
 
   // Entire map point storage (all in saved map world frame)
   std::mutex map_pts_mutex_;

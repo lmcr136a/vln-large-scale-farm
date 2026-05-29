@@ -298,6 +298,13 @@ class RemoteServer:
             mtype = msg.get("type")
             if mtype == "telemetry":
                 self._forward_telemetry(msg["data"])
+            elif mtype == "pose":
+                # Real-time pose over radio (used when internet is down).
+                self.sio.emit("robot_pose", self._correct_yaw({
+                    "x":   msg.get("x"),
+                    "y":   msg.get("y"),
+                    "yaw": msg.get("yaw"),
+                }), namespace="/")
             elif mtype == "radio_frame":
                 sio.emit("radio_frame", {
                     "camera": msg.get("camera"),

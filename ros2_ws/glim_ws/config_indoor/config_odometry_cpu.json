@@ -26,7 +26,7 @@
     "ivox_resolution": 0.05,
     "ivox_min_dist": 0.1,
     // VGICP params
-    "vgicp_resolution": 0.05,
+    "vgicp_resolution": 0.3,
     "vgicp_voxelmap_levels": 1,
     "vgicp_voxelmap_scaling_factor": 2.0,
     // Optimizer params

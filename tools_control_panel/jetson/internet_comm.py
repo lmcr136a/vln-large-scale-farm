@@ -1,4 +1,5 @@
 import base64
+import collections
 import logging
 import threading
 import time
@@ -14,13 +15,13 @@ QUALITY = {
     "high":   {"rgb_hz": 5.0, "pc_ratio": 0.40},
 }
 
-# RTT thresholds (seconds)
+# RTT thresholds (seconds) for bandwidth-level selection
 RTT_HIGH   = 0.08   # < 80ms  → high
 RTT_MEDIUM = 0.25   # < 250ms → medium, else low
-QUALITY_CHECK_INTERVAL = 15.0
 
-# Map quality level + RTT → 0-100 score
-_QUALITY_SCORE = {"high": 95, "medium": 60, "low": 25}
+# Link probing: frequent pings + rolling window (mirrors RadioComm).
+PING_INTERVAL = 3.0   # seconds between RTT pings
+PING_HISTORY  = 10    # keep last 10 results (= last 30 s)
 
 
 class InternetComm:
@@ -32,6 +33,9 @@ class InternetComm:
         self._last_rgb: dict[str, float] = {}
         self._sio        = socketio.Client(reconnection=True, reconnection_delay=5, logger=False)
         self._connected  = False
+        self._ping_lock     = threading.Lock()
+        self._ping_history  = collections.deque()
+        self._pending_ping  = None  # timestamp of unanswered ping
         self._setup_events()
 
     @property
@@ -39,10 +43,14 @@ class InternetComm:
         return self._connected
 
     def get_quality(self) -> int:
-        """Return 0-100 internet quality score (Tailscale link to lab PC)."""
+        """0-100 link score = pong success rate over the last PING_HISTORY pings."""
         if not self._connected:
             return 0
-        return _QUALITY_SCORE.get(self._quality, 0)
+        with self._ping_lock:
+            if not self._ping_history:
+                return 0
+            ok = sum(1 for _, success in self._ping_history if success)
+            return int(ok / len(self._ping_history) * 100)
 
     def get_rtt_ms(self) -> float | None:
         return self._last_rtt_ms
@@ -106,6 +114,9 @@ class InternetComm:
         @sio.on("connect", namespace="/")
         def on_connect():
             self._connected = True
+            with self._ping_lock:
+                self._ping_history.clear()
+                self._pending_ping = None
             log.info(f"Internet connected: {self._url}")
             self._sio.emit("jetson_hello", {}, namespace="/")
 
@@ -127,11 +138,19 @@ class InternetComm:
                 self._on_command(data)
 
         @sio.on("pong_rtt", namespace="/")
-        def on_pong(data):
-            pass  # handled inline in _measure_rtt
+        def on_pong(data=None):
+            with self._ping_lock:
+                if self._pending_ping is None:
+                    return
+                rtt = time.time() - self._pending_ping
+                self._last_rtt_ms = round(rtt * 1000, 1)
+                self._record_ping(True)
+                self._pending_ping = None
+            self._update_level_from_rtt(rtt)
 
     def start(self):
         threading.Thread(target=self._connect_loop, daemon=True).start()
+        threading.Thread(target=self._ping_loop,    daemon=True).start()
 
     def _connect_loop(self):
         while True:
@@ -145,50 +164,45 @@ class InternetComm:
                         continue
                     # on_connect fired before exception — connection is actually up
                     log.info("Connected (namespace warning ignored)")
-            threading.Thread(target=self._quality_loop, daemon=True).start()
             self._sio.wait()
             self._connected = False
             log.warning("Internet disconnected, retry in 5s")
             time.sleep(5)
 
-    def _quality_loop(self):
-        """Periodically measure RTT and auto-select quality level."""
-        time.sleep(2.0)  # wait for connection to stabilize
-        while self._connected:
-            rtt = self._measure_rtt()
-            if rtt is not None:
-                self._last_rtt_ms = round(rtt * 1000, 1)
-            if rtt is None:
-                level = "low"
-            elif rtt < RTT_HIGH:
-                level = "high"
-            elif rtt < RTT_MEDIUM:
-                level = "medium"
-            else:
-                level = "low"
+    def _record_ping(self, success: bool):
+        """Append a ping result. Must be called with _ping_lock held."""
+        self._ping_history.append((time.time(), success))
+        while len(self._ping_history) > PING_HISTORY:
+            self._ping_history.popleft()
 
-            if level != self._quality:
-                self._quality = level
-                # log.info(f"Quality auto: {level} (RTT {rtt*1000:.0f}ms)" if rtt else f"Quality auto: {level} (no response)")
+    def _update_level_from_rtt(self, rtt_s: float):
+        """Select bandwidth level (rgb/pointcloud rate) from latest RTT."""
+        if rtt_s < RTT_HIGH:
+            self._quality = "high"
+        elif rtt_s < RTT_MEDIUM:
+            self._quality = "medium"
+        else:
+            self._quality = "low"
 
-            time.sleep(QUALITY_CHECK_INTERVAL)
-
-    def _measure_rtt(self) -> float | None:
-        """Send a ping event and measure round-trip time. Returns seconds or None."""
-        result = [None]
-        done   = threading.Event()
-
-        def handle_pong(data):
-            result[0] = time.time()
-            done.set()
-
-        try:
-            self._sio.on("pong_rtt", handle_pong, namespace="/")
-            t0 = time.time()
-            self._sio.emit("ping_rtt", {}, namespace="/")
-            done.wait(timeout=3.0)
-            if result[0] is not None:
-                return result[0] - t0
-            return None
-        except Exception:
-            return None
+    def _ping_loop(self):
+        """Ping every PING_INTERVAL; an unanswered ping counts as a failure."""
+        time.sleep(2.0)
+        while True:
+            if not self._connected:
+                with self._ping_lock:
+                    self._pending_ping = None
+                    self._ping_history.clear()
+                time.sleep(PING_INTERVAL)
+                continue
+            with self._ping_lock:
+                if self._pending_ping is not None:
+                    self._record_ping(False)   # previous ping never answered
+                    self._quality = "low"
+                self._pending_ping = time.time()
+            try:
+                self._sio.emit("ping_rtt", {}, namespace="/")
+            except Exception:
+                with self._ping_lock:
+                    self._record_ping(False)
+                    self._pending_ping = None
+            time.sleep(PING_INTERVAL)

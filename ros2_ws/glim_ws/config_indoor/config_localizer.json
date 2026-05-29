@@ -1,18 +1,23 @@
 {
   "localizer": {
     "map_path": "/home/nahyeon/box/saved_maps/home",
-    "output_map_path": "~/tmp/dump",
     "map_frame": "map",
-    "lidar_frame": "livox_frame",
-    "vgicp_voxel_resolution": 0.05,
-    "prior_inf_scale_trans": 1e3,
-    "prior_inf_scale_rot": 1e2,
     "mount_roll_deg": 0.0,
     "mount_pitch_deg": 0.0,
     "mount_yaw_deg": 0.0,
     "default_init_pose_x": 0.0,
     "default_init_pose_y": 0.0,
     "default_init_pose_z": 0.0,
-    "default_init_pose_yaw_deg": 0
+    "default_init_pose_yaw_deg": 0.0,
+    "enable_map_constraint": true,
+    "map_prior_prec_trans": 100.0,
+    "map_prior_prec_rot": 100.0,
+    "enable_yaw_search": true,
+    "vgicp_voxel_resolution": 0.2,
+    "coarse_res_scale": 3.0,
+    "yaw_search_range_deg": 20,
+    "yaw_search_steps": 10,
+    "yaw_search_pos_tol": 0.5,
+    "yaw_search_at_submap": 3
   }
 }

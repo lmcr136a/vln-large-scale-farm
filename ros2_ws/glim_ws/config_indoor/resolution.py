@@ -3,18 +3,28 @@
 import re
 from pathlib import Path
 
-RESOLUTION_FINE   = 0.05   # feature matching / new points
-RESOLUTION_COARSE = 0.05   # global map
+# Point/map density: smaller = finer detail. Safe to go to 5cm or below.
+RESOLUTION_POINTS = 0.05
+# Submap downsample / stored map: keep coarser so submaps stay light on Jetson.
+RESOLUTION_COARSE = 0.10
+# VGICP registration voxel: must NOT be tiny, or per-voxel covariances become
+# unstable and rotation alignment breaks. 0.25-0.5m for a closed indoor room.
+RESOLUTION_VGICP = 0.30
 
-# matching/correspondence (fine)
-FINE_KEYS = {
-    "ivox_resolution",
+# Registration voxels (handled separately from density)
+VGICP_KEYS = {
     "vgicp_resolution",
     "vgicp_voxel_resolution",
+}
+
+# Fine: point density / correspondence distance
+FINE_KEYS = {
+    "ivox_resolution",
     "gicp_max_correspondence_dist",
     "keyframe_voxel_resolution",
 }
 
+# Coarse: submap downsample / stored map
 COARSE_KEYS = {
     "submap_voxel_resolution",
     "submap_downsample_resolution",
@@ -31,8 +41,10 @@ def replace_resolutions(text: str) -> tuple[str, list[str]]:
     def replacer(m):
         key = m.group("key")
         old_val = m.group("val")
-        if key in FINE_KEYS:
-            new_val = str(RESOLUTION_FINE)
+        if key in VGICP_KEYS:
+            new_val = str(RESOLUTION_VGICP)
+        elif key in FINE_KEYS:
+            new_val = str(RESOLUTION_POINTS)
         elif key in COARSE_KEYS:
             new_val = str(RESOLUTION_COARSE)
         else:
@@ -55,4 +67,4 @@ for path in sorted(Path(__file__).parent.glob("config*.json")):
     else:
         print(f"\n{path.name}  (no resolution keys found)")
 
-print(f"\n✓ fine={RESOLUTION_FINE}  coarse={RESOLUTION_COARSE}  preprocess={RESOLUTION_FINE}")
+print(f"\n✓ points={RESOLUTION_POINTS}  coarse={RESOLUTION_COARSE}  vgicp={RESOLUTION_VGICP}")
