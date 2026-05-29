@@ -501,6 +501,10 @@ function emergencyStop() {
   }
 }
 
+function clearEstop() {
+  socket.emit('command', { cmd: 'clear_estop' });
+}
+
 async function loadMission() {
   try {
     const r = await fetch('/mission');

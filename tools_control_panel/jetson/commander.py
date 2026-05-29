@@ -8,13 +8,19 @@ from geometry_msgs.msg import Twist
 
 log = logging.getLogger(__name__)
 
-KB_DECAY = 0.5   # seconds — stop if no keyboard command received
+KB_DECAY   = 0.5    # seconds — stop if no manual command arrives within this window
+PUBLISH_HZ = 20.0   # steady cmd_vel rate for manual driving (decoupled from link jitter)
 
 
 class Commander:
     """
-    Priority: estop > keyboard_velocity > autonomous (continue/new_path).
+    Priority: estop > manual velocity > autonomous (continue/new_path).
     Thread-safe. Used by both radio and internet command handlers.
+
+    Manual velocity is republished at PUBLISH_HZ from a held setpoint, so the base
+    keeps moving even when command packets arrive slowly or unevenly over the link
+    (matching how AutonomousController drives). A watchdog zeroes the setpoint if no
+    command arrives within KB_DECAY.
     """
 
     def __init__(self, cmd_vel_pub, auto_controller, config_path: str):
@@ -25,8 +31,11 @@ class Commander:
         self._estopped = False
         self._manual = False
         self._last_kb = 0.0
+        self._vx = 0.0
+        self._vz = 0.0
+        self._last_estop_warn = 0.0
 
-        threading.Thread(target=self._kb_decay_loop, daemon=True).start()
+        threading.Thread(target=self._control_loop, daemon=True).start()
 
     def handle(self, cmd: dict):
         ctype = cmd.get("cmd")
@@ -34,6 +43,7 @@ class Commander:
             if ctype == "stop_auto":
                 # Soft stop — interrupt path following, no estop flag set
                 self._manual = False
+                self._vx = self._vz = 0.0
                 self._auto.stop()
                 self._zero()
                 log.info("Autonomous stopped (soft)")
@@ -41,25 +51,36 @@ class Commander:
             elif ctype == "estop":
                 self._estopped = True
                 self._manual = False
+                self._vx = self._vz = 0.0
                 self._auto.stop()
                 self._zero()
                 log.warning("EMERGENCY STOP received")
 
+            elif ctype == "clear_estop":
+                self._estopped = False
+                log.info("E-STOP cleared — manual driving re-enabled")
+
             elif ctype == "velocity":
                 if self._estopped:
+                    now = time.time()
+                    if now - self._last_estop_warn > 1.0:
+                        self._last_estop_warn = now
+                        log.warning("velocity ignored — E-STOP active (send clear_estop to resume)")
                     return
                 if self._auto.is_active():
                     self._auto.stop()
+                if not self._manual:
+                    log.info(f"Manual driving engaged (vx={cmd.get('vx')} vz={cmd.get('vz')})")
                 self._manual = True
                 self._last_kb = time.time()
-                t = Twist()
-                t.linear.x = float(cmd.get("vx", 0.0))
-                t.angular.z = float(cmd.get("vz", 0.0))
-                self._pub.publish(t)
+                self._vx = float(cmd.get("vx", 0.0))
+                self._vz = float(cmd.get("vz", 0.0))
+                # Published by _control_loop at PUBLISH_HZ — not here.
 
             elif ctype == "continue":
                 self._estopped = False
                 self._manual = False
+                self._vx = self._vz = 0.0
                 waypoints = cmd.get("waypoints")
                 if waypoints:
                     self._auto.start(waypoints)
@@ -81,13 +102,28 @@ class Commander:
     def _zero(self):
         self._pub.publish(Twist())
 
-    def _kb_decay_loop(self):
+    def _control_loop(self):
+        """Publish manual velocity at a steady rate so the base never times out."""
+        interval = 1.0 / PUBLISH_HZ
         while True:
-            time.sleep(0.05)
+            time.sleep(interval)
+            twist = None
             with self._lock:
-                if self._manual and time.time() - self._last_kb > KB_DECAY:
-                    self._manual = False
-                    self._zero()
+                if self._estopped:
+                    twist = Twist()                       # hold stop
+                elif self._auto.is_active():
+                    twist = None                          # autonomous owns cmd_vel
+                elif not self._manual:
+                    twist = None                          # idle
+                elif time.time() - self._last_kb > KB_DECAY:
+                    self._manual = False                  # watchdog: commands stopped
+                    twist = Twist()
+                else:
+                    twist = Twist()
+                    twist.linear.x  = self._vx
+                    twist.angular.z = self._vz
+            if twist is not None:
+                self._pub.publish(twist)
 
     def _apply_config(self, updates: dict):
         try:
