@@ -327,19 +327,22 @@ socket.on('robot_telemetry', (data) => {
   const wifiName = (data.wifi && data.wifi !== '—') ? data.wifi : '—';
   set('info-wifi', wifiName + inetQ);
 
-  // Network traffic: show TX/RX per interface, flag hung iface in red
-  if (data.net && Object.keys(data.net).length > 0) {
-    const netEl = document.getElementById('info-net');
-    if (netEl) {
-      const parts = Object.entries(data.net).map(([iface, s]) => {
-        const alive = s.alive;
-        const color = alive ? '#00d26e' : '#ff5050';
-        const label = `<span style="color:${color}">${iface}</span>`;
-        const tx    = s.tx_kbps != null ? `↑${s.tx_kbps.toFixed(0)}` : '↑?';
-        const rx    = s.rx_kbps != null ? `↓${s.rx_kbps.toFixed(0)}` : '↓?';
-        return `${label} ${tx}/${rx} KB/s`;
-      });
-      netEl.innerHTML = parts.join('&nbsp;&nbsp;');
+  // WiFi TX alive check — find the WiFi interface and show % utilization next to SSID
+  if (data.net) {
+    const wifiEl = document.getElementById('info-wifi');
+    const netEl  = document.getElementById('info-net');
+    // WiFi iface heuristic: starts with 'w' (wlan0, wlP1p1s0, wlp3s0 etc.)
+    const wifiIface = Object.entries(data.net).find(([k]) => k.startsWith('w'));
+    if (wifiIface) {
+      const [, s] = wifiIface;
+      const total = (s.tx_kbps || 0) + (s.rx_kbps || 0);
+      // Show as % of a rough 10 MB/s WiFi ceiling, capped at 99
+      const pct   = Math.min(99, Math.round(total / (10 * 1024) * 100));
+      const color = s.alive ? '' : 'color:#ff5050';
+      const tag   = s.alive ? '' : ' ⚠';
+      if (netEl) netEl.innerHTML = `<span style="${color}">${pct}%${tag}</span>`;
+    } else if (netEl) {
+      netEl.textContent = '—';
     }
   }
 

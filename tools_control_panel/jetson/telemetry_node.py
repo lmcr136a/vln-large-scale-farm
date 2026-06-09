@@ -81,7 +81,8 @@ class TelemetryNode(Node):
     def _net_monitor_loop(self):
         INTERVAL = 3.0
         # Interfaces to skip (loopback, docker, virtual)
-        SKIP_PREFIX = ("lo", "docker", "veth", "br-", "virbr")
+        # Only track WiFi interfaces (wlan*, wlp*, wlP* etc.)
+        WIFI_PREFIX = ("wl",)
         while True:
             time.sleep(INTERVAL)
             try:
@@ -91,7 +92,7 @@ class TelemetryNode(Node):
                 with self._net_lock:
                     prev = dict(self._net_prev)
                 for iface, c in counters.items():
-                    if any(iface.startswith(p) for p in SKIP_PREFIX):
+                    if not any(iface.startswith(p) for p in WIFI_PREFIX):
                         continue
                     tx, rx = c.bytes_sent, c.bytes_recv
                     if iface in prev:
