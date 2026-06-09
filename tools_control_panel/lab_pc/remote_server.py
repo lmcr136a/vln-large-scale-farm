@@ -442,23 +442,24 @@ class RemoteServer:
 
     def _forward_telemetry(self, data: dict):
         """Forward all telemetry fields to panel clients."""
+        # process_status is the current field; tmux_status kept for legacy Jetson builds.
+        proc = data.get("process_status") or data.get("tmux_status")
         self.sio.emit("robot_telemetry", {
-            # original fields
-            "battery":          data.get("batt", -1),
-            "sensors":          data.get("sensors", {}),
-            "storage_pct":      data.get("storage_pct", -1),
-            "mode":             data.get("mode", "idle"),
-            "estop":            data.get("estop", False),
-            "wifi":             data.get("wifi", "—"),
-            "internet":         data.get("internet", False),
-            # new fields
-            "radio_quality":    data.get("radio_quality"),
-            "radio_rtt_ms":     data.get("radio_rtt_ms"),
-            "internet_quality": data.get("internet_quality"),
-            "internet_rtt_ms":  data.get("internet_rtt_ms"),
-            "safety_status":    data.get("safety_status"),
-            "gps_status":       data.get("gps_status"),
-            "tmux_status":      data.get("tmux_status"),
+            "battery":               data.get("batt", -1),
+            "sensors":               data.get("sensors", {}),
+            "storage_pct":           data.get("storage_pct", -1),
+            "mode":                  data.get("mode", "idle"),
+            "estop":                 data.get("estop", False),
+            "wifi":                  data.get("wifi", "—"),
+            "internet":              data.get("internet", False),
+            "radio_quality":         data.get("radio_quality"),
+            "radio_rtt_ms":          data.get("radio_rtt_ms"),
+            "internet_quality":      data.get("internet_quality"),
+            "internet_rtt_ms":       data.get("internet_rtt_ms"),
+            "safety_status":         data.get("safety_status"),
+            "gps_status":            data.get("gps_status"),
+            "process_status":        proc,
+            "process_status_detail": data.get("process_status_detail"),
         }, namespace="/")
 
     def _to_robot(self, cmd: dict):
