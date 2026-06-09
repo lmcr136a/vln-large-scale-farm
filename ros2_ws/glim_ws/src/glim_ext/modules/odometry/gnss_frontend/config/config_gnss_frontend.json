@@ -1,0 +1,10 @@
+{
+  "gnss_frontend": {
+    "gnss_topic": "/gps/fix",
+    "min_baseline": 5.0,
+    "min_matches": 10,
+    "prior_inf_scale": [1e4, 1e4, 0.0],
+    "lever_arm_body": [0.0, 0.0, 0.0],
+    "max_factor_lag_frames": 40
+  }
+}

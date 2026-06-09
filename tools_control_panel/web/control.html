@@ -15,6 +15,8 @@
       padding: 2px 2px;
       box-sizing: border-box;
       gap: 2px;
+      flex-shrink: 0;          /* never squash other columns */
+      max-width: 340px;        /* hard cap so images don't dominate the bar */
     }
     #col-cameras-imgs {
       display: flex;
@@ -22,12 +24,14 @@
       gap: 2px;
       flex: 1;
       min-height: 0;
+      overflow: hidden;        /* clip if images somehow overflow */
     }
     #col-cameras-imgs img {
-      height: 100%;
+      max-height: 100%;
       width: auto;
       object-fit: contain;
       display: block;
+      flex-shrink: 1;
     }
     #col-cameras-ctrl {
       display: flex;
@@ -67,6 +71,7 @@
       min-width: 120px;
       font-size: 12pt;
       gap: 5px;
+      flex-shrink: 0;   /* keep WiFi/CPU/Batt visible at all times */
     }
     .sys-row {
       display: flex;
@@ -86,6 +91,7 @@
       min-width: 170px;
       font-size: 10pt;
       gap: 3px;
+      flex-shrink: 0;
     }
     .sec-divider-hdr {
       font-size: 9pt;
@@ -159,7 +165,7 @@
     .sc-wedge.sc-red    { fill: rgba(255,60,60,0.85); }
     .sc-wedge.sc-yellow { fill: rgba(255,200,0,0.85); }
     .sc-wedge.sc-green  { fill: rgba(50,200,50,0.85); }
-    #col-controls { min-width: 145px; gap: 7px; }
+    #col-controls { min-width: 145px; gap: 7px; flex-shrink: 0; }
     .run-row { display: flex; gap: 6px; align-items: center; }
     .rec-row { display: flex; gap: 6px; align-items: center; }
 
@@ -168,6 +174,7 @@
       min-width: 190px;
       gap: 0;
       padding-right: 6px;
+      flex-shrink: 0;
     }
     #upcoming-next {
       font-size: 12pt;
@@ -204,6 +211,7 @@
       min-width: 155px;
       gap: 4px;
       font-size: 10pt;
+      flex-shrink: 0;
     }
     .col-proc-title {
       font-size: 10pt;

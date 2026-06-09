@@ -199,7 +199,6 @@ class RtkGpsNode(Node):
         now = time.time()
         cutoff = now - GNSS_RADIO_WINDOW
         with self._rtcm_window_lock:
-            # Evict old entries
             while self._rtcm_window and self._rtcm_window[0][0] < cutoff:
                 self._rtcm_window.popleft()
             total = len(self._rtcm_window)
@@ -207,10 +206,9 @@ class RtkGpsNode(Node):
 
         if total == 0:
             return 0
-        rate = total / GNSS_RADIO_WINDOW  # packets/sec over window
+        rate = total / GNSS_RADIO_WINDOW
         bad_ratio = bad / total if total > 0 else 0.0
-        # Nominal rate ~1-4 Hz; score saturates at 1.5 Hz
-        rate_score = min(1.0, rate / 1.5)  # 1.5 Hz saturates to 100% in 10s window
+        rate_score = min(1.0, rate / 1.5)
         quality_factor = max(0.0, 1.0 - bad_ratio * 3.0)
         return int(rate_score * quality_factor * 100)
 
@@ -218,7 +216,19 @@ class RtkGpsNode(Node):
     def _bridge_thread(self):
         rtcm_buf = b''
         while rclpy.ok():
-            data = self._radio.read(4096)
+            try:
+                data = self._radio.read(4096)
+            except Exception as e:
+                self.get_logger().error(f'Radio read error: {e}, retrying...')
+                time.sleep(1.0)
+                try:
+                    self._radio.close()
+                    self._radio = serial.Serial(RADIO_PORT, BAUD_RADIO, timeout=0.1)
+                except Exception as e2:
+                    self.get_logger().error(f'Radio reconnect failed: {e2}')
+                    time.sleep(3.0)
+                rtcm_buf = b''
+                continue
             if not data:
                 continue
             rtcm_buf += data
@@ -392,7 +402,6 @@ class RtkGpsNode(Node):
             s = dict(self._state)
         if s['lat'] is None:
             return
-        # Publish for RTK Fixed or Float (not bare 3D fix or no-fix)
         if not (s['rtk_fixed'] or s['rtk_float']):
             return
         msg = NavSatFix()
@@ -405,7 +414,6 @@ class RtkGpsNode(Node):
         msg.latitude  = s['lat']
         msg.longitude = s['lon']
         msg.altitude  = s['alt']
-        # Float: larger covariance; Fixed: tighter
         scale = 1.0 if s['rtk_fixed'] else 3.0
         sigma_h = s['hdop'] * 0.3 * scale
         sigma_v = sigma_h * 1.5
@@ -450,7 +458,6 @@ class RtkGpsNode(Node):
             'base_alt':      _r(s['base_alt'], 2),
             'fw_ver':        s['fw_ver'],
         }
-        # Baseline distance (rough metres)
         if s['lat'] is not None and s['base_lat'] is not None:
             status['baseline_m'] = round(
                 math.sqrt((s['lat'] - s['base_lat'])**2 +
@@ -475,11 +482,14 @@ class RtkGpsNode(Node):
         quality = (f"carrSoln:{carr_map.get(s['carrSoln'], '---'):6s}  "
                    f"hAcc:{s['hAcc'] if s['hAcc'] else '-':<6}  "
                    f"strong:{s['strong']}  cr-used:{s['cr_used']}  L2-cr:{s['l2_cr']}")
-        if s['base_lat'] is not None:
+        if s['base_lat'] is not None and s['lat'] is not None:
             baseline = math.sqrt((s['lat'] - s['base_lat'])**2 +
                                  (s['lon'] - s['base_lon'])**2) * 111000
             base_str = (f"id:{s['base_id']}  {s['base_lat']:.6f},{s['base_lon']:.6f}  "
                         f"alt:{s['base_alt']:.1f}m  baseline:{baseline:.1f}m")
+        elif s['base_lat'] is not None:
+            base_str = (f"id:{s['base_id']}  {s['base_lat']:.6f},{s['base_lon']:.6f}  "
+                        f"alt:{s['base_alt']:.1f}m  baseline:waiting...")
         else:
             base_str = "waiting for 1005..."
 
@@ -496,7 +506,7 @@ class RtkGpsNode(Node):
 
         status_style = "\033[1m"
         if s["rtk_fixed"]:
-            status_style += "\033[4m"  # underline for fixed
+            status_style += "\033[4m"
 
         status_fmt = f"{status_style}{status:12s}\033[22m\033[24m"
 

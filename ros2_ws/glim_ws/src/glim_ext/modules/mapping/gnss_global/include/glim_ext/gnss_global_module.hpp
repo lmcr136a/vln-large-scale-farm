@@ -254,9 +254,7 @@ public:
         T_world_enu = T_enu_world.inverse();
         transformation_initialized = true;
         logger->info("T_world_enu initialized — publishing aligned GPS to /glim_ros/fixed_gps");
-
-        // Publish all accumulated points retroactively
-        publish_all_gps_points();
+        // pending submaps (incl. retroactive) are published + factored in the loop below
       }
 
       if (transformation_initialized && !lever_arm_refined &&
@@ -265,22 +263,23 @@ public:
       }
 
       if (transformation_initialized) {
-        const Eigen::Vector3d p_gnss_world = T_world_enu * submap_coords.back().tail<3>();
-        const Eigen::Matrix3d R_world_lidar = submaps.back()->T_world_origin.linear();
-        const Eigen::Vector3d xyz = p_gnss_world - R_world_lidar * lever_arm_body;
+        const auto model = gtsam::noiseModel::Diagonal::Precisions(prior_inf_scale);
+        for (size_t i = num_factored; i < submaps.size(); i++) {
+          const Eigen::Vector3d p_gnss_world = T_world_enu * submap_coords[i].tail<3>();
+          const Eigen::Matrix3d R_world_lidar = submaps[i]->T_world_origin.linear();
+          const Eigen::Vector3d xyz = p_gnss_world - R_world_lidar * lever_arm_body;
 
-        logger->debug("submap={} gnss_corrected={}",
-          convert_to_string(submaps.back()->T_world_origin.translation().eval()),
-          convert_to_string(xyz));
+          logger->debug("submap={} gnss_corrected={}",
+            convert_to_string(submaps[i]->T_world_origin.translation().eval()),
+            convert_to_string(xyz));
 
-        // Publish corrected GPS point
-        publish_gps_point(xyz, submaps.back()->frames.back()->stamp);
+          publish_gps_point(xyz, submaps[i]->frames.back()->stamp);
 
-        const auto& submap = submaps.back();
-        const auto model = gtsam::noiseModel::Isotropic::Information(prior_inf_scale.asDiagonal());
-        output_factors.push_back(
-          gtsam::NonlinearFactor::shared_ptr(
-            new gtsam::PoseTranslationPrior<gtsam::Pose3>(X(submap->id), xyz, model)));
+          output_factors.push_back(
+            gtsam::NonlinearFactor::shared_ptr(
+              new gtsam::PoseTranslationPrior<gtsam::Pose3>(X(submaps[i]->id), xyz, model)));
+        }
+        num_factored = submaps.size();
       }
     }
   }
@@ -350,6 +349,7 @@ private:
 
   std::vector<SubMap::ConstPtr> submaps;
   std::vector<Eigen::Vector4d> submap_coords;
+  size_t num_factored = 0;
 
   std::string gnss_topic;
   Eigen::Vector3d prior_inf_scale;

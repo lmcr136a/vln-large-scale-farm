@@ -339,8 +339,9 @@ socket.on('robot_telemetry', (data) => {
   // GPS panel
   if (data.gps_status) updateGpsPanel(data.gps_status);
 
-  // Tmux panel
-  if (data.tmux_status) updateTmuxPanel(data.tmux_status);
+  // Tmux panel — support both new process_status and legacy tmux_status
+  const procStatus = data.process_status || data.tmux_status;
+  if (procStatus) updateTmuxPanel(procStatus);
 
   // Safety checker
   if (data.safety_status) updateSafetyPanel(data.safety_status);
@@ -663,7 +664,7 @@ const TMUX_WINDOW_LABELS = {
   gps:           'GPS Node',
   slam:          'SLAM',
   map_saver:     '2D Map',
-  obstacle:      'O.D.',
+  ground:        'Ground Seg',
 };
 
 function updateTmuxPanel(status) {

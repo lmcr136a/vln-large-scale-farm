@@ -75,9 +75,9 @@ class RecorderProxy:
         self._telemetry    = telemetry
         self._radio        = radio
         self._last_radio   = 0.0
-        self._radio_width  = image_width      # read from cfg['radio']['image_width']
-        self._manual_check = manual_check     # callable -> bool, True while driving manually
-        self._image_int    = image_interval   # min seconds between radio frames
+        self._radio_width  = image_width
+        self._manual_check = manual_check
+        self._image_int    = image_interval
 
     def emit(self, event: str, data=None, namespace=None):
         if event in ("front_frame", "back_frame") and data:
@@ -87,11 +87,6 @@ class RecorderProxy:
                 self._internet.send_rgb_b64(b64, camera)
                 if self._telemetry:
                     self._telemetry.touch(f"zed_{camera}")
-                # Radio (physically-front camera, labeled 'back' in config):
-                # manual driving has top priority — never send images then, so the
-                # half-duplex link stays clear for commands + pose. Otherwise stream
-                # best-effort: only when enough time has passed AND the TX buffer
-                # has spare capacity (send_bulk drops the frame if the link is busy).
                 if camera == "back" and self._radio:
                     if self._manual_check and self._manual_check():
                         return
@@ -131,20 +126,41 @@ class TmuxMonitor:
     """
     Polls tmux windows for process liveness and can restart them via send-keys.
     Self-restart of jetson_main.py stays in window Main (index 2).
+
+    _DEFAULTS keys map 1-to-1 with what the web/radio clients display as
+    process_status.  Each entry has:
+      check  — substring passed to `pgrep -f`; must be specific enough to
+                avoid false-positive matches against unrelated processes.
+      cmd    — command sent to tmux to (re)start the process.
+      window — tmux window name  (mutually exclusive with pane)
+      pane   — tmux pane target  (e.g. "Sensors.0")
     """
 
     _DEFAULTS = {
-        "jetson_agent": {"check": "jetson_main.py", "window": "Main"},
-        "slam":      {"check": "glim_rosnode",   "cmd": "bash launch_files/launch_slam.sh",             "window": "SLAM"},
-        "map_saver": {"check": "save_map_glim",  "cmd": "python3 tools_control_panel/mapping/save_map_glim.py", "window": "2Dmap"},
-        "obstacle":  {"check": "safety_checker", "cmd": "python3 tools_scout_control/safety_checker.py","window": "O.D."},
-        "gps":       {"check": "rtk_gps_node",   "cmd": "python3 scripts/rtk_gps_node.py",              "pane":   "Sensors.2"},
-        "lidar":     {"check": "robosense",       "cmd": "bash launch_files/launch_robosense.sh",        "pane":   "Sensors.0"},
-        "imu":       {"check": "xsens",           "cmd": "bash launch_files/launch_xsens.sh",           "pane":   "Sensors.1"},
+        # key              check pattern (pgrep -f)       restart cmd                                                              window/pane
+        "jetson_agent": {"check": "jetson_main.py",        "window": "Main"},
+        "slam":         {"check": "glim_rosnode",           "cmd": "bash launch_files/launch_slam.sh",                              "window": "SLAM"},
+        "map_saver":    {"check": "save_map_glim",          "cmd": "python3 tools_control_panel/mapping/save_map_glim_groundseg.py","window": "2Dmap"},
+        "ground":       {"check": "launch_ground_seg.sh",   "cmd": "bash launch_files/launch_ground_seg.sh",                       "window": "Ground"},
+        "gps":          {"check": "rtk_gps_node.py",        "cmd": "python3 scripts/rtk_gps_node.py",                              "pane":   "Sensors.2"},
+        "lidar":        {"check": "launch_robosense.sh",    "cmd": "bash launch_files/launch_robosense.sh",                        "pane":   "Sensors.0"},
+        "imu":          {"check": "launch_xsens.sh",        "cmd": "bash launch_files/launch_xsens.sh",                            "pane":   "Sensors.1"},
+    }
+
+    # Human-readable labels forwarded to the UI (radio + internet)
+    _LABELS = {
+        "jetson_agent": "Jetson Main",
+        "slam":         "GLIM SLAM",
+        "map_saver":    "2D Map Saver",
+        "ground":       "Ground Seg",
+        "gps":          "RTK GPS",
+        "lidar":        "LiDAR",
+        "imu":          "IMU",
     }
 
     _JETSON_RESTART_CMD = "bash launch_files/control_panel_jetson.sh"
     _RESTART_DELAY_S    = 10
+    _POLL_INTERVAL_S    = 5
 
     def __init__(self, session: str, cfg_windows: dict | None = None):
         self._session = session
@@ -152,42 +168,50 @@ class TmuxMonitor:
         if cfg_windows:
             for k, v in cfg_windows.items():
                 self._windows.setdefault(k, {}).update(v)
-        self._status: dict = {}
+        # status: {key: {"alive": bool, "pid": int|None, "label": str}}
+        self._status: dict = {
+            k: {"alive": None, "pid": None, "label": self._LABELS.get(k, k)}
+            for k in self._windows
+        }
         self._lock = threading.Lock()
         threading.Thread(target=self._poll_loop, daemon=True).start()
 
     def get_status(self) -> dict:
+        """Return a shallow copy of the current process status dict."""
         with self._lock:
-            return dict(self._status)
+            return {k: dict(v) for k, v in self._status.items()}
+
+    def get_status_flat(self) -> dict:
+        """
+        Return a compact dict suitable for embedding in telemetry:
+          {"slam": true, "ground": false, "lidar": true, ...}
+        None means 'unknown / poll not yet completed'.
+        """
+        with self._lock:
+            return {k: v["alive"] for k, v in self._status.items()}
 
     def restart(self, key: str) -> bool:
         spec = self._windows.get(key)
-        if not spec:
+        if not spec or "cmd" not in spec:
+            log.warning(f"TmuxMonitor.restart: no restart cmd for '{key}'")
             return False
         target = spec.get("pane") or spec.get("window")
         if not target:
             return False
         t = f"{self._session}:{target}"
         try:
-            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
+            for _ in range(3):
+                subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
+                time.sleep(1.0)
             time.sleep(1.0)
-            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
-            time.sleep(1.0)
-            subprocess.run(["tmux", "send-keys", "-t", t, "C-c", ""], timeout=3)
-            time.sleep(3.0)
             subprocess.run(["tmux", "send-keys", "-t", t, spec["cmd"], "Enter"], timeout=3)
-            log.info(f"TmuxMonitor: restarted {key} in {t}")
+            log.info(f"TmuxMonitor: restarted '{key}' in {t}")
             return True
         except Exception as e:
-            log.error(f"TmuxMonitor restart {key}: {e}")
+            log.error(f"TmuxMonitor restart '{key}': {e}")
             return False
 
     def restart_jetson_main(self) -> bool:
-        """
-        Signal control_panel_jetson.sh directly → triggers cleanup() trap →
-        kills scout + jetson cleanly with sleep 1 (same as manual Ctrl+C).
-        Shell then reads buffered restart command.
-        """
         t = f"{self._session}:Main"
         restart_cmd = f"sleep 5 && {self._JETSON_RESTART_CMD}"
         try:
@@ -201,20 +225,37 @@ class TmuxMonitor:
 
     def _poll_loop(self):
         while True:
-            status = {}
+            new_status = {}
             for key, spec in self._windows.items():
                 check = spec.get("check", "")
-                try:
-                    r = subprocess.run(
-                        ["pgrep", "-f", check],
-                        capture_output=True, timeout=2
-                    )
-                    status[key] = r.returncode == 0
-                except Exception:
-                    status[key] = None
+                label = self._LABELS.get(key, key)
+                alive = None
+                pid   = None
+                if check:
+                    try:
+                        r = subprocess.run(
+                            ["pgrep", "-f", check],
+                            capture_output=True, timeout=2,
+                        )
+                        alive = r.returncode == 0
+                        if alive and r.stdout.strip():
+                            try:
+                                pid = int(r.stdout.strip().split()[0])
+                            except (ValueError, IndexError):
+                                pass
+                    except Exception:
+                        alive = None
+                new_status[key] = {"alive": alive, "pid": pid, "label": label}
+
             with self._lock:
-                self._status = status
-            time.sleep(5)
+                self._status = new_status
+
+            # log any transitions at INFO level
+            for key, s in new_status.items():
+                if s["alive"] is False:
+                    log.warning(f"TmuxMonitor: '{key}' ({s['label']}) is NOT running")
+
+            time.sleep(self._POLL_INTERVAL_S)
 
 
 def pc2_to_numpy(msg: PointCloud2) -> np.ndarray:
@@ -283,7 +324,7 @@ def main():
 
     proxy     = SocketIOProxy(radio, internet, uploader, telemetry)
 
-    tmux_session    = cfg.get("tmux", {}).get("session", "vln")
+    tmux_session     = cfg.get("tmux", {}).get("session", "vln")
     tmux_cfg_windows = cfg.get("tmux", {}).get("windows", None)
     try:
         tmux_monitor = TmuxMonitor(tmux_session, tmux_cfg_windows)
@@ -333,7 +374,7 @@ def main():
             try:
                 recorder.stop_recording()
             except Exception:
-                pass  # recorder may already be partially destroyed
+                pass
         if _rosbag_proc[0]:
             _rosbag_proc[0].terminate()
             _rosbag_proc[0] = None
@@ -343,7 +384,7 @@ def main():
                                       stop_recording=stop_rec_cb)
     commander = Commander(cmd_vel_pub, auto_ctrl, cfg_path)
 
-    _restart_lock = threading.Lock()  # prevents double-fire from radio+internet
+    _restart_lock = threading.Lock()
 
     def on_command(cmd):
         ctype = cmd.get("cmd")
@@ -383,7 +424,7 @@ def main():
 
     _safety_status: list    = [{}]
     _safety_last_t: list    = [0.0]
-    _SAFETY_TIMEOUT         =  1.5   # seconds — clear panel if no message
+    _SAFETY_TIMEOUT         =  1.5
 
     def safety_cb(msg: _StdString):
         try:
@@ -475,9 +516,6 @@ def main():
         if internet.connected and (now_s - _pose_send_state["last"]) >= 1.0 / POSE_INTERNET_HZ:
             _pose_send_state["last"] = now_s
             internet.send_pose(p.x, p.y, raw_yaw)
-        # Radio pose: keeps the panel tracking the robot in real time when the
-        # internet link is down. Server applies the same yaw correction as the
-        # internet path, so send the raw (pre-correction) values here too.
         if POSE_RADIO_HZ > 0 and (now_s - _pose_send_state["radio"]) >= 1.0 / POSE_RADIO_HZ:
             _pose_send_state["radio"] = now_s
             radio.send({"type": "pose", "x": p.x, "y": p.y, "yaw": raw_yaw})
@@ -512,7 +550,6 @@ def main():
     except Exception as e:
         log.warning(f"ZED recorder init failed: {e}")
 
-
     def telemetry_loop():
         interval = 1.0 / TELEMETRY_HZ
         while True:
@@ -533,9 +570,12 @@ def main():
                 if time.time() - _safety_last_t[0] < _SAFETY_TIMEOUT
                 else {}
             )
-            if tmux_monitor:
-                snap["tmux_status"] = tmux_monitor.get_status()
 
+            if tmux_monitor:
+                # process_status: {"slam": true, "ground": false, ...}
+                # process_status_detail: {"slam": {"alive": true, "pid": 1234, "label": "GLIM SLAM"}, ...}
+                snap["process_status"]        = tmux_monitor.get_status_flat()
+                snap["process_status_detail"] = tmux_monitor.get_status()
 
             radio.send({"type": "telemetry", "data": snap})
             internet.send_telemetry(snap)
@@ -565,10 +605,10 @@ def main():
     try:
         shutdown.wait()
     except OSError:
-        pass  # Python 3.10 known issue: SIGTERM during Event.wait()
+        pass
 
     log.info("Shutting down")
-    stop_rec_cb()  # stop rosbag + camera recording if active
+    stop_rec_cb()
     if recorder:
         try:
             recorder.stop_recording()

@@ -10,17 +10,20 @@ import json
 import os
 import yaml
 import threading
+from scipy.ndimage import uniform_filter
 from PIL import Image, ImageDraw
 import tf2_ros
 from tf2_ros import TransformException
 from rclpy.duration import Duration
 
 current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MAP_UPDATE_RATE    = 10.0
+MAP_UPDATE_RATE    = 5.0
 TARGET_FRAME       = 'map'
-IMAGE_RES_MUL      = 1
+IMAGE_RES_MUL      = 2
 MIN_POINTS_CELL    = 2
 MAX_HEIGHT_M       = 1.0   # ignore points above this height from local ground (robot clearance)
+
+Z_COLOR_RANGE      = 0.6
 
 ROBOT_ACTUAL_SIZE  = 0.6
 ROBOT_RADIUS_M     = ROBOT_ACTUAL_SIZE / 2.0
@@ -29,11 +32,14 @@ ROBOT_ARROW_LEN_M  = 0.46
 COLOR_TRAJECTORY   = (100, 255, 170)
 COLOR_ROBOT_CIRCLE = (0, 0, 255)
 COLOR_ARROW        = (255, 255, 0)
-COLOR_GPS_FIXED    = (255, 140, 0)    # lever-arm corrected GPS (submap rate)
-COLOR_GPS_RAW      = (255, 0, 200)    # raw GPS in world frame (alignment check)
+COLOR_GROUND = (255, 140, 0)
 
 POINT_SAMPLE_RATIO = 1.0
-PIXEL_GRID_SIZE = 0.1
+PIXEL_GRID_SIZE = 0.5
+
+
+SMOOTH_RADIUS_M    = 10   # neighbor range (m)
+MEDIAN_FILTER_SIZE = max(3, int(SMOOTH_RADIUS_M / PIXEL_GRID_SIZE))
 
 
 def _quat_to_rot(qx, qy, qz, qw):
@@ -122,77 +128,82 @@ def build_occupancy_grid(pts, iu, iv, grid_w, grid_h):
     valid     = cell_count >= MIN_POINTS_CELL
     valid_idx = np.where(valid)[0]
 
-    z_cell_flat = np.full(num_cells, np.nan, dtype=np.float32)
+    z_low_flat = np.full(num_cells, np.nan, dtype=np.float32)
     if valid_idx.size > 0:
-        # s_z is sorted ascending within each cell -> last element is the max
-        max_global = cell_end[valid_idx] - 1
-        z_cell_flat[valid_idx] = s_z[max_global]
+        p10_offset = np.floor(cell_count[valid_idx] * 0.10).astype(int)
+        p10_global = cell_start[valid_idx] + p10_offset
+        z_low_flat[valid_idx] = s_z[p10_global]
 
-    z_cell   = z_cell_flat.reshape(grid_h, grid_w)
+    z_low    = z_low_flat.reshape(grid_h, grid_w)
     hit_mask = valid.reshape(grid_h, grid_w)
 
-    grid   = np.where(hit_mask, 0, -1).astype(np.int8)
-    z_cell = np.where(hit_mask, z_cell, np.nan).astype(np.float32)
+    z_low_filled = np.where(np.isnan(z_low), 0.0, z_low)
+    z_low_smooth = uniform_filter(z_low_filled, size=MEDIAN_FILTER_SIZE, mode='nearest')
 
-    return grid, z_cell
+    grid  = np.where(hit_mask, 0, -1).astype(np.int8)
+    z_rel = np.where(hit_mask, (z_low - z_low_smooth).astype(np.float32), np.nan)
+
+    return grid, z_rel
 
 
-_HEIGHT_STOPS = np.array([
-    [50,   50,   100],
-    [50,   50,   120],
-    [50,   50,   150],
-    [255, 255, 100],
-    [255, 50,  50],
-    [0,   255, 255],
-], dtype=np.float32)
+_COLOR_LOW  = np.array([20,  20,  50],  dtype=np.float32)  # low relative height
+_COLOR_HIGH = np.array([255, 200, 200], dtype=np.float32)  # high relative height
 
 
 def _height_color(t: np.ndarray) -> np.ndarray:
-    """t: (N,) float 0-1 -> (N, 3) uint8, piecewise-linear over _HEIGHT_STOPS."""
-    seg    = len(_HEIGHT_STOPS) - 1
-    scaled = np.clip(t, 0.0, 1.0) * seg
-    idx    = np.minimum(np.floor(scaled).astype(int), seg - 1)
-    frac   = (scaled - idx)[:, np.newaxis]
-    c = _HEIGHT_STOPS[idx] * (1.0 - frac) + _HEIGHT_STOPS[idx + 1] * frac
-    return np.clip(c, 0, 255).astype(np.uint8)
+    """t: (N,) float 0-1 → (N, 3) uint8, linear gradient low→high."""
+    return np.clip(
+        _COLOR_LOW + (_COLOR_HIGH - _COLOR_LOW) * t[:, np.newaxis],
+        0, 255
+    ).astype(np.uint8)
 
 
-def _draw_gps_path(draw, path_xy, to_px, color, lw, dot_r):
-    """Draw a GPS path (already rotated into image frame) as line + dots."""
-    if path_xy is None or len(path_xy) == 0:
-        return
-    pts_px = [to_px(p[0], p[1]) for p in path_xy]
-    if len(pts_px) > 1:
-        draw.line(pts_px, fill=color, width=lw)
-    for cx, cy in pts_px:
-        draw.ellipse([cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r], fill=color)
-
-
-def render_and_save(grid, z_cell, meta, path_xyz, robot_yaw, output_path,
-                    world_rot_angle=0.0, robot_pos=None,
-                    gps_fixed_xy=None, gps_raw_xy=None):
+def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, output_path, world_rot_angle=0.0, robot_pos=None,
+                    ground_xyz=None, traversable_cells=None):
     try:
         u_min = meta['u_min']
         v_min = meta['v_min']
         gs    = meta['grid_size']
         gh    = meta['grid_height']
 
+        observed   = (grid >= 0)
+        z_rel_safe = np.where(observed & np.isfinite(z_rel), z_rel, 0.0)
+        t_full = np.clip(z_rel_safe / (2.0 * Z_COLOR_RANGE) + 0.5, 0.0, 1.0)
+
+        arr = np.full((*grid.shape, 3), 30, dtype=np.uint8)
+
         observed = (grid >= 0)
-        valid    = observed & np.isfinite(z_cell)
+        if observed.any():
+            arr[observed] = _height_color(t_full[observed])
 
-        t_full = np.zeros(grid.shape, dtype=np.float32)
-        if valid.any():
-            # linear min-max -> each color band spans an equal z interval
-            zv   = z_cell[valid]
-            zmin = float(zv.min())
-            zmax = float(zv.max())
-            rng  = zmax - zmin
-            if rng > 1e-6:
-                t_full[valid] = (z_cell[valid] - zmin) / rng
+        if ground_xyz is not None and len(ground_xyz) > 0:
+            gu = ((ground_xyz[:, 0] - u_min) / gs).astype(int)
+            gv = ((ground_xyz[:, 1] - v_min) / gs).astype(int)
 
-        arr = np.full((*grid.shape, 3), 0, dtype=np.uint8)
-        if valid.any():
-            arr[valid] = _height_color(t_full[valid])
+            inside = (
+                (gu >= 0) & (gu < arr.shape[1]) &
+                (gv >= 0) & (gv < arr.shape[0])
+            )
+            overlay_mask = inside
+            if traversable_cells is not None:
+                traversable_cells = np.asarray(traversable_cells, dtype=bool).reshape(-1)
+                expected_cells = arr.shape[0] * arr.shape[1]
+                if traversable_cells.size == expected_cells:
+                    overlay_mask = np.zeros_like(inside, dtype=bool)
+                    inside_idx = np.flatnonzero(inside)
+                    flat_idx = gv[inside_idx] * arr.shape[1] + gu[inside_idx]
+                    overlay_mask[inside_idx] = traversable_cells[flat_idx]
+                else:
+                    print('[Mapper] traversable cell mask size mismatch; rendering unfiltered ground overlay')
+
+            alpha = 0.8
+            rr = gv[overlay_mask]
+            cc = gu[overlay_mask]
+            ground_color = np.array(COLOR_GROUND, dtype=np.float32)
+            arr[rr, cc] = (
+                arr[rr, cc].astype(np.float32) * (1.0 - alpha) +
+                ground_color * alpha
+            ).astype(np.uint8)
 
         base = Image.fromarray(np.flipud(arr), mode='RGB')
         img  = base.resize(
@@ -214,12 +225,6 @@ def render_and_save(grid, z_cell, meta, path_xyz, robot_yaw, output_path,
         if path_xyz is not None and len(path_xyz) > 1:
             pts_px = [to_px(p[0], p[1]) for p in path_xyz]
             draw.line(pts_px, fill=COLOR_TRAJECTORY, width=lw)
-
-        # GPS overlays — same map frame as trajectory, already rotated by world_rot_angle
-        gps_lw    = max(1, lw // 2)
-        gps_dot_r = max(1.5, r_px * 0.13)
-        _draw_gps_path(draw, gps_raw_xy,   to_px, COLOR_GPS_RAW,   gps_lw, gps_dot_r)
-        _draw_gps_path(draw, gps_fixed_xy, to_px, COLOR_GPS_FIXED, gps_lw, gps_dot_r)
 
         _robot_pos = robot_pos if robot_pos is not None else (path_xyz[-1] if path_xyz is not None and len(path_xyz) > 0 else None)
         if _robot_pos is not None:
@@ -294,9 +299,7 @@ class ContinuousPointCloudMapper(Node):
         self._pose_lock    = threading.Lock()
         self._current_pose = None
 
-        self.path_positions      = np.empty((0, 3))
-        self.gps_fixed_positions  = np.empty((0, 3))
-        self.gps_raw_positions    = np.empty((0, 3))
+        self.path_positions    = np.empty((0, 3))
         self.latest_pose       = None
         self.latest_pose_frame = None
         self.last_map_time     = None
@@ -304,6 +307,7 @@ class ContinuousPointCloudMapper(Node):
         self._best_angle       = None
         self._map_params       = None
         self._use_aligned      = False   # True when entire_map is empty → fall back to aligned_points
+        self.latest_ground_pts = None
 
         self.tf_buffer   = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -331,13 +335,6 @@ class ContinuousPointCloudMapper(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=10)
 
-        # GNSS module publishes nav_msgs/Path with default (reliable/volatile) QoS
-        gps_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10)
-
         self.pc_sub        = self.create_subscription(
             PointCloud2,  t['entire_map'],     self.pc_callback,        map_qos)
         self.aligned_sub   = self.create_subscription(
@@ -346,12 +343,8 @@ class ContinuousPointCloudMapper(Node):
             Path,         t['trajectory'],  self.traj_callback,      odom_qos)
         self.curr_pose_sub = self.create_subscription(
             PoseStamped,  t['pose'],        self.curr_pose_callback, curr_pose_qos)
-        self.gps_fixed_sub = self.create_subscription(
-            Path, t.get('gps_fixed', '/glim_ros/fixed_gps'),
-            self.gps_fixed_callback, gps_qos)
-        self.gps_raw_sub   = self.create_subscription(
-            Path, t.get('gps_raw', '/glim_ros/raw_gps_world'),
-            self.gps_raw_callback, gps_qos)
+        self.ground_sub = self.create_subscription(
+            PointCloud2, t['ground_points'], self.ground_callback, map_qos)
 
         self._status_timer = self.create_timer(5.0,  self._print_status)
         self._params_timer = self.create_timer(0.2,  self._write_map_params)
@@ -393,22 +386,6 @@ class ContinuousPointCloudMapper(Node):
                                          p.pose.position.y,
                                          p.pose.position.z] for p in msg.poses], dtype=np.float64)
 
-    def gps_fixed_callback(self, msg: Path):
-        """Lever-arm corrected GPS in map frame (submap rate)."""
-        if not msg.poses:
-            return
-        self.gps_fixed_positions = np.array([[p.pose.position.x,
-                                              p.pose.position.y,
-                                              p.pose.position.z] for p in msg.poses], dtype=np.float64)
-
-    def gps_raw_callback(self, msg: Path):
-        """Raw GPS transformed to map frame (GPS rate, alignment check)."""
-        if not msg.poses:
-            return
-        self.gps_raw_positions = np.array([[p.pose.position.x,
-                                           p.pose.position.y,
-                                           p.pose.position.z] for p in msg.poses], dtype=np.float64)
-
     def curr_pose_callback(self, msg: PoseStamped):
         """Receive current robot pose from /glim_ros/localized_curr_pose (10 Hz).
         Used for robot drawing and current pose tracking."""
@@ -447,7 +424,13 @@ class ContinuousPointCloudMapper(Node):
         if pts is None or pts.size == 0:
             return
         self._process_cloud(pts)
-
+    def ground_callback(self, msg: PointCloud2):
+        pts = transform_cloud_to_map(msg, self.tf_buffer, self.get_logger())
+        if pts is None or pts.size == 0:
+            self.latest_ground_pts = None
+            return
+        pts = pts[np.isfinite(pts).all(axis=1)]
+        self.latest_ground_pts = pts if pts.size > 0 else None
     def _process_cloud(self, pts: np.ndarray):
         now = self.get_clock().now()
         if self.last_map_time is not None:
@@ -472,22 +455,16 @@ class ContinuousPointCloudMapper(Node):
         theta = self._best_angle
 
         pts_r  = _rotate_xy(pts, theta)
+
+        ground_r = None
+        if self.latest_ground_pts is not None:
+            ground_r = _rotate_xy(self.latest_ground_pts, theta)
+
         path_r = _rotate_xy(self.path_positions, theta) \
             if len(self.path_positions) > 0 else self.path_positions
-        gps_fixed_r = _rotate_xy(self.gps_fixed_positions, theta) \
-            if len(self.gps_fixed_positions) > 0 else self.gps_fixed_positions
-        gps_raw_r = _rotate_xy(self.gps_raw_positions, theta) \
-            if len(self.gps_raw_positions) > 0 else self.gps_raw_positions
 
-        # Include GPS in bounds so misalignment stays visible
-        xs = [pts_r[:, 0], path_r[:, 0]]
-        ys = [pts_r[:, 1], path_r[:, 1]]
-        if len(gps_fixed_r) > 0:
-            xs.append(gps_fixed_r[:, 0]); ys.append(gps_fixed_r[:, 1])
-        if len(gps_raw_r) > 0:
-            xs.append(gps_raw_r[:, 0]); ys.append(gps_raw_r[:, 1])
-        all_x = np.concatenate(xs)
-        all_y = np.concatenate(ys)
+        all_x = np.concatenate([pts_r[:, 0], path_r[:, 0]])
+        all_y = np.concatenate([pts_r[:, 1], path_r[:, 1]])
         u_min  = float(np.floor(all_x.min() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
         v_min  = float(np.floor(all_y.min() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
         u_max  = float(np.ceil( all_x.max() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
@@ -498,6 +475,25 @@ class ContinuousPointCloudMapper(Node):
         iu = np.clip(((pts_r[:, 0] - u_min) / PIXEL_GRID_SIZE).astype(int), 0, grid_w - 1)
         iv = np.clip(((pts_r[:, 1] - v_min) / PIXEL_GRID_SIZE).astype(int), 0, grid_h - 1)
 
+        #traversability mask - includes height filter
+        cell_idx = iv * grid_w + iu
+
+        z_floor = np.full(grid_w * grid_h, np.inf, dtype=np.float32)
+        np.minimum.at(z_floor, cell_idx, pts_r[:, 2].astype(np.float32))
+
+        z_rel = pts_r[:, 2] - z_floor[cell_idx]
+
+        ground_band_pts = (z_rel >= 0.0) & (z_rel <= 0.3)
+        blocked_pts = (z_rel > 0.3) & (z_rel < 1.0)
+
+        ground_cells = np.zeros(grid_w * grid_h, dtype=bool)
+        blocked_cells = np.zeros(grid_w * grid_h, dtype=bool)
+
+        ground_cells[cell_idx[ground_band_pts]] = True
+        blocked_cells[cell_idx[blocked_pts]] = True
+
+        traversable_cells = ground_cells & ~blocked_cells
+
         # Filter out points above robot clearance height from local ground
         cell_idx   = iv * grid_w + iu
         z_floor    = np.full(grid_w * grid_h, np.inf, dtype=np.float32)
@@ -505,7 +501,7 @@ class ContinuousPointCloudMapper(Node):
         keep       = pts_r[:, 2] <= z_floor[cell_idx] + MAX_HEIGHT_M
         pts_r, iu, iv = pts_r[keep], iu[keep], iv[keep]
 
-        grid, z_cell = build_occupancy_grid(pts_r, iu, iv, grid_w, grid_h)
+        grid, z_rel = build_occupancy_grid(pts_r, iu, iv, grid_w, grid_h)
 
         robot_yaw = extract_yaw_in_map(
             self.latest_pose, self.latest_pose_frame, self.tf_buffer)
@@ -522,10 +518,10 @@ class ContinuousPointCloudMapper(Node):
         robot_pos_r = (robot_xy_r[0, 0], robot_xy_r[0, 1])
 
         final_res, _, _ = render_and_save(
-            grid, z_cell, meta, path_r, robot_yaw_rotated,
+            grid, z_rel, meta, path_r, robot_yaw_rotated,
             os.path.join(self._output_dir, self._map_image),
             world_rot_angle=theta, robot_pos=robot_pos_r,
-            gps_fixed_xy=gps_fixed_r, gps_raw_xy=gps_raw_r)
+            ground_xyz=ground_r, traversable_cells=traversable_cells)
         if final_res is None:
             return
 
@@ -548,16 +544,15 @@ class ContinuousPointCloudMapper(Node):
         print(f'[Map #{self.map_version}] {grid_w}x{grid_h}  '
               f'free={n_free}  obs={n_obs}  '
               f'res={final_res:.3f}m/px  yaw={np.degrees(robot_yaw):.1f}deg  '
-              f'rot={np.degrees(theta):.0f}deg  src={src_label}  '
-              f'gps_fixed={len(self.gps_fixed_positions)}  gps_raw={len(self.gps_raw_positions)}')
+              f'rot={np.degrees(theta):.0f}deg  src={src_label}')
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-
+    
     default_cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../config/farm_config.yaml")
-
+    
     parser.add_argument('--config', default=default_cfg)
     args, _ = parser.parse_known_args()
     with open(os.path.expanduser(args.config)) as f:

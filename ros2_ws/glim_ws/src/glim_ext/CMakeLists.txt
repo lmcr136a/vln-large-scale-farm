@@ -16,6 +16,7 @@ option(ENABLE_SCAN_CONTEXT "Enable ScanContext Loop Detector" OFF)
 option(ENABLE_DBOW "Enable DBoW Loop Detector" OFF)
 option(ENABLE_GNSS "Enable GNSS module (ROS1 is not supported)" ON)
 option(ENABLE_FLATEARTHER "Enable flat earth assumption module" ON)
+option(ENABLE_GNSS_FRONTEND "Enable GNSS front-end constraints" ON)
 
 #################
 ## ROS-related ##
@@ -99,6 +100,11 @@ endif()
 if(ENABLE_FLATEARTHER)
   add_subdirectory(modules/mapping/flat_earther)
   list(APPEND glim_ext_LIBRARIES flat_earther)
+endif()
+
+if(ENABLE_GNSS_FRONTEND)
+  add_subdirectory(modules/odometry/gnss_frontend)
+  list(APPEND glim_ext_LIBRARIES gnss_frontend)
 endif()
 
 #############

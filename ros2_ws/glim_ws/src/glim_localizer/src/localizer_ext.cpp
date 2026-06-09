@@ -103,6 +103,7 @@ public:
       yaw_search_range_deg_ = cfg.param<double>("localizer", "yaw_search_range_deg", 40.0);
       yaw_search_at_submap_ = cfg.param<int>   ("localizer", "yaw_search_at_submap", 3);
       yaw_search_pos_tol_   = cfg.param<double>("localizer", "yaw_search_pos_tol",   0.5);
+      freeze_after_         = cfg.param<int>   ("localizer", "freeze_after",         5);
       coarse_res_scale_     = cfg.param<double>("localizer", "coarse_res_scale",     2.5);
 
       // Default initial pose (used when no /initial_pose topic received)
@@ -355,8 +356,10 @@ private:
     if (!initialized_) return;
 
     // Find the most recently processed submap and update T_savedmap_glimworld
-    // This corrects drift caused by GLIM loop closure changing T_world_origin
-    if (!submaps.empty() && last_processed_submap_id_ >= 0) {
+    // This corrects drift caused by GLIM loop closure changing T_world_origin.
+    // Once frozen, skip this - a loop closure here is what made the whole map
+    // suddenly swing.
+    if (!transform_frozen_ && !submaps.empty() && last_processed_submap_id_ >= 0) {
       for (const auto& sm : submaps) {
         if (sm && sm->id == last_processed_submap_id_) {
           // T_savedmap_glimworld = T_savedmap_submap_result * T_glimworld_submap_new^-1
@@ -547,7 +550,14 @@ private:
 
     Eigen::Isometry3d T_result;
 
-    if (enable_yaw_search_ && !yaw_search_done_) {
+    if (transform_frozen_) {
+      // After the freeze point, T_savedmap_glimworld is locked. We no longer run
+      // VGICP (which occasionally jumped and swung the whole map). The robot
+      // pose still tracks via GLIM odometry through the frozen transform, and
+      // priors keep being injected below.
+      std::lock_guard<std::mutex> lock(mutex_);
+      T_result = T_savedmap_glimworld_;
+    } else if (enable_yaw_search_ && !yaw_search_done_) {
       // Wait for the Nth submap (by then the robot has moved a little, so the
       // submap is richer), then run the yaw search on that single submap using
       // the same path that works with a precise init yaw. No accumulation.
@@ -580,6 +590,13 @@ private:
 
     { std::lock_guard<std::mutex> lock(mutex_); T_savedmap_glimworld_ = T_result; }
 
+    // Freeze the transform once enough fixes have been made, so a later VGICP
+    // jump can never swing the whole map again.
+    if (!transform_frozen_ && scan_count_ + 1 >= freeze_after_) {
+      transform_frozen_ = true;
+      logger->info("T_savedmap_glimworld frozen after {} fixes", scan_count_ + 1);
+    }
+
     // Save for on_update_submaps to correct after loop closure
     last_processed_submap_id_ = submap->id;
     last_T_savedmap_submap_ = T_result * submap->T_world_origin;
@@ -603,8 +620,11 @@ private:
     // Skipped when the VGICP result is unreliable (stalled/rejected) or while
     // the heading is still being resolved by the yaw search.
     const bool yaw_ready = !enable_yaw_search_ || yaw_search_done_;
+    // When frozen, vgicp_delta is ~0 by construction (no VGICP run), so don't
+    // treat that as "stalled" - priors must keep flowing after the freeze.
+    const bool prior_ok = !vgicp_stalled || transform_frozen_;
     if (localization_mode_ && enable_map_constraint_ && yaw_ready &&
-        !vgicp_stalled && scan_count_ >= 2) {
+        prior_ok && scan_count_ >= 2) {
       int glim_x_index = -1;
       {
         std::lock_guard<std::mutex> lock(x_index_mutex_);
@@ -1022,6 +1042,8 @@ private:
   double yaw_search_range_deg_ = 40.0;
   int    yaw_search_at_submap_ = 3;
   double yaw_search_pos_tol_   = 0.5;
+  int    freeze_after_         = 5;
+  bool   transform_frozen_     = false;
   bool   yaw_search_done_      = false;
   int    yaw_accum_count_      = 0;
 

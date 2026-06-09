@@ -46,7 +46,7 @@ ros2:
   cmd_vel_topic: '/cmd_vel'
   topics:
     raw_pose:    '/glim_ros/localized_curr_pose'  # raw GLIM output — do not use directly
-    pose:        '/corrected_pose'                 # extrinsic-corrected — use everywhere
+    pose:        '/glim_ros/localized_curr_pose'                 # extrinsic-corrected — use everywhere
     battery:     '/battery_state'
     lidar:       '/rslidar_points'
     zed_front:   '/zed_front/rgb/image_raw'
@@ -57,6 +57,7 @@ ros2:
     entire_map:  '/glim_ros/entire_map'
     aligned_points: '/glim_ros/aligned_points' 
     trajectory:  '/glim_ros/localized_trajectory'
+    ground_points: '/patchworkpp/ground'
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. SCHEDULE CONFIG
@@ -92,16 +93,16 @@ autonomous:
   min_waypoints:   2
 
   position_tolerance:    0.1
-  orientation_tolerance: 5
+  orientation_tolerance: 1
 
   linear_speed:      0.5
   angular_speed:     0.5
 
-  r1: [0.06, 10]
-  r2: [0.2, 60]
-  r3: [0.4, 360]
-  t1: [0.05, 1.0]
-  t2: [0.2, 2.0]
+  r1: [0.08, 10]
+  r2: [0.3, 20]
+  r3: [0.5, 360]
+  t1: [0.1, 1.0]
+  t2: [0.3, 2.0]
   t3: [0.5, 999]
 
 # ── Recording ─────────────────────────────────────────────────────────────────
