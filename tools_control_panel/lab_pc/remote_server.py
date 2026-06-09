@@ -179,7 +179,13 @@ class RemoteServer:
 
         @sio.on("disconnect")
         def on_disconnect():
-            log.info(f"Panel disconnected: {request.sid}")
+            if request.sid == self._inet_sid:
+                # Jetson internet connection dropped — clear so _to_robot falls back to radio
+                self._inet_connected = False
+                self._inet_sid       = None
+                log.warning("Jetson internet disconnected")
+            else:
+                log.info(f"Panel disconnected: {request.sid}")
 
         @sio.on("heartbeat")
         def on_heartbeat():
@@ -327,6 +333,8 @@ class RemoteServer:
             self._inet_sid       = request.sid
             log.info(f"Jetson internet connected: {request.sid}")
 
+
+
         @sio.on("ping_rtt")
         def inet_ping(data):
             sio.emit("pong_rtt", {}, to=request.sid)
@@ -460,6 +468,7 @@ class RemoteServer:
             "gps_status":            data.get("gps_status"),
             "process_status":        proc,
             "process_status_detail": data.get("process_status_detail"),
+            "net":                   data.get("net"),
         }, namespace="/")
 
     def _to_robot(self, cmd: dict):

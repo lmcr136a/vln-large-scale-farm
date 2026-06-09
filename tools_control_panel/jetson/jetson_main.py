@@ -313,15 +313,16 @@ def main():
 
     cfg = load_config(cfg_path)
 
-    # Suppress CycloneDDS "ddsi_udp_conn_write ... retcode -1" spam.
-    # These errors fire when DDS discovery holds stale peer IPs that are no
-    # longer reachable (e.g. a laptop that disconnected from the robot WiFi).
-    # ROS_LOCALHOST_ONLY=1 is the cleanest fix when all nodes run on this host.
-    # If cross-host ROS2 comm is needed, unset this in the launch script and
-    # manage peers via a proper cyclonedds.xml instead.
-    if not os.environ.get("ROS_LOCALHOST_ONLY") and not os.environ.get("CYCLONEDDS_URI"):
-        os.environ["ROS_LOCALHOST_ONLY"] = "1"
-        log.info("ROS_LOCALHOST_ONLY=1 set to suppress ddsi UDP write errors")
+    # CYCLONEDDS_URI must be set before any DDS library is loaded — setting it
+    # here inside Python is too late if other nodes already started discovery.
+    # The correct place is control_panel_jetson.sh (see cyclonedds_jetson.xml).
+    # We still warn loudly if it is missing so the issue is easy to spot.
+    if not os.environ.get("CYCLONEDDS_URI"):
+        log.warning(
+            "CYCLONEDDS_URI not set — ddsi UDP write errors may appear. "
+            "Add 'export CYCLONEDDS_URI=file:///path/to/cyclonedds_jetson.xml' "
+            "to control_panel_jetson.sh before launching any ROS2 process."
+        )
 
     rclpy.init()
 

@@ -327,6 +327,22 @@ socket.on('robot_telemetry', (data) => {
   const wifiName = (data.wifi && data.wifi !== '—') ? data.wifi : '—';
   set('info-wifi', wifiName + inetQ);
 
+  // Network traffic: show TX/RX per interface, flag hung iface in red
+  if (data.net && Object.keys(data.net).length > 0) {
+    const netEl = document.getElementById('info-net');
+    if (netEl) {
+      const parts = Object.entries(data.net).map(([iface, s]) => {
+        const alive = s.alive;
+        const color = alive ? '#00d26e' : '#ff5050';
+        const label = `<span style="color:${color}">${iface}</span>`;
+        const tx    = s.tx_kbps != null ? `↑${s.tx_kbps.toFixed(0)}` : '↑?';
+        const rx    = s.rx_kbps != null ? `↓${s.rx_kbps.toFixed(0)}` : '↓?';
+        return `${label} ${tx}/${rx} KB/s`;
+      });
+      netEl.innerHTML = parts.join('&nbsp;&nbsp;');
+    }
+  }
+
   // Radio quality + one-way delay
   updateRadioScore('score-radio', data.radio_quality);
   const radioRttEl = document.getElementById('radio-delay');
