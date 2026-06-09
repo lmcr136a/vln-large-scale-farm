@@ -1,5 +1,5 @@
 #!/bin/bash
-export CYCLONEDDS_URI=file:/home/nahyeon/box/vln-large-scale-farm/config/cyclonedds_jetson.xml
+export CYCLONEDDS_URI=file:///home/nahyeon/box/vln-large-scale-farm/tools_control_panel/config/cyclonedds_jetson.xml
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 GLIM_WS="$WORKSPACE_DIR/ros2_ws/glim_ws"
