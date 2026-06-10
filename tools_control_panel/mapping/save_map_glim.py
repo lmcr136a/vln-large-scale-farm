@@ -35,6 +35,8 @@ COLOR_GPS_RAW      = (255, 0, 200)    # raw GPS in world frame (alignment check)
 POINT_SAMPLE_RATIO = 1.0
 PIXEL_GRID_SIZE = 0.1
 
+MAX_LONG_EDGE = 4000
+
 
 def _quat_to_rot(qx, qy, qz, qw):
     return np.array([
@@ -124,7 +126,7 @@ def build_occupancy_grid(pts, iu, iv, grid_w, grid_h):
 
     z_cell_flat = np.full(num_cells, np.nan, dtype=np.float32)
     if valid_idx.size > 0:
-        # s_z is sorted ascending within each cell -> last element is the max
+        # s_z sorted ascending within each cell -> last element is max
         max_global = cell_end[valid_idx] - 1
         z_cell_flat[valid_idx] = s_z[max_global]
 
@@ -157,15 +159,24 @@ def _height_color(t: np.ndarray) -> np.ndarray:
     return np.clip(c, 0, 255).astype(np.uint8)
 
 
+LINE_ALPHA = 50
+
+
+def _with_alpha(color, alpha=LINE_ALPHA):
+    """Append alpha channel to an RGB tuple."""
+    return (*color, alpha)
+
+
 def _draw_gps_path(draw, path_xy, to_px, color, lw, dot_r):
     """Draw a GPS path (already rotated into image frame) as line + dots."""
     if path_xy is None or len(path_xy) == 0:
         return
     pts_px = [to_px(p[0], p[1]) for p in path_xy]
+    c = _with_alpha(color)
     if len(pts_px) > 1:
-        draw.line(pts_px, fill=color, width=lw)
+        draw.line(pts_px, fill=c, width=lw)
     for cx, cy in pts_px:
-        draw.ellipse([cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r], fill=color)
+        draw.ellipse([cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r], fill=c)
 
 
 def render_and_save(grid, z_cell, meta, path_xyz, robot_yaw, output_path,
@@ -182,7 +193,6 @@ def render_and_save(grid, z_cell, meta, path_xyz, robot_yaw, output_path,
 
         t_full = np.zeros(grid.shape, dtype=np.float32)
         if valid.any():
-            # linear min-max -> each color band spans an equal z interval
             zv   = z_cell[valid]
             zmin = float(zv.min())
             zmax = float(zv.max())
@@ -197,8 +207,10 @@ def render_and_save(grid, z_cell, meta, path_xyz, robot_yaw, output_path,
         base = Image.fromarray(np.flipud(arr), mode='RGB')
         img  = base.resize(
             (base.width * IMAGE_RES_MUL, base.height * IMAGE_RES_MUL),
-            resample=Image.NEAREST)
-        draw = ImageDraw.Draw(img)
+            resample=Image.NEAREST).convert('RGBA')
+
+        overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        draw    = ImageDraw.Draw(overlay)
 
         m = IMAGE_RES_MUL / gs
 
@@ -213,7 +225,7 @@ def render_and_save(grid, z_cell, meta, path_xyz, robot_yaw, output_path,
 
         if path_xyz is not None and len(path_xyz) > 1:
             pts_px = [to_px(p[0], p[1]) for p in path_xyz]
-            draw.line(pts_px, fill=COLOR_TRAJECTORY, width=lw)
+            draw.line(pts_px, fill=_with_alpha(COLOR_TRAJECTORY), width=lw)
 
         # GPS overlays — same map frame as trajectory, already rotated by world_rot_angle
         gps_lw    = max(1, lw // 2)
@@ -231,10 +243,10 @@ def render_and_save(grid, z_cell, meta, path_xyz, robot_yaw, output_path,
             ax = rx + al_px * dx
             ay = ry + al_px * dy
 
-            draw.line([(rx, ry), (ax, ay)], fill=COLOR_ARROW, width=lw)
+            draw.line([(rx, ry), (ax, ay)], fill=_with_alpha(COLOR_ARROW, 255), width=lw)
             draw.ellipse(
                 [rx - r_px, ry - r_px, rx + r_px, ry + r_px],
-                fill=COLOR_ROBOT_CIRCLE, outline=COLOR_ARROW, width=lw)
+                fill=_with_alpha(COLOR_ROBOT_CIRCLE, 255), outline=_with_alpha(COLOR_ARROW, 255), width=lw)
 
         AXIS_MARGIN  = 14
         AXIS_LEN     = 40
@@ -249,21 +261,31 @@ def render_and_save(grid, z_cell, meta, path_xyz, robot_yaw, output_path,
 
         x_tip = (ax_ox + AXIS_LEN * cos_th,
                  ax_oy + AXIS_LEN * sin_th)
-        draw.line([(ax_ox, ax_oy), x_tip], fill=(220, 50, 50), width=AXIS_LW)
+        draw.line([(ax_ox, ax_oy), x_tip], fill=_with_alpha((220, 50, 50)), width=AXIS_LW)
         draw.ellipse([x_tip[0]-AXIS_TIP_R, x_tip[1]-AXIS_TIP_R,
                       x_tip[0]+AXIS_TIP_R, x_tip[1]+AXIS_TIP_R],
-                     fill=(220, 50, 50))
+                     fill=_with_alpha((220, 50, 50)))
 
         y_tip = (ax_ox + AXIS_LEN * sin_th,
                  ax_oy - AXIS_LEN * cos_th)
-        draw.line([(ax_ox, ax_oy), y_tip], fill=(50, 210, 80), width=AXIS_LW)
+        draw.line([(ax_ox, ax_oy), y_tip], fill=_with_alpha((50, 210, 80)), width=AXIS_LW)
         draw.ellipse([y_tip[0]-AXIS_TIP_R, y_tip[1]-AXIS_TIP_R,
                       y_tip[0]+AXIS_TIP_R, y_tip[1]+AXIS_TIP_R],
-                     fill=(50, 210, 80))
+                     fill=_with_alpha((50, 210, 80)))
 
         draw.ellipse([ax_ox-AXIS_TIP_R, ax_oy-AXIS_TIP_R,
                       ax_ox+AXIS_TIP_R, ax_oy+AXIS_TIP_R],
-                     fill=(200, 200, 200))
+                     fill=_with_alpha((200, 200, 200)))
+
+        img = Image.alpha_composite(img, overlay).convert('RGB')
+
+        long_edge = max(img.width, img.height)
+        if long_edge > MAX_LONG_EDGE:
+            scale = MAX_LONG_EDGE / long_edge
+            new_w = int(img.width  * scale)
+            new_h = int(img.height * scale)
+            img = img.resize((new_w, new_h), resample=Image.LANCZOS)
+            print(f'[Mapper] Image resized {long_edge}px -> {MAX_LONG_EDGE}px long edge  ({new_w}x{new_h})')
 
         final_res = float(gs / IMAGE_RES_MUL)
         img.save(output_path)
@@ -303,7 +325,7 @@ class ContinuousPointCloudMapper(Node):
         self.map_version       = 0
         self._best_angle       = None
         self._map_params       = None
-        self._use_aligned      = False   # True when entire_map is empty → fall back to aligned_points
+        self._use_aligned      = False   # True when entire_map is empty -> fall back to aligned_points
 
         self.tf_buffer   = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -423,7 +445,6 @@ class ContinuousPointCloudMapper(Node):
                 'z': float(pos.z), 'yaw': yaw,
             }
 
-
     def pc_callback(self, msg: PointCloud2):
         pts = transform_cloud_to_map(msg, self.tf_buffer, self.get_logger())
 
@@ -471,27 +492,34 @@ class ContinuousPointCloudMapper(Node):
 
         theta = self._best_angle
 
-        pts_r  = _rotate_xy(pts, theta)
-        path_r = _rotate_xy(self.path_positions, theta) \
+        pts_r       = _rotate_xy(pts, theta)
+        path_r      = _rotate_xy(self.path_positions, theta) \
             if len(self.path_positions) > 0 else self.path_positions
         gps_fixed_r = _rotate_xy(self.gps_fixed_positions, theta) \
             if len(self.gps_fixed_positions) > 0 else self.gps_fixed_positions
-        gps_raw_r = _rotate_xy(self.gps_raw_positions, theta) \
+        gps_raw_r   = _rotate_xy(self.gps_raw_positions, theta) \
             if len(self.gps_raw_positions) > 0 else self.gps_raw_positions
 
-        # Include GPS in bounds so misalignment stays visible
-        xs = [pts_r[:, 0], path_r[:, 0]]
-        ys = [pts_r[:, 1], path_r[:, 1]]
+        # Build bounds from all sources including current robot pose
+        p = self.latest_pose.position
+        robot_xy_now = np.array([[p.x, p.y, 0.0]])
+        robot_r_now  = _rotate_xy(robot_xy_now, theta)
+
+        xs = [pts_r[:, 0], path_r[:, 0], robot_r_now[:, 0]]
+        ys = [pts_r[:, 1], path_r[:, 1], robot_r_now[:, 1]]
         if len(gps_fixed_r) > 0:
             xs.append(gps_fixed_r[:, 0]); ys.append(gps_fixed_r[:, 1])
         if len(gps_raw_r) > 0:
             xs.append(gps_raw_r[:, 0]); ys.append(gps_raw_r[:, 1])
+
         all_x = np.concatenate(xs)
         all_y = np.concatenate(ys)
-        u_min  = float(np.floor(all_x.min() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
-        v_min  = float(np.floor(all_y.min() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
-        u_max  = float(np.ceil( all_x.max() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
-        v_max  = float(np.ceil( all_y.max() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
+
+        MARGIN_M = max(ROBOT_RADIUS_M * 2, PIXEL_GRID_SIZE * 5)
+        u_min  = float(np.floor((all_x.min() - MARGIN_M) / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
+        v_min  = float(np.floor((all_y.min() - MARGIN_M) / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
+        u_max  = float(np.ceil( (all_x.max() + MARGIN_M) / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
+        v_max  = float(np.ceil( (all_y.max() + MARGIN_M) / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
         grid_w = int(round((u_max - u_min) / PIXEL_GRID_SIZE))
         grid_h = int(round((v_max - v_min) / PIXEL_GRID_SIZE))
 
@@ -516,10 +544,7 @@ class ContinuousPointCloudMapper(Node):
             'grid_size': PIXEL_GRID_SIZE,
             'grid_width': grid_w, 'grid_height': grid_h,
         }
-        p = self.latest_pose.position
-        robot_xy = np.array([[p.x, p.y, 0.0]])
-        robot_xy_r = _rotate_xy(robot_xy, theta)
-        robot_pos_r = (robot_xy_r[0, 0], robot_xy_r[0, 1])
+        robot_pos_r = (robot_r_now[0, 0], robot_r_now[0, 1])
 
         final_res, _, _ = render_and_save(
             grid, z_cell, meta, path_r, robot_yaw_rotated,

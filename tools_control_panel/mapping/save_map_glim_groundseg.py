@@ -19,7 +19,7 @@ from rclpy.duration import Duration
 current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAP_UPDATE_RATE    = 5.0
 TARGET_FRAME       = 'map'
-IMAGE_RES_MUL      = 1
+IMAGE_RES_MUL      = 2
 MIN_POINTS_CELL    = 1
 MAX_HEIGHT_M       = 3.0   # ignore points above this height from local ground (robot clearance)
 
@@ -36,7 +36,7 @@ COLOR_GROUND = (255, 140, 0)
 COLOR_RAW_GPS = (255, 150, 150)
 
 POINT_SAMPLE_RATIO = 0.5
-PIXEL_GRID_SIZE = 0.2
+PIXEL_GRID_SIZE = 0.1
 
 
 SMOOTH_RADIUS_M    = 10   # neighbor range (m)
@@ -275,6 +275,15 @@ def render_and_save(grid, z_rel, meta, path_xyz, robot_yaw, output_path, world_r
                       ax_ox+AXIS_TIP_R, ax_oy+AXIS_TIP_R],
                      fill=(200, 200, 200))
 
+        MAX_LONG_EDGE = 4000
+        long_edge = max(img.width, img.height)
+        if long_edge > MAX_LONG_EDGE:
+            scale = MAX_LONG_EDGE / long_edge
+            new_w = int(img.width  * scale)
+            new_h = int(img.height * scale)
+            img = img.resize((new_w, new_h), resample=Image.LANCZOS)
+            print(f'[Mapper] Image resized {long_edge}px → {MAX_LONG_EDGE}px long edge  ({new_w}x{new_h})')
+
         final_res = float(gs / IMAGE_RES_MUL)
         img.save(output_path)
 
@@ -482,12 +491,27 @@ class ContinuousPointCloudMapper(Node):
         raw_gps_r = _rotate_xy(self.raw_gps_path, theta) \
             if len(self.raw_gps_path) > 0 else self.raw_gps_path
 
-        all_x = np.concatenate([pts_r[:, 0], path_r[:, 0]])
-        all_y = np.concatenate([pts_r[:, 1], path_r[:, 1]])
-        u_min  = float(np.floor(all_x.min() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
-        v_min  = float(np.floor(all_y.min() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
-        u_max  = float(np.ceil( all_x.max() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
-        v_max  = float(np.ceil( all_y.max() / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
+        x_parts = [pts_r[:, 0], path_r[:, 0]]
+        y_parts = [pts_r[:, 1], path_r[:, 1]]
+
+        p = self.latest_pose.position
+        robot_xy_now = np.array([[p.x, p.y, 0.0]])
+        robot_r_now = _rotate_xy(robot_xy_now, theta)
+        x_parts.append(robot_r_now[:, 0])
+        y_parts.append(robot_r_now[:, 1])
+
+        if len(raw_gps_r) > 0:
+            x_parts.append(raw_gps_r[:, 0])
+            y_parts.append(raw_gps_r[:, 1])
+
+        all_x = np.concatenate(x_parts)
+        all_y = np.concatenate(y_parts)
+
+        MARGIN_M = max(ROBOT_RADIUS_M * 2, PIXEL_GRID_SIZE * 5)
+        u_min  = float(np.floor((all_x.min() - MARGIN_M) / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
+        v_min  = float(np.floor((all_y.min() - MARGIN_M) / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
+        u_max  = float(np.ceil( (all_x.max() + MARGIN_M) / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
+        v_max  = float(np.ceil( (all_y.max() + MARGIN_M) / PIXEL_GRID_SIZE) * PIXEL_GRID_SIZE)
         grid_w = int(round((u_max - u_min) / PIXEL_GRID_SIZE))
         grid_h = int(round((v_max - v_min) / PIXEL_GRID_SIZE))
 

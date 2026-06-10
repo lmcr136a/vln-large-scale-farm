@@ -16,7 +16,7 @@ from std_msgs.msg import String
 
 log = logging.getLogger(__name__)
 
-SENSOR_TIMEOUT = 2.0
+SENSOR_TIMEOUT = 5.0
 
 BEST_EFFORT = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
