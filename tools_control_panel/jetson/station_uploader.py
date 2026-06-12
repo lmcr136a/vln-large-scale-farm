@@ -117,7 +117,7 @@ class StationUploader:
 
     def _load_upload_cfg(self) -> dict:
         try:
-            with open(self._config_path) as f:
+            with open(self._config_path, encoding='utf-8') as f:
                 return yaml.safe_load(f).get("upload", {})
         except Exception as e:
             log.error(f"Config read error: {e}")

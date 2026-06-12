@@ -46,15 +46,15 @@ PUBLISH_HZ = 5.0
 ROBOT_R = 0.30   # robot body radius
 
 Z_MIN = -0.40
-Z_MAX =  0.20
+Z_MAX =  0.10
 
 # (color, r_near, r_far) — absolute distance from robot center
 BANDS = [
     ('red',    0.3, 0.45),
-    ('yellow', 0.45, 0.55),
-    ('green',  0.55, 0.70),
+    ('yellow', 0.45, 0.6),
+    ('green',  0.6, 1.30),
 ]
-MIN_PTS = 50
+MIN_PTS = 20
 
 ZONES    = ['front', 'front_left', 'left', 'back_left',
             'back',  'back_right', 'right', 'front_right']

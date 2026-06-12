@@ -46,22 +46,16 @@ class Scheduler:
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _load_schedule(self) -> dict:
-        # Try Lab PC API first
+        # Only use Lab PC schedule; if unreachable, disable for safety
         if self._lab_url:
             try:
                 with urllib.request.urlopen(f'{self._lab_url}/schedule', timeout=3) as r:
                     return json.loads(r.read())
             except Exception as e:
-                log.warning(f'Schedule fetch from Lab PC failed: {e}, falling back to local')
-        # Fallback: local file
-        try:
-            with open(self._schedule_file) as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {'enabled': False}
-        except Exception as e:
-            log.error(f'Schedule read error: {e}')
-            return {'enabled': False}
+                log.warning(f'Schedule fetch from Lab PC failed: {e}, disabling schedule')
+                return {'enabled': False}
+        log.warning('No lab_url configured, schedule disabled')
+        return {'enabled': False}
 
     def _load_waypoints(self) -> list:
         try:

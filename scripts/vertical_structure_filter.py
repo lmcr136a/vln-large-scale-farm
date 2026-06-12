@@ -16,10 +16,10 @@ class VerticalStructureFilter(Node):
         self.declare_parameter("in_topic", "/rslidar_points")
         self.declare_parameter("out_topic", "/rslidar_points_vstruct")
         self.declare_parameter("cell_size", 0.5)         # XY cell for column detection (m)
-        self.declare_parameter("z_min_extent", 0.4)      # min vertical span in a cell to call it structure (m)
-        self.declare_parameter("min_points", 10)          # min points in a cell to call it structure
-        self.declare_parameter("ground_keep_rate", 0.001) # keep fraction of non-structure points
-        self.declare_parameter("max_range", 2000.0)   
+        self.declare_parameter("z_min_extent", 0.2)      # min vertical span in a cell to call it structure (m)
+        self.declare_parameter("min_points", 40)          # min points in a cell to call it structure
+        self.declare_parameter("ground_keep_rate", 0.5) # keep fraction of non-structure points
+        self.declare_parameter("max_range", 150.0)   
         self.declare_parameter("min_range", 0.4)   # drop self/near points (m)
 
         gp = self.get_parameter
