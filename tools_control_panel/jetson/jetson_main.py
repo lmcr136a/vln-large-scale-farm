@@ -70,7 +70,7 @@ def _scale_jpeg_b64(b64: str, width: int) -> str | None:
 
 class RecorderProxy:
     def __init__(self, internet, telemetry=None, radio=None, image_width=60,
-                 manual_check=None, image_interval=1.5):
+                 manual_check=None, image_interval=1.5, radio_camera="front"):
         self._internet     = internet
         self._telemetry    = telemetry
         self._radio        = radio
@@ -78,6 +78,7 @@ class RecorderProxy:
         self._radio_width  = image_width
         self._manual_check = manual_check
         self._image_int    = image_interval
+        self._radio_cam    = radio_camera
 
     def emit(self, event: str, data=None, namespace=None):
         if not (isinstance(event, str) and event.endswith("_frame")) or not data:
@@ -89,7 +90,7 @@ class RecorderProxy:
         self._internet.send_rgb_b64(b64, camera)
         if self._telemetry:
             self._telemetry.touch(f"zed_{camera}")
-        if camera == "back" and self._radio:
+        if camera == self._radio_cam and self._radio:
             if self._manual_check and self._manual_check():
                 return
             if time.time() - self._last_radio < self._image_int:
@@ -97,7 +98,7 @@ class RecorderProxy:
             small = _scale_jpeg_b64(b64, self._radio_width)
             if small and self._radio.send_bulk({
                 "type":   "radio_frame",
-                "camera": "back",
+                "camera": self._radio_cam,
                 "data":   small,
             }):
                 self._last_radio = time.time()
@@ -378,7 +379,8 @@ def main():
                 recorder.start_recording(output_dir=rec_dir)
             except Exception as e:
                 log.error(f"Camera recording start failed: {e}")
-        topics = list(cfg["ros2"]["topics"].values()) + [cfg["ros2"]["cmd_vel_topic"]]
+        topics = cfg["recording"].get("rosbag_topics") or (
+            list(cfg["ros2"]["topics"].values()) + [cfg["ros2"]["cmd_vel_topic"]])
         try:
             _rosbag_proc[0] = subprocess.Popen(
                 ['ros2', 'bag', 'record', '-o', bag_path] + list(set(topics)))
@@ -555,7 +557,8 @@ def main():
         radio_img_w = cfg.get("radio", {}).get("image_width", 60)
         rec_proxy = RecorderProxy(internet, telemetry, radio, image_width=radio_img_w,
                                   manual_check=commander.is_manual,
-                                  image_interval=cfg.get("radio", {}).get("image_interval", 1.5))
+                                  image_interval=cfg.get("radio", {}).get("image_interval", 1.5),
+                                  radio_camera=cfg.get("radio", {}).get("camera", "front"))
         for cam in resolve_zed_serials(rec_cfg.get("zed_cameras", [])):
             recorder.add_zed_camera(
                 serial_number=cam["serial"],

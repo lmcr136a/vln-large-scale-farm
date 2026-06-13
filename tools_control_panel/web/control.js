@@ -198,7 +198,6 @@ function setRgbBarVisible(visible) {
 })();
 
 socket.on('radio_frame', (data) => {
-  if (data.camera !== 'back') return;
   const img = document.getElementById('rgb-image');
   if (img) img.src = 'data:image/jpeg;base64,' + data.data;
   _lastRadioFrameTime = Date.now();

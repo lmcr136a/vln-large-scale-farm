@@ -43,16 +43,16 @@ DEBUG_OUT      = './safety_debug.png'
 PUBLISH_HZ = 5.0
 
 # Geometry (metres)
-ROBOT_R = 0.30   # robot body radius
+ROBOT_R = 0.5   # robot body radius
 
 Z_MIN = -0.40
 Z_MAX =  0.10
 
 # (color, r_near, r_far) — absolute distance from robot center
 BANDS = [
-    ('red',    0.3, 0.45),
-    ('yellow', 0.45, 0.6),
-    ('green',  0.6, 1.30),
+    ('red',    0.5, 0.6),
+    ('yellow', 0.6, 0.7),
+    ('green',  0.7, 1.30),
 ]
 MIN_PTS = 20
 

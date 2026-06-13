@@ -13,6 +13,7 @@ radio:
   serial_port: '/dev/ttyTHS1'
   baud_rate: 57600
   image_width: 100
+  camera: 'front'   # which camera the low-bandwidth radio view shows
 
 # ── Internet (Tailscale, Jetson -> Lab PC) ────────────────────────────────────
 # jetson1: 100.78.219.75        jetson2: 100.86.199.73        office-koala: 100.81.132.24
@@ -113,14 +114,21 @@ recording:
   pairing_threshold_ms:  50
   web_stream_hz:         10
   sample_interval_sec:  300
+  # Topics written to the rosbag (allowlist). glim_ros/* intentionally excluded.
+  rosbag_topics:
+    - '/rslidar_points'
+    - '/xsens/imu/data'
+    - '/gps/fix'
+    - '/gps/rtk_status'
+    - '/cmd_vel'
   zed_cameras:
     - serial: 48335070
-      name: back
-    - serial: 49537850
       name: front
-    - serial: auto      # right/left auto-resolved from remaining connected ZEDs
+    - serial: 49537850
+      name: back
+    - serial: 42174031
       name: right
-    - serial: auto
+    - serial: 45767562    
       name: left
 
 # ── System Monitor ────────────────────────────────────────────────────────────
