@@ -51,19 +51,6 @@
       align-items: center;
       gap: 10px;
     }
-    #camera-toggle {
-      font-size: 10px;
-      padding: 1px 7px;
-      background: rgba(255,255,255,0.1);
-      border: 1px solid rgba(255,255,255,0.25);
-      color: rgba(255,255,255,0.8);
-      border-radius: 3px;
-      cursor: pointer;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-    #camera-toggle:hover { background: rgba(255,255,255,0.2); }
-    #camera-toggle.streaming { border-color: #3ca0ff; color: #3ca0ff; }
     #rgb-image.radio-mode { image-rendering: pixelated; }
 
     /* ── Column 1A: System info (12pt) ───────────────────────── */
@@ -276,14 +263,13 @@
       </svg>
       </div>
 
-      <!-- Col 2: Camera streams -->
+      <!-- Col 2: Radio camera stream (back camera, low-bandwidth) -->
       <div id="col-cameras">
         <div id="col-cameras-imgs">
-          <img id="back-rgb-image" alt="Back" />
-          <img id="rgb-image" alt="Front" />
+          <img id="rgb-image" class="radio-mode" alt="Radio" />
         </div>
         <div id="col-cameras-ctrl">
-          <button id="camera-toggle" onclick="toggleCameraMode()">📡 Radio</button>
+          <span style="font-size:10px;color:rgba(255,255,255,0.6);">📡 Radio</span>
           <span id="info-sensors">—</span>
         </div>
       </div>
@@ -407,10 +393,12 @@
 
   <div id="robot-status"></div>
 
-  <div id="controls">
-    <b>&#x2191;&#x2193;&#x2190;&#x2192;</b>: Move &nbsp;|&nbsp;
-    <b>&lt;/&gt;</b>: Linear spd &nbsp;|&nbsp;
-    <b>[/]</b>: Angular spd
+  <!-- Bottom RGB streaming bar: shown only when internet is available -->
+  <div id="rgb-stream-bar">
+    <div class="rgb-cam"><span class="rgb-cam-label">Left</span><img  id="left-rgb-image"  alt="Left"  /></div>
+    <div class="rgb-cam"><span class="rgb-cam-label">Front</span><img id="front-rgb-image" alt="Front" /></div>
+    <div class="rgb-cam"><span class="rgb-cam-label">Right</span><img id="right-rgb-image" alt="Right" /></div>
+    <div class="rgb-cam"><span class="rgb-cam-label">Back</span><img  id="back-rgb-image"  alt="Back"  /></div>
   </div>
 
   <script src="schedule.js"></script>

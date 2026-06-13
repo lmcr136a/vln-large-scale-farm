@@ -92,18 +92,18 @@ autonomous:
   max_repeat_num:  1
   min_waypoints:   2
 
-  position_tolerance:    0.1
-  orientation_tolerance: 1
+  position_tolerance:    0.3
+  orientation_tolerance: 4
 
-  linear_speed:      0.5
-  angular_speed:     0.5
+  linear_speed:      0.8
+  angular_speed:     0.8
 
   r1: [0.08, 10]
   r2: [0.3, 20]
-  r3: [0.5, 360]
+  r3: [0.4, 360]
   t1: [0.1, 1.0]
   t2: [0.3, 2.0]
-  t3: [0.5, 999]
+  t3: [0.4, 999]
 
 # ── Recording ─────────────────────────────────────────────────────────────────
 recording:
@@ -118,6 +118,10 @@ recording:
       name: back
     - serial: 49537850
       name: front
+    - serial: auto      # right/left auto-resolved from remaining connected ZEDs
+      name: right
+    - serial: auto
+      name: left
 
 # ── System Monitor ────────────────────────────────────────────────────────────
 monitor:

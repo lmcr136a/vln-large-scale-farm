@@ -80,25 +80,27 @@ class RecorderProxy:
         self._image_int    = image_interval
 
     def emit(self, event: str, data=None, namespace=None):
-        if event in ("front_frame", "back_frame") and data:
-            camera = "front" if event == "front_frame" else "back"
-            b64 = data.get("data", "")
-            if b64:
-                self._internet.send_rgb_b64(b64, camera)
-                if self._telemetry:
-                    self._telemetry.touch(f"zed_{camera}")
-                if camera == "back" and self._radio:
-                    if self._manual_check and self._manual_check():
-                        return
-                    if time.time() - self._last_radio < self._image_int:
-                        return
-                    small = _scale_jpeg_b64(b64, self._radio_width)
-                    if small and self._radio.send_bulk({
-                        "type":   "radio_frame",
-                        "camera": "back",
-                        "data":   small,
-                    }):
-                        self._last_radio = time.time()
+        if not (isinstance(event, str) and event.endswith("_frame")) or not data:
+            return
+        camera = event[:-len("_frame")]   # "back_frame" -> "back"
+        b64 = data.get("data", "")
+        if not b64:
+            return
+        self._internet.send_rgb_b64(b64, camera)
+        if self._telemetry:
+            self._telemetry.touch(f"zed_{camera}")
+        if camera == "back" and self._radio:
+            if self._manual_check and self._manual_check():
+                return
+            if time.time() - self._last_radio < self._image_int:
+                return
+            small = _scale_jpeg_b64(b64, self._radio_width)
+            if small and self._radio.send_bulk({
+                "type":   "radio_frame",
+                "camera": "back",
+                "data":   small,
+            }):
+                self._last_radio = time.time()
 
     def start_background_task(self, *a, **kw): pass
 
@@ -547,14 +549,14 @@ def main():
 
     recorder = None
     try:
-        from sensor.recorder import MultiSensorRecorder
+        from sensor.recorder import MultiSensorRecorder, resolve_zed_serials
         rec_cfg  = cfg["recording"]
         recorder = MultiSensorRecorder(base_node, output_base_dir=cfg["paths"]["data_dir"])
         radio_img_w = cfg.get("radio", {}).get("image_width", 60)
         rec_proxy = RecorderProxy(internet, telemetry, radio, image_width=radio_img_w,
                                   manual_check=commander.is_manual,
                                   image_interval=cfg.get("radio", {}).get("image_interval", 1.5))
-        for cam in rec_cfg.get("zed_cameras", []):
+        for cam in resolve_zed_serials(rec_cfg.get("zed_cameras", [])):
             recorder.add_zed_camera(
                 serial_number=cam["serial"],
                 name=cam["name"],

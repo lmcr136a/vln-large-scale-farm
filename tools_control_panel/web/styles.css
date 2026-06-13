@@ -214,15 +214,42 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   z-index: 20;
 }
 
-/* ── Keyboard hint bar ──────────────────────────────────────── */
-#controls {
+/* ── Bottom RGB streaming bar (internet only) ──────────────── */
+#rgb-stream-bar {
   position: fixed;
   bottom: 0; left: 0;
   width: 100%;
-  text-align: center;
-  font-size: 13px;
+  display: none;                 /* shown by JS when internet is up */
+  justify-content: center;
+  align-items: flex-end;
+  gap: 4px;
   background: rgba(0,0,0,0.55);
-  padding: 4px 0;
-  color: rgba(255,255,255,0.8);
+  padding: 4px 6px;
   z-index: 20;
+}
+.rgb-cam {
+  position: relative;
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.rgb-cam img {
+  max-height: 170px;
+  width: auto;
+  max-width: 24vw;
+  object-fit: contain;
+  display: block;
+  background: #000;
+}
+.rgb-cam-label {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #fff;
+  font-size: 10pt;
+  line-height: 1;
+  text-shadow: 0 0 3px rgba(0,0,0,0.9);
+  pointer-events: none;
+  z-index: 1;
 }

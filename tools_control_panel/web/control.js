@@ -156,8 +156,7 @@ window.addEventListener('keyup', (e) => {
 //  SocketIO Push Events
 // ═══════════════════════════════════════════════════════════════
 
-// ── Camera mode: 'radio' (default) or 'stream' ───────────────
-let cameraMode = 'radio';
+// ── Top image = back camera over radio (low-bandwidth) ───────
 
 // 1×1 black JPEG used when no radio signal
 const _BLACK_FRAME = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVIP/2Q==';
@@ -166,7 +165,6 @@ let _lastRadioFrameTime = 0;
 const RADIO_FRAME_TIMEOUT = 9;  // seconds (= 3 × RADIO_INTERVAL)
 
 function _applyBlackIfNoSignal() {
-  if (cameraMode !== 'radio') return;
   const img = document.getElementById('rgb-image');
   if (!img) return;
   const elapsed = (Date.now() - _lastRadioFrameTime) / 1000;
@@ -176,56 +174,45 @@ function _applyBlackIfNoSignal() {
 }
 setInterval(_applyBlackIfNoSignal, 1000);
 
-function toggleCameraMode() {
-  cameraMode = cameraMode === 'radio' ? 'stream' : 'radio';
-  const btn     = document.getElementById('camera-toggle');
-  const backImg = document.getElementById('back-rgb-image');
-  const frontImg = document.getElementById('rgb-image');
-  if (cameraMode === 'radio') {
-    btn.textContent = '📡 Radio';
-    btn.classList.remove('streaming');
-    if (backImg)  backImg.style.display = 'none';
-    if (frontImg) frontImg.classList.add('radio-mode');
-    _lastRadioFrameTime = 0;
-    _applyBlackIfNoSignal();
-  } else {
-    btn.textContent = '📷 Streaming';
-    btn.classList.add('streaming');
-    if (backImg)  backImg.style.display = '';
-    if (frontImg) frontImg.classList.remove('radio-mode');
-  }
+// Bottom RGB stream bar: visibility follows internet availability
+const RGB_CAM_IMG = {
+  left:  'left-rgb-image',
+  front: 'front-rgb-image',
+  right: 'right-rgb-image',
+  back:  'back-rgb-image',
+};
+
+function setRgbBarVisible(visible) {
+  const bar = document.getElementById('rgb-stream-bar');
+  if (bar) bar.style.display = visible ? 'flex' : 'none';
 }
 
-// Init: radio mode by default
-(function initCameraMode() {
-  const backImg  = document.getElementById('back-rgb-image');
-  const frontImg = document.getElementById('rgb-image');
-  if (backImg)  backImg.style.display = 'none';
-  if (frontImg) {
-    frontImg.classList.add('radio-mode');
-    frontImg.src = _BLACK_FRAME;
+// Init: radio top image, bottom RGB bar hidden until internet is up
+(function initCameras() {
+  const frontTop = document.getElementById('rgb-image');
+  if (frontTop) {
+    frontTop.classList.add('radio-mode');
+    frontTop.src = _BLACK_FRAME;
   }
+  setRgbBarVisible(false);
 })();
 
 socket.on('radio_frame', (data) => {
-  if (cameraMode !== 'radio') return;
   if (data.camera !== 'back') return;
   const img = document.getElementById('rgb-image');
   if (img) img.src = 'data:image/jpeg;base64,' + data.data;
   _lastRadioFrameTime = Date.now();
 });
 
-socket.on('front_frame', (data) => {
-  if (cameraMode !== 'stream') return;
-  const img = document.getElementById('rgb-image');
-  if (img) img.src = 'data:image/jpeg;base64,' + data.data;
-});
-
-socket.on('back_frame', (data) => {
-  if (cameraMode !== 'stream') return;
-  const img = document.getElementById('back-rgb-image');
-  if (img) img.src = 'data:image/jpeg;base64,' + data.data;
-});
+function _bindRgbCam(camera, elemId) {
+  socket.on(`${camera}_frame`, (data) => {
+    const img = document.getElementById(elemId);
+    if (img) img.src = 'data:image/jpeg;base64,' + data.data;
+  });
+}
+for (const [camera, elemId] of Object.entries(RGB_CAM_IMG)) {
+  _bindRgbCam(camera, elemId);
+}
 
 socket.on('map_updated', (data) => {
   currentMapMeta = {
@@ -309,6 +296,9 @@ socket.on('robot_telemetry', (data) => {
 
   set('info-battery', data.battery >= 0 ? `${data.battery.toFixed(1)}%` : null);
   set('info-mode',    data.mode);
+
+  // RGB streaming bar is only meaningful when internet is up
+  setRgbBarVisible(!!data.internet);
 
   const estop = document.getElementById('estop-badge');
   if (estop) {

@@ -141,7 +141,7 @@ def build_occupancy_grid(pts, iu, iv, grid_w, grid_h):
 
 _HEIGHT_STOPS = np.array([
     [50,   50,   100],
-    [250,   50,   20],
+    [150,   50,   20],
     [50,   250,   10],
     [255, 255, 100],
     [255, 50,  50],

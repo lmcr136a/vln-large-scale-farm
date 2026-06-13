@@ -353,8 +353,7 @@ class RemoteServer:
         @sio.on("rgb_frame")
         def inet_rgb(data):
             cam = data.get("camera", "front")
-            event = "front_frame" if cam == "front" else "back_frame"
-            sio.emit(event, {"data": data["data"]}, namespace="/")
+            sio.emit(f"{cam}_frame", {"data": data["data"]}, namespace="/")
 
         @sio.on("pose")
         def inet_pose(data):

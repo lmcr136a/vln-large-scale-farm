@@ -14,6 +14,44 @@ stop_event = threading.Event()
 STREAM_FPS = 5.0
 
 
+def _is_explicit_serial(s):
+    return isinstance(s, int) or (isinstance(s, str) and s.strip().isdigit())
+
+
+def resolve_zed_serials(cameras):
+    """Resolve camera serials against the connected ZED devices.
+
+    cameras: list of {"serial": <int|"auto"|None>, "name": <str>, ...}.
+    Explicit serials are kept; cameras with a non-numeric serial (e.g. "auto")
+    are filled, in list order, from connected devices not already claimed.
+    Mirrors the KNOWN + auto-detect approach in snapshot_all_zeds.py.
+    """
+    try:
+        devices   = sl.Camera.get_device_list()
+        connected = [int(d.serial_number) for d in devices]
+    except Exception as e:
+        print(f"[recorder] get_device_list failed: {e}")
+        connected = []
+    print(f"[recorder] Connected ZED serials: {connected}")
+
+    explicit = {int(c["serial"]) for c in cameras if _is_explicit_serial(c.get("serial"))}
+    leftover = [s for s in connected if s not in explicit]
+
+    resolved = []
+    li = 0
+    for c in cameras:
+        s = c.get("serial")
+        if _is_explicit_serial(s):
+            resolved.append({**c, "serial": int(s)})
+        elif li < len(leftover):
+            resolved.append({**c, "serial": leftover[li]})
+            print(f"[recorder] auto-assigned serial {leftover[li]} -> '{c.get('name')}'")
+            li += 1
+        else:
+            print(f"[recorder] no serial available for '{c.get('name')}', skipping")
+    return resolved
+
+
 class ZEDSVORecorder(threading.Thread):
     def __init__(self, serial_number, name, output_dir,
                  ros_node=None,
