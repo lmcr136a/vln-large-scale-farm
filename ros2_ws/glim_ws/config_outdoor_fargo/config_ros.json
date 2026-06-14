@@ -69,6 +69,7 @@
         // "libinit_pose_viewer.so",
         "liblocalizer_ext.so",
         "libgnss_frontend.so",
+        "libflat_earther.so",
         "libgnss_global.so"
       // "libimu_validator.so"
     ],

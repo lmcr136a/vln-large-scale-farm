@@ -20,8 +20,8 @@ radio:
 # hp-dragonfly: 100.90.113.122  thomas-desktop: 100.95.80.39  mx16: 100.85.157.116
 # joshuas-macbook-pro: 100.126.106.37  thomass-macbook-pro: 100.110.245.111
 internet:
-  lab_ws_url:          'http://100.81.132.24:8000'
-  # lab_ws_url:          'http://100.95.80.39:8000'
+  # lab_ws_url:          'http://100.81.132.24:8000'   # koala
+  lab_ws_url:          'http://100.103.65.50:8000'   # ndsu
   pointcloud_topic:    '/glim_ros/globalmap'
   pointcloud_interval: 5.0
 

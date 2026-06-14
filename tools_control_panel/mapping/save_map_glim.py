@@ -159,7 +159,7 @@ def _height_color(t: np.ndarray) -> np.ndarray:
     return np.clip(c, 0, 255).astype(np.uint8)
 
 
-LINE_ALPHA = 50
+LINE_ALPHA = 179   # 70% opacity (0.7 * 255)
 
 
 def _with_alpha(color, alpha=LINE_ALPHA):
