@@ -36,12 +36,12 @@
     // Loop detection settings
     "registration_type": "VGICP",
     "min_travel_dist": 30.0,
-    "max_neighbor_dist": 2.0,
+    "max_neighbor_dist": 10.0,
     "min_inliear_fraction": 0.5,
-    "subsample_target": 10000,
-    "subsample_rate": 0.5,
-    "gicp_max_correspondence_dist": 2.0,
-    "vgicp_voxel_resolution": 0.2,
+    "subsample_target": 20000,  // 
+    "subsample_rate": 0.1,
+    "gicp_max_correspondence_dist": 2.0, // 2
+    "vgicp_voxel_resolution": 1.0, 
     // Factor settings
     "odom_factor_stddev": 1e-3,
     "loop_factor_stddev": 0.1,

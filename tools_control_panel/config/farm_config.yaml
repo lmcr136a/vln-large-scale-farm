@@ -21,7 +21,8 @@ radio:
 # joshuas-macbook-pro: 100.126.106.37  thomass-macbook-pro: 100.110.245.111
 internet:
   # lab_ws_url:          'http://100.81.132.24:8000'   # koala
-  lab_ws_url:          'http://100.103.65.50:8000'   # ndsu
+  # lab_ws_url:          'http://100.103.65.50:8000'   # ndsu
+  lab_ws_url:          'http://100.78.219.75:8000'   # jetson1
   pointcloud_topic:    '/glim_ros/globalmap'
   pointcloud_interval: 5.0
 

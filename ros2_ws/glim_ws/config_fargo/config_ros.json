@@ -63,20 +63,19 @@
     "tf_time_offset": 1e-6,
     // Extension modules
     "extension_modules": [
-        "libgnss_global.so",
-        "libgnss_frontend.so",
         "libmemory_monitor.so",
-        "librviz_viewer.so",
-        // "libimu_validator.so",
-        // "libflat_earther.so",
-        "liblocalizer_ext.so"
         // "libstandard_viewer.so",
+        "librviz_viewer.so",
         // "libinit_pose_viewer.so",
+        "liblocalizer_ext.so",
+        "libgnss_frontend.so",
+        // "libflat_earther.so",
+        "libgnss_global.so"
+      // "libimu_validator.so"
     ],
     // Topics
     "imu_topic": "/xsens/imu/data",
     "points_topic": "/rslidar_points_vstruct",
-    // "points_topic": "/patchworkpp/nonground",
     "image_topic": "/image",
     // QoS options
     "imu_qos": {

@@ -12,17 +12,8 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 tmux kill-session -t $SESSION 2>/dev/null
 
-# Window 0: Sensors (LiDAR | Xsens IMU | GPS) - 3 horizontal panes
-tmux new-session -d -s $SESSION -n "Sensors"
-tmux send-keys -t $SESSION:0 "bash $SCRIPT_DIR/launch_robosense.sh" C-m
-
-tmux split-window -t $SESSION:0 -v
-tmux send-keys -t $SESSION:0 "bash $SCRIPT_DIR/launch_xsens.sh $MODE" C-m
-
-tmux split-window -t $SESSION:0 -v
-tmux send-keys -t $SESSION:0 "python3 scripts/rtk_gps_node.py" C-m
-
-tmux select-layout -t $SESSION:0 even-horizontal
+tmux new-session -d -s $SESSION -n "Data"
+tmux send-keys -t $SESSION:0 "cd data/fargo" C-m
 
 # Window 1: SLAM
 tmux new-window -t $SESSION:1 -n "SLAM"
@@ -30,7 +21,7 @@ tmux send-keys -t $SESSION:1 "bash $SCRIPT_DIR/launch_slam.sh fargo" C-m
 
 # Window 2: Control Panel
 tmux new-window -t $SESSION:2 -n "Main"
-tmux send-keys -t $SESSION:2 "bash $SCRIPT_DIR/control_panel_jetson.sh" C-m
+tmux send-keys -t $SESSION:2 "echo bash $SCRIPT_DIR/control_panel_jetson.sh" C-m
 
 # Window 3: Ground segmentation
 tmux new-window -t $SESSION:3 -n "Ground"

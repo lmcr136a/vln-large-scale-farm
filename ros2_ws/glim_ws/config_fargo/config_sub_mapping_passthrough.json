@@ -25,9 +25,9 @@
     "max_num_voxels": -1,
     "adaptive_max_num_voxels": 2.5,
     // Submap creation params
-    "submap_voxel_resolution": 0.1,
+    "submap_voxel_resolution": 0.5,
     "min_dist_in_voxel": 0.2,
-    "max_num_points_in_voxel": 100,
+    "max_num_points_in_voxel": 50,
     "submap_target_num_points": 50000
   }
 }

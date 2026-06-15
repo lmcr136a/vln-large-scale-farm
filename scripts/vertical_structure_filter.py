@@ -11,19 +11,19 @@ class VerticalStructureFilter(Node):
         super().__init__("vertical_structure_filter")
         self.declare_parameter("in_topic", "/rslidar_points")
         self.declare_parameter("out_topic", "/rslidar_points_vstruct")
-        self.declare_parameter("cell_size", 0.4)         # XY cell for column detection (m)
-        self.declare_parameter("z_min_extent", 0.1)      # min vertical span in a cell to call it structure (m)
+        self.declare_parameter("cell_size", 0.3)         # XY cell for column detection (m)
+        self.declare_parameter("z_min_extent", 0.06)      # min vertical span in a cell to call it structure (m)
         self.declare_parameter("min_points", 2)         # min points in a cell to call it structure
         self.declare_parameter("ground_keep_rate", 0.00)  # keep fraction of non-structure points
         self.declare_parameter("max_range", 1000.0)
         self.declare_parameter("min_range", 0.7)         # drop self/near points (m)
-        self.declare_parameter("z_amplify", 2.0)
+        self.declare_parameter("z_amplify", 1.0)
         self.declare_parameter("z_amplify_cap", 999.9)     # raw-z meters, pre-amplification
         self.declare_parameter("roughness_threshold", 0.003)  # m^2 variance of raw z_res
         # Strong vertical features: cells whose RAW z span >= features_z_extent get
         # their points duplicated features_num_mul times to up-weight them in SLAM.
         self.declare_parameter("features_z_extent", 0.4)  # raw-z span (m) to call a cell a strong feature
-        self.declare_parameter("features_num_mul", 20)    # duplication factor for those points
+        self.declare_parameter("features_num_mul", 5)    # duplication factor for those points
         self.declare_parameter("features_jitter", 0.005)  # gaussian jitter (m) on duplicated copies; 0 disables
         # Far points are sparse; duplicate those beyond far_dist to up-weight them.
         # Multiplier ramps linearly with range: x1 at far_dist -> x far_points_mul at far_full_dist.

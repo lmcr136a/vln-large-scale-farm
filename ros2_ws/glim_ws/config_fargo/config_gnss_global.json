@@ -2,7 +2,7 @@
   "gnss": {
     "gnss_topic": "/gps/fix",
     "min_baseline": 5.0,
-    "prior_inf_scale": [1e3, 1e3, 0],
+    "prior_inf_scale": [1e3, 1e3, 1e2],
     "lever_arm_body": [-0.2, -0.4, -0.1], 
     // "lever_arm_body": [0,0,0], 
     "lever_arm_refine_min_submaps": 30000000000000
