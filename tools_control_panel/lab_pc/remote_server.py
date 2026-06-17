@@ -218,11 +218,13 @@ class RemoteServer:
                 VEL = load_config(self._config_path).get("autonomous", self.cfg["autonomous"])
             except Exception:
                 VEL = self.cfg["autonomous"]
+            lin = VEL.get("linear_speed",  0.3)
+            ang = VEL.get("angular_speed", 0.3)
             vx, vz = 0.0, 0.0
-            if key == "ArrowUp":      vx =  VEL["linear_speed"]
-            elif key == "ArrowDown":  vx = -VEL["linear_speed"]
-            elif key == "ArrowLeft":  vz =  VEL["angular_speed"]
-            elif key == "ArrowRight": vz = -VEL["angular_speed"]
+            if key == "ArrowUp":      vx =  lin
+            elif key == "ArrowDown":  vx = -lin
+            elif key == "ArrowLeft":  vz =  ang
+            elif key == "ArrowRight": vz = -ang
             if vx or vz:
                 log.info(f"[cmd] velocity vx={vx} vz={vz}  bridge={self._bridge_connected}  inet={self._inet_connected}")
                 self._to_robot({"cmd": "velocity", "vx": vx, "vz": vz})

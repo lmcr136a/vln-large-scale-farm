@@ -52,6 +52,12 @@ def _quat_to_yaw(x, y, z, w):
     return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y ** 2 + z ** 2))
 
 
+def _angle_diff(a: float, b: float) -> float:
+    """Signed shortest-path difference (a − b) wrapped to (−π, π]."""
+    d = (a - b) % (2 * math.pi)
+    return d - 2 * math.pi if d > math.pi else d
+
+
 class GpsLocalizer(Node):
     def __init__(self, config: dict):
         super().__init__('gps_localizer')
@@ -69,6 +75,11 @@ class GpsLocalizer(Node):
 
         self._gps_track: list[dict] = []
         self._track_dirty = False
+
+        # Gyro-integrated yaw — corrected by GPS when moving, gyro fills in during rotation
+        self._fused_yaw: float = 0.0
+        self._fused_yaw_init: bool = False
+        self._last_imu_t: float | None = None
 
         # Locate data directory relative to project root
         proj_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -103,9 +114,20 @@ class GpsLocalizer(Node):
     # ── Callbacks ────────────────────────────────────────────────────────────
 
     def _on_imu(self, msg: Imu):
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         q = msg.orientation
         with self._lock:
             self._current_yaw = _quat_to_yaw(q.x, q.y, q.z, q.w)
+            if not self._fused_yaw_init:
+                # Seed fused yaw from the IMU filter on first message
+                self._fused_yaw = self._current_yaw
+                self._fused_yaw_init = True
+            else:
+                dt = t - self._last_imu_t if self._last_imu_t is not None else 0.0
+                # Integrate gyro yaw rate — valid for any motion, especially in-place rotation
+                if 0.0 < dt < 0.5:
+                    self._fused_yaw += msg.angular_velocity.z * dt
+            self._last_imu_t = t
 
     def _on_gps(self, msg: NavSatFix):
         if msg.status.status < NavSatStatus.STATUS_FIX:
@@ -120,15 +142,22 @@ class GpsLocalizer(Node):
                 self._save_origin()
                 self.get_logger().info(f'GPS origin auto-set: {lat:.7f}, {lon:.7f}')
             x, y = gps_to_enu(lat, lon, self._origin_lat, self._origin_lon)
-            # Derive heading from GPS displacement (reliable even at rosbag start)
+            # GPS correction to fused yaw — runs only when displacement is reliable
             if self._current_x is not None:
                 dx = x - self._current_x
                 dy = y - self._current_y
-                if math.hypot(dx, dy) > 0.1:   # 10 cm — safe for RTK
-                    self._gps_heading = math.atan2(dy, dx)
+                dist = math.hypot(dx, dy)
+                if dist > 0.1:   # 10 cm — safe for RTK
+                    gps_yaw = math.atan2(dy, dx)
+                    self._gps_heading = gps_yaw
+                    # Blend strength: stronger when moving faster (> 50 cm per GPS step)
+                    alpha = 0.8 if dist > 0.5 else 0.3
+                    self._fused_yaw += alpha * _angle_diff(gps_yaw, self._fused_yaw)
             self._current_x = x
             self._current_y = y
-            yaw = self._gps_heading if self._gps_heading is not None else self._current_yaw
+            yaw = self._fused_yaw if self._fused_yaw_init else (
+                self._gps_heading if self._gps_heading is not None else self._current_yaw
+            )
             self._gps_track.append({'lat': lat, 'lon': lon, 'x': x, 'y': y})
             self._track_dirty = True
 
@@ -151,7 +180,9 @@ class GpsLocalizer(Node):
         with self._lock:
             if self._current_lat is None:
                 return None
-            yaw = self._gps_heading if self._gps_heading is not None else self._current_yaw
+            yaw = self._fused_yaw if self._fused_yaw_init else (
+                self._gps_heading if self._gps_heading is not None else self._current_yaw
+            )
             return self._current_lat, self._current_lon, yaw
 
     def get_current_enu(self) -> tuple | None:
@@ -159,7 +190,9 @@ class GpsLocalizer(Node):
         with self._lock:
             if self._current_x is None:
                 return None
-            yaw = self._gps_heading if self._gps_heading is not None else self._current_yaw
+            yaw = self._fused_yaw if self._fused_yaw_init else (
+                self._gps_heading if self._gps_heading is not None else self._current_yaw
+            )
             return self._current_x, self._current_y, yaw
 
     def get_origin(self) -> tuple:
@@ -200,11 +233,13 @@ class GpsLocalizer(Node):
             should_archive    = self._track_dirty   # only archive if new GPS data arrived
             self._gps_track   = []
             self._track_dirty = False
-            self._gps_heading = None
-            self._current_x   = None
-            self._current_y   = None
-            self._current_lat = None
-            self._current_lon = None
+            self._gps_heading    = None
+            self._current_x      = None
+            self._current_y      = None
+            self._current_lat    = None
+            self._current_lon    = None
+            self._fused_yaw_init = False
+            self._last_imu_t     = None
         if should_archive:
             self._archive_track_data(track_snapshot)
         log.info('GpsLocalizer: session reset for replay')

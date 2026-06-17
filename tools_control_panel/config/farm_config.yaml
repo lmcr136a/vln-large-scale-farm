@@ -3,6 +3,8 @@ autonomous:
   min_waypoints: 2
   position_tolerance: 0.3
   orientation_tolerance: 3
+  linear_speed: 0.3
+  angular_speed: 0.3
   r1: [0.08, 10]
   r2: [0.3, 20]
   r3: [0.4, 360]
