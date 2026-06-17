@@ -1,4 +1,5 @@
 import argparse
+import base64
 import json
 import logging
 import os
@@ -11,8 +12,39 @@ import time
 from datetime import datetime
 import yaml
 
+import math
 import numpy as np
-from scipy.spatial.transform import Rotation as _Rotation
+
+def _euler_xyz_to_matrix(rpy_deg):
+    r, p, y = [math.radians(a) for a in rpy_deg]
+    Rx = np.array([[1,0,0],[0,math.cos(r),-math.sin(r)],[0,math.sin(r),math.cos(r)]])
+    Ry = np.array([[math.cos(p),0,math.sin(p)],[0,1,0],[-math.sin(p),0,math.cos(p)]])
+    Rz = np.array([[math.cos(y),-math.sin(y),0],[math.sin(y),math.cos(y),0],[0,0,1]])
+    return Rz @ Ry @ Rx
+
+def _quat_xyzw_to_matrix(q):
+    x, y, z, w = q
+    return np.array([
+        [1-2*(y*y+z*z),   2*(x*y-w*z),   2*(x*z+w*y)],
+        [  2*(x*y+w*z), 1-2*(x*x+z*z),   2*(y*z-w*x)],
+        [  2*(x*z-w*y),   2*(y*z+w*x), 1-2*(x*x+y*y)],
+    ])
+
+def _matrix_to_quat_xyzw(R):
+    trace = R[0,0] + R[1,1] + R[2,2]
+    if trace > 0:
+        s = 0.5 / math.sqrt(trace + 1.0)
+        return [((R[2,1]-R[1,2])*s), ((R[0,2]-R[2,0])*s),
+                ((R[1,0]-R[0,1])*s), (0.25/s)]
+    elif R[0,0] > R[1,1] and R[0,0] > R[2,2]:
+        s = 2.0 * math.sqrt(1.0+R[0,0]-R[1,1]-R[2,2])
+        return [0.25*s, (R[0,1]+R[1,0])/s, (R[0,2]+R[2,0])/s, (R[2,1]-R[1,2])/s]
+    elif R[1,1] > R[2,2]:
+        s = 2.0 * math.sqrt(1.0+R[1,1]-R[0,0]-R[2,2])
+        return [(R[0,1]+R[1,0])/s, 0.25*s, (R[1,2]+R[2,1])/s, (R[0,2]-R[2,0])/s]
+    else:
+        s = 2.0 * math.sqrt(1.0+R[2,2]-R[0,0]-R[1,1])
+        return [(R[0,2]+R[2,0])/s, (R[1,2]+R[2,1])/s, 0.25*s, (R[1,0]-R[0,1])/s]
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
@@ -30,6 +62,10 @@ from commander import Commander
 from scheduler import Scheduler
 from station_uploader import StationUploader
 from autonomous.autonomous_mode import AutonomousController
+from gps.gps_localizer import GpsLocalizer
+from perception.landmark_store import LandmarkStore
+from perception.landmark_detector import LandmarkDetector
+from perception.landmark_map import GpsMapLoop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("jetson_main")
@@ -69,33 +105,49 @@ def _scale_jpeg_b64(b64: str, width: int) -> str | None:
 
 
 class RecorderProxy:
+    _ANN_TTL = 3.0  # seconds to show a YOLO annotation before reverting to raw feed
+
     def __init__(self, internet, telemetry=None, radio=None, image_width=60,
-                 manual_check=None, image_interval=1.5, radio_camera="front"):
-        self._internet     = internet
-        self._telemetry    = telemetry
-        self._radio        = radio
-        self._last_radio   = 0.0
-        self._radio_width  = image_width
-        self._manual_check = manual_check
-        self._image_int    = image_interval
-        self._radio_cam    = radio_camera
+                 manual_check=None, image_interval=1.5, radio_camera="front",
+                 landmark_detector=None):
+        self._internet           = internet
+        self._telemetry          = telemetry
+        self._radio              = radio
+        self._last_radio         = 0.0
+        self._radio_width        = image_width
+        self._manual_check       = manual_check
+        self._image_int          = image_interval
+        self._radio_cam          = radio_camera
+        self._landmark_detector  = landmark_detector
+        self._yolo_ann: dict[str, tuple[float, str]] = {}  # camera -> (ts, b64)
+
+    def set_yolo_annotation(self, camera: str, b64: str):
+        """Cache a YOLO-annotated frame. Injected into the stream until TTL expires."""
+        self._yolo_ann[camera] = (time.time(), b64)
 
     def emit(self, event: str, data=None, namespace=None):
         if not (isinstance(event, str) and event.endswith("_frame")) or not data:
             return
         camera = event[:-len("_frame")]   # "back_frame" -> "back"
-        b64 = data.get("data", "")
-        if not b64:
+        raw_b64 = data.get("data", "")
+        if not raw_b64:
             return
-        self._internet.send_rgb_b64(b64, camera)
+
+        # Send YOLO annotation while fresh, otherwise raw frame
+        ann = self._yolo_ann.get(camera)
+        send_b64 = ann[1] if ann and (time.time() - ann[0]) < self._ANN_TTL else raw_b64
+
+        self._internet.send_rgb_b64(send_b64, camera)
         if self._telemetry:
             self._telemetry.touch(f"zed_{camera}")
+        if self._landmark_detector:
+            self._landmark_detector.on_image_b64(camera, raw_b64)  # always raw, no feedback loop
         if camera == self._radio_cam and self._radio:
             if self._manual_check and self._manual_check():
                 return
             if time.time() - self._last_radio < self._image_int:
                 return
-            small = _scale_jpeg_b64(b64, self._radio_width)
+            small = _scale_jpeg_b64(raw_b64, self._radio_width)
             if small and self._radio.send_bulk({
                 "type":   "radio_frame",
                 "camera": self._radio_cam,
@@ -284,7 +336,7 @@ def build_extrinsic_T_B_L(cfg: dict) -> np.ndarray:
     ext  = cfg.get("lidar_extrinsics", {})
     t    = np.array(ext.get("translation", [0.0, 0.0, 0.0]), dtype=float)
     rpy  = ext.get("rotation", [0.0, 0.0, 0.0])
-    R    = _Rotation.from_euler("xyz", rpy, degrees=True).as_matrix()
+    R    = _euler_xyz_to_matrix(rpy)
     T         = np.eye(4)
     T[:3, :3] = R
     T[:3,  3] = t
@@ -292,18 +344,18 @@ def build_extrinsic_T_B_L(cfg: dict) -> np.ndarray:
 
 
 def apply_extrinsic(T_B_L: np.ndarray, pos: list, quat_xyzw: list):
-    R_M_L       = _Rotation.from_quat(quat_xyzw).as_matrix()
-    T_M_L       = np.eye(4)
+    R_M_L        = _quat_xyzw_to_matrix(quat_xyzw)
+    T_M_L        = np.eye(4)
     T_M_L[:3,:3] = R_M_L
     T_M_L[:3, 3] = pos
     R_B_L = T_B_L[:3, :3]
     t_B_L = T_B_L[:3,  3]
-    T_L_B       = np.eye(4)
+    T_L_B        = np.eye(4)
     T_L_B[:3,:3] = R_B_L.T
     T_L_B[:3, 3] = -R_B_L.T @ t_B_L
-    T_M_B = T_M_L @ T_L_B
+    T_M_B  = T_M_L @ T_L_B
     pos_c  = T_M_B[:3, 3].tolist()
-    quat_c = _Rotation.from_matrix(T_M_B[:3,:3]).as_quat().tolist()
+    quat_c = _matrix_to_quat_xyzw(T_M_B[:3,:3])
     return pos_c, quat_c
 
 
@@ -311,8 +363,11 @@ def main():
     parser = argparse.ArgumentParser()
     default_cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../config/farm_config.yaml")
     parser.add_argument("--config", default=default_cfg)
+    parser.add_argument("--replay", metavar="SESSION_DIR", default=None,
+                        help="Replay a recorded session: plays rosbag + SVO2 files together")
     args = parser.parse_args()
-    cfg_path = os.path.abspath(args.config)
+    cfg_path    = os.path.abspath(args.config)
+    replay_dir  = os.path.abspath(args.replay) if args.replay else None
 
     cfg = load_config(cfg_path)
 
@@ -340,6 +395,25 @@ def main():
     radio     = RadioComm(port=cfg["radio"]["serial_port"], baud=cfg["radio"]["baud_rate"],
                           bulk_threshold=cfg["radio"].get("bulk_tx_threshold", 64))
     internet  = InternetComm(lab_url=cfg["internet"]["lab_ws_url"])
+
+    # GPS localizer — replaces SLAM pose
+    gps_localizer = GpsLocalizer(cfg)
+
+    # Landmark store + detector
+    _proj_dir   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _data_dir   = os.path.normpath(os.path.join(_proj_dir, cfg["paths"]["data_dir"]))
+    _map_dir    = os.path.normpath(os.path.join(_proj_dir, cfg["paths"]["map_dir"]))
+    landmark_store    = LandmarkStore(os.path.join(_data_dir, "landmarks.json"))
+    landmark_detector = LandmarkDetector(gps_localizer, landmark_store, cfg)
+    landmark_store.set_origin(*gps_localizer.get_origin())  # may be None if no origin yet
+
+    # GPS top-down map loop
+    _crop_file = os.path.join(_data_dir, 'crop_field.json')
+    gps_map_loop = GpsMapLoop(
+        gps_localizer, landmark_store, internet, _map_dir,
+        interval=cfg.get("map", {}).get("update_interval", 3.0),
+        crop_file=_crop_file,
+    )
 
     proxy     = SocketIOProxy(radio, internet, uploader, telemetry)
 
@@ -536,6 +610,7 @@ def main():
         if internet.connected and (now_s - _pose_send_state["last"]) >= 1.0 / POSE_INTERNET_HZ:
             _pose_send_state["last"] = now_s
             internet.send_pose(p.x, p.y, raw_yaw)
+            gps_map_loop.update_robot_pose({"x": p.x, "y": p.y, "yaw": raw_yaw})
         if POSE_RADIO_HZ > 0 and (now_s - _pose_send_state["radio"]) >= 1.0 / POSE_RADIO_HZ:
             _pose_send_state["radio"] = now_s
             radio.send({"type": "pose", "x": p.x, "y": p.y, "yaw": raw_yaw})
@@ -547,29 +622,133 @@ def main():
     )
     base_node.create_subscription(_PS, raw_pose_topic, pose_corrector_cb, raw_pose_qos)
 
+    # GPS pose → internet / radio / map (separate from SLAM corrector above)
+    gps_pose_topic = cfg["ros2"]["topics"].get("gps_pose", "/gps_pose")
+
+    def gps_pose_cb(msg: _PS):
+        p, q = msg.pose.position, msg.pose.orientation
+        yaw = _math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y ** 2 + q.z ** 2),
+        )
+        heading_valid = gps_localizer.is_heading_valid()
+        now_s = time.time()
+        if internet.connected and (now_s - _pose_send_state["last"]) >= 1.0 / POSE_INTERNET_HZ:
+            _pose_send_state["last"] = now_s
+            internet.send_pose(p.x, p.y, yaw)
+            gps_map_loop.update_robot_pose(
+                {"x": p.x, "y": p.y, "yaw": yaw, "heading_valid": heading_valid}
+            )
+        if POSE_RADIO_HZ > 0 and (now_s - _pose_send_state["radio"]) >= 1.0 / POSE_RADIO_HZ:
+            _pose_send_state["radio"] = now_s
+            radio.send({"type": "pose", "x": p.x, "y": p.y, "yaw": yaw})
+
+    base_node.create_subscription(_PS, gps_pose_topic, gps_pose_cb, raw_pose_qos)
+
     threading.Thread(target=map_watch_loop, daemon=True).start()
 
-    recorder = None
-    try:
-        from sensor.recorder import MultiSensorRecorder, resolve_zed_serials
-        rec_cfg  = cfg["recording"]
-        recorder = MultiSensorRecorder(base_node, output_base_dir=cfg["paths"]["data_dir"])
-        radio_img_w = cfg.get("radio", {}).get("image_width", 60)
-        rec_proxy = RecorderProxy(internet, telemetry, radio, image_width=radio_img_w,
-                                  manual_check=commander.is_manual,
-                                  image_interval=cfg.get("radio", {}).get("image_interval", 1.5),
-                                  radio_camera=cfg.get("radio", {}).get("camera", "front"))
-        for cam in resolve_zed_serials(rec_cfg.get("zed_cameras", [])):
-            recorder.add_zed_camera(
-                serial_number=cam["serial"],
-                name=cam["name"],
-                socketio=rec_proxy,
-                sample_interval_sec=rec_cfg.get("sample_interval_sec", 300),
-                always_stream=True,
-                stream_fps=rec_cfg.get("web_stream_hz", 5),
-            )
-    except Exception as e:
-        log.warning(f"ZED recorder init failed: {e}")
+    recorder   = None
+    svo_player = None
+    radio_img_w = cfg.get("radio", {}).get("image_width", 60)
+    rec_proxy = RecorderProxy(internet, telemetry, radio, image_width=radio_img_w,
+                              manual_check=commander.is_manual,
+                              image_interval=cfg.get("radio", {}).get("image_interval", 1.5),
+                              radio_camera=cfg.get("radio", {}).get("camera", "front"),
+                              landmark_detector=landmark_detector)
+
+    # YOLO annotated frames → cached in rec_proxy, injected into the live stream for TTL seconds
+    def _on_annotated_frame(camera: str, jpeg_bytes: bytes):
+        b64 = base64.b64encode(jpeg_bytes).decode()
+        rec_proxy.set_yolo_annotation(camera, b64)
+
+    landmark_detector.set_annotated_frame_callback(_on_annotated_frame)
+
+    if replay_dir:
+        # ── Replay mode: play rosbag + SVO2 files together ──────────────────
+        # Clear in-memory state so old track/heading don't bleed into this session
+        gps_localizer.reset_for_replay()
+
+        def _on_svo_frame(camera: str, jpeg_bytes: bytes):
+            b64 = base64.b64encode(jpeg_bytes).decode()
+            rec_proxy.emit(f"{camera}_frame", {"data": b64})
+
+        def _on_svo_depth(camera: str, depth_arr, intrinsics: dict):
+            landmark_detector.on_depth_frame(camera, depth_arr, intrinsics)
+
+        from sensor.svo_player import SvoPlayer
+        svo_player = SvoPlayer(
+            session_dir=replay_dir,
+            on_frame=_on_svo_frame,
+            on_depth=_on_svo_depth,
+            stream_fps=cfg["recording"].get("web_stream_hz", 5),
+        )
+        svo_player.start()
+        log.info(f"Replay mode: {replay_dir} — waiting for ZED cameras to open...")
+
+        # Give ZED SDK time to open SVO files before rosbag starts publishing GPS/IMU.
+        # Without this, GPS positions update on the map while the camera feed is still dark.
+        time.sleep(2.0)
+
+        bag_path = os.path.join(replay_dir, 'rosbag')
+        if not os.path.exists(bag_path):
+            log.error(f"Replay: rosbag not found at {bag_path}")
+        else:
+            log.info(f"Replay: starting ros2 bag play {bag_path}")
+            import subprocess as _sp
+            _sp.Popen(['ros2', 'bag', 'play', bag_path, '--clock'])
+    else:
+        # ── Live mode: open ZED cameras ───────────────────────────────────────
+        try:
+            from sensor.recorder import MultiSensorRecorder, resolve_zed_serials
+            rec_cfg  = cfg["recording"]
+            recorder = MultiSensorRecorder(base_node, output_base_dir=cfg["paths"]["data_dir"])
+            for cam in resolve_zed_serials(rec_cfg.get("zed_cameras", [])):
+                recorder.add_zed_camera(
+                    serial_number=cam["serial"],
+                    name=cam["name"],
+                    socketio=rec_proxy,
+                    sample_interval_sec=rec_cfg.get("sample_interval_sec", 300),
+                    always_stream=True,
+                    stream_fps=rec_cfg.get("web_stream_hz", 5),
+                )
+        except Exception as e:
+            log.warning(f"ZED recorder init failed: {e}")
+
+    # Feed LiDAR to landmark detector
+    def _lidar_to_detector(msg: PointCloud2):
+        pts = pc2_to_numpy(msg)
+        landmark_detector.on_pointcloud(pts)
+
+    if landmark_detector.is_enabled():
+        lidar_topic = cfg["ros2"]["topics"].get("lidar", "/rslidar_points")
+        base_node.create_subscription(PointCloud2, lidar_topic,
+                                      _lidar_to_detector, BEST_EFFORT_QOS)
+
+    landmark_detector.start()
+
+    def _push_landmarks():
+        """Send landmark data + ENU coordinates to web panel."""
+        lms = landmark_store.get_all()
+        origin_lat, origin_lon = gps_localizer.get_origin()
+        if origin_lat is None:
+            return
+        from gps.gps_localizer import gps_to_enu
+        for lm in lms:
+            x, y = gps_to_enu(lm['lat'], lm['lon'], origin_lat, origin_lon)
+            lm['enu_x'] = round(x, 2)
+            lm['enu_y'] = round(y, 2)
+        internet.send_event('landmarks_updated', {'landmarks': lms})
+
+    def _landmark_push_loop():
+        while True:
+            time.sleep(10.0)
+            if internet.connected:
+                try:
+                    _push_landmarks()
+                except Exception as e:
+                    log.warning(f"landmark push: {e}")
+
+    threading.Thread(target=_landmark_push_loop, daemon=True).start()
 
     def telemetry_loop():
         interval = 1.0 / TELEMETRY_HZ
@@ -604,9 +783,19 @@ def main():
 
     threading.Thread(target=telemetry_loop, daemon=True).start()
 
+    # Keep GPS map waypoints in sync with autonomous controller
+    _orig_auto_start = auto_ctrl.start
+    def _auto_start_with_map(waypoints):
+        gps_map_loop.update_waypoints(waypoints)
+        return _orig_auto_start(waypoints)
+    auto_ctrl.start = _auto_start_with_map
+
+    gps_map_loop.start()
+
     executor = MultiThreadedExecutor()
     executor.add_node(telemetry)
     executor.add_node(auto_ctrl)
+    executor.add_node(gps_localizer)
     executor.add_node(base_node)
 
     def handle_signal(sig, frame):

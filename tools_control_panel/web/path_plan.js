@@ -21,6 +21,25 @@ let isFirstMap     = true;
 let _downPos       = null;
 let _downOnMarker  = false;
 let _markerAction  = null;   // action queued from marker mousedown, executed on mouseup
+let landmarks      = [];     // [{id, type, lat, lon, x_enu, y_enu, number, description}]
+
+// Convert landmark lat/lon → ENU world coords using map origin
+function landmarkToEnu(lm, meta) {
+  // map_state has origin_lat/lon only if the server provides it.
+  // For GPS maps (rot_angle=0) the map itself is in ENU; landmarks come pre-projected
+  // from the server as enu x,y.  Fall back to rough pixel estimate if not available.
+  if (lm.enu_x != null && lm.enu_y != null) return { x: lm.enu_x, y: lm.enu_y };
+  return null;
+}
+
+const LM_COLOURS = {
+  metal_box:  '#4040cc',
+  trailer:    '#cc4040',
+  vehicle:    '#cc8830',
+  building:   '#7840b8',
+  crop_stick: '#c8a000',
+};
+function lmColour(type) { return LM_COLOURS[type] || '#808080'; }
 
 const ZOOM_MIN = 0.1, ZOOM_MAX = 20, ZOOM_STEP = 1.15;
 
@@ -156,6 +175,25 @@ function redraw() {
     drawMarker(p.x, p.y, isStart ? 'start' : isEnd ? 'end' : 'mid', onAction);
   });
 
+  // Landmarks
+  landmarks.forEach(lm => {
+    if (lm.enu_x == null || lm.enu_y == null) return;
+    const p = worldToPixel(lm.enu_x, lm.enu_y);
+    if (!p) return;
+    const col = lmColour(lm.type);
+    if (lm.type === 'crop_stick') {
+      dynLayer.add(new Konva.Circle({ x:p.x, y:p.y, radius:5, fill:col, stroke:'black', strokeWidth:1, listening:false }));
+      if (lm.number) {
+        dynLayer.add(new Konva.Text({ x:p.x+7, y:p.y-7, text:String(lm.number), fontSize:10, fill:col, listening:false }));
+      }
+    } else {
+      const S = 14;
+      dynLayer.add(new Konva.Rect({ x:p.x-S/2, y:p.y-S/2, width:S, height:S, stroke:col, strokeWidth:2, fill:'transparent', listening:false }));
+      const label = lm.description || lm.type;
+      dynLayer.add(new Konva.Text({ x:p.x+S/2+2, y:p.y-7, text:label.substring(0,20), fontSize:10, fill:col, listening:false }));
+    }
+  });
+
   // Robot
   if (robotPose && currentMapMeta) {
     const p = worldToPixel(robotPose.x, robotPose.y);
@@ -245,5 +283,14 @@ socket.on('map_updated', (data) => {
 socket.on('robot_pose', (data) => {
   console.log(`[robot_pose] x=${data.x?.toFixed(2)} y=${data.y?.toFixed(2)} yaw=${data.yaw != null ? (data.yaw * 180 / Math.PI).toFixed(1) + 'deg' : 'N/A'}`);
   robotPose = data;
+  redraw();
+});
+
+socket.on('landmarks_updated', (data) => {
+  landmarks = (data.landmarks || []).map(lm => ({
+    ...lm,
+    enu_x: lm.enu_x ?? null,
+    enu_y: lm.enu_y ?? null,
+  }));
   redraw();
 });

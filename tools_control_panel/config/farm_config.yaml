@@ -1,150 +1,171 @@
-# ── Paths ─────────────────────────────────────────────────────────────────────
-paths:
-  map_dir:       '../output_glim'
-  data_dir:      '../data'
-  map_image:     'map_latest.png'
-  map_state:     'map_state.json'
-  paths_file:    'paths.json'
-  mission_file:  'mission.json'   # start point + waypoints from path planner
-  saved_map_dir: 'lab_pc/maps'     # lab PC only — cached copy of last received map
-
-# ── Radio (Jetson <-> Local PC serial) ────────────────────────────────────────
-radio:
-  serial_port: '/dev/ttyTHS1'
-  baud_rate: 57600
-  image_width: 100
-  camera: 'front'   # which camera the low-bandwidth radio view shows
-
-# ── Internet (Tailscale, Jetson -> Lab PC) ────────────────────────────────────
-# jetson1: 100.78.219.75        jetson2: 100.86.199.73        office-koala: 100.81.132.24
-# hp-dragonfly: 100.90.113.122  thomas-desktop: 100.95.80.39  mx16: 100.85.157.116
-# joshuas-macbook-pro: 100.126.106.37  thomass-macbook-pro: 100.110.245.111
-internet:
-  # lab_ws_url:          'http://100.81.132.24:8000'   # koala
-  # lab_ws_url:          'http://100.103.65.50:8000'   # ndsu
-  lab_ws_url:          'http://100.78.219.75:8000'   # jetson1
-  pointcloud_topic:    '/glim_ros/globalmap'
-  pointcloud_interval: 5.0
-
-# ── Server (Lab PC web panel) ─────────────────────────────────────────────────
-server:
-  host:  '0.0.0.0'
-  port:   8000
-  ping_interval:        10
-  ping_timeout:         20
-  max_http_buffer_size: 100000000
-
-# ── Sensor Extrinsics ────────────────────────────────────────────────────────
-# Transform: LiDAR frame → robot base_link frame
-# translation: [x, y, z]        metres
-# rotation:    [roll, pitch, yaw]  degrees
-lidar_extrinsics:
-  translation: [0.0, 0.0, 0.0]
-  rotation:    [0.0, 0.0, 0.0]   # 180° yaw = LiDAR mounted facing backward
-
-# ── ROS2 ──────────────────────────────────────────────────────────────────────
-ros2:
-  node_name:     'jetson_agent'
-  cmd_vel_topic: '/cmd_vel'
-  topics:
-    raw_pose:    '/glim_ros/localized_curr_pose'  # raw GLIM output — do not use directly
-    pose:        '/glim_ros/localized_curr_pose'                 # extrinsic-corrected — use everywhere
-    battery:     '/battery_state'
-    lidar:       '/rslidar_points'
-    zed_front:   '/zed_front/rgb/image_raw'
-    zed_back:    '/zed_back/rgb/image_raw'
-    imu:         '/xsens/imu/data'
-    gps:         '/gps/fix'
-    gps_status:  '/gps/rtk_status'
-    entire_map:  '/glim_ros/entire_map'
-    aligned_points: '/glim_ros/aligned_points' 
-    trajectory:  '/glim_ros/localized_trajectory'
-    ground_points: '/patchworkpp/ground'
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 1. SCHEDULE CONFIG
-# ══════════════════════════════════════════════════════════════════════════════
-schedule:
-  enabled: true
-  times: []
-  off_days: []
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 2. AUTO-UPLOAD CONFIG
-# ══════════════════════════════════════════════════════════════════════════════
-upload:
-  enabled: true
-  ssh_user:    'evelyn'
-  ssh_key:     '~/.ssh/id_rsa'
-  host:        '100.x.x.x'
-  remote_path: '/home/evelyn/farm_uploads/'
-  sources:
-    - '../data/'
-    - '../output_glim/'
-  station_pose:   [0.0, 0.0]
-  station_radius: 1.5
-  cooldown_sec:   300
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 3. AUTONOMOUS DRIVING CONFIG
-# ══════════════════════════════════════════════════════════════════════════════
 autonomous:
-  waypoints: []
-
-  max_repeat_num:  1
-  min_waypoints:   2
-
-  position_tolerance:    0.3
+  max_repeat_num: 1
+  min_waypoints: 2
+  position_tolerance: 0.3
   orientation_tolerance: 3
-
-  linear_speed:      0.4
-  angular_speed:     0.4
-
   r1: [0.08, 10]
   r2: [0.3, 20]
   r3: [0.4, 360]
   t1: [0.1, 1.0]
   t2: [0.3, 2.0]
   t3: [0.4, 999]
-
-# ── Recording ─────────────────────────────────────────────────────────────────
-recording:
-  zed_hz:               30
-  lidar_hz:             10
-  imu_hz:              100
-  pairing_threshold_ms:  50
-  web_stream_hz:         10
-  sample_interval_sec:  300
-  # Topics written to the rosbag (allowlist). glim_ros/* intentionally excluded.
-  rosbag_topics:
-    - '/rslidar_points'
-    - '/xsens/imu/data'
-    - '/gps/fix'
-    - '/gps/rtk_status'
-    - '/cmd_vel'
-  zed_cameras:
-    - serial: 48335070
-      name: front
-    - serial: 49537850
-      name: back
-    - serial: 42174031
-      name: right
-    - serial: 45767562    
-      name: left
-
-# ── System Monitor ────────────────────────────────────────────────────────────
+  waypoints:
+  - x: -0.7072540824371174
+    y: -9.955459313380288
+  - x: -1.2902895871130227
+    y: 73.33930680183441
+  - x: -5.850289587113011
+    y: 73.3793068018344
+  - x: -5.81911413760497
+    y: -56.03922109010243
+  - x: -10.115087223405908
+    y: -56.250728771771215
+  - x: -10.123606552622277
+    y: 73.5194259598678
+  - x: -14.463606552622295
+    y: 73.78942595986781
+  - x: -14.484560110220002
+    y: -54.70824144265834
+  - x: -18.728060110219985
+    y: -54.90374144265833
+  - x: -18.603127474711073
+    y: 73.19818363948
+  - x: -65.38312747471109
+    y: 72.95818363948003
+  - x: -65.3047511374478
+    y: -54.694760638369004
+  - x: -1.0184415229165893
+    y: -54.53375154352529
+  - x: -0.7072540824371174
+    y: -9.955459313380288
+camera_extrinsics:
+  back:
+  - -0.1
+  - 0.0
+  - -0.08
+  front:
+  - 0.1
+  - 0.0
+  - -0.08
+  hfov_deg: 55.0
+  left:
+  - 0.0
+  - 0.15
+  - -0.15
+  right:
+  - 0.0
+  - -0.15
+  - -0.15
+internet:
+  lab_ws_url: http://100.103.65.50:8000
+  pointcloud_interval: 5.0
+  pointcloud_topic: /glim_ros/globalmap
+lidar_extrinsics:
+  rotation:
+  - 0.0
+  - 0.0
+  - 0.0
+  translation:
+  - 0.0
+  - 0.0
+  - 0.0
+map:
+  update_interval: 3
 monitor:
   update_interval: 1.0
-
-map:
-  update_interval: 60
-
-# ── Tmux Session Monitor ──────────────────────────────────────────────────────
+paths:
+  data_dir: ../data
+  map_dir: ../output_glim
+  map_image: map_latest.png
+  map_state: map_state.json
+  mission_file: mission.json
+  paths_file: paths.json
+  saved_map_dir: lab_pc/maps
+radio:
+  baud_rate: 57600
+  camera: front
+  image_width: 100
+  serial_port: /dev/ttyTHS1
+recording:
+  imu_hz: 100
+  lidar_hz: 10
+  pairing_threshold_ms: 50
+  rosbag_topics:
+  - /rslidar_points
+  - /xsens/imu/data
+  - /gps/fix
+  - /gps/rtk_status
+  - /cmd_vel
+  sample_interval_sec: 300
+  web_stream_hz: 10
+  zed_cameras:
+  - name: front
+    serial: 48335070
+  - name: back
+    serial: 49537850
+  - name: right
+    serial: 42174031
+  - name: left
+    serial: 45767562
+  zed_hz: 30
+ros2:
+  cmd_vel_topic: /cmd_vel
+  node_name: jetson_agent
+  topics:
+    aligned_points: /glim_ros/aligned_points
+    battery: /battery_state
+    entire_map: /glim_ros/entire_map
+    gps: /gps/fix
+    gps_pose: /gps_pose
+    gps_status: /gps/rtk_status
+    ground_points: /patchworkpp/ground
+    imu: /xsens/imu/data
+    lidar: /rslidar_points
+    pose: /gps_pose
+    raw_pose: /glim_ros/localized_curr_pose
+    trajectory: /glim_ros/localized_trajectory
+    zed_back: /zed_back/rgb/image_raw
+    zed_front: /zed_front/rgb/image_raw
+schedule:
+  enabled: true
+  off_days: []
+  times: []
+server:
+  host: 0.0.0.0
+  max_http_buffer_size: 100000000
+  ping_interval: 10
+  ping_timeout: 20
+  port: 8000
 tmux:
-  session: 'vln'
-  # Override per-window restart commands if needed.
-  # Built-in keys: slam, map_saver, obstacle, gps, lidar, imu
-  # Example override:
-  #   slam:
-  #     cmd: 'bash launch_files/launch_slam.sh real'
-  windows:
+  session: vln
+  windows: null
+upload:
+  cooldown_sec: 300
+  enabled: true
+  host: 100.x.x.x
+  remote_path: /home/evelyn/farm_uploads/
+  sources:
+  - ../data/
+  - ../output_glim/
+  ssh_key: ~/.ssh/id_rsa
+  ssh_user: evelyn
+  station_pose:
+  - 0.0
+  - 0.0
+  station_radius: 1.5
+vlm:
+  api_key: ''
+  backend: ollama
+  interval_sec: 120.0
+  keep_alive: 10m
+  model: qwen2.5vl:7b
+  ollama_url: http://localhost:11434
+  timeout_sec: 150.0
+yolo:
+  classes:
+  - utility box
+  - truck
+  conf_threshold: 0.17
+  input_size: 640
+  interval_sec: 2.0
+  model: yolov8s-worldv2.pt

@@ -19,16 +19,16 @@ trap cleanup SIGINT SIGTERM
 
 # # sudo systemctl restart nvargus-daemon
 
-# echo "🚗 Setting up CAN interface..."
-# sudo ip link set can0 down 2>/dev/null
-# sudo ip link set can0 up type can bitrate 500000
+echo "🚗 Setting up CAN interface..."
+sudo ip link set can0 down 2>/dev/null
+sudo ip link set can0 up type can bitrate 500000
 
-# echo "🦾 Launching Scout Mini base node..."
-# source /opt/ros/humble/setup.bash
-# source "$WORKSPACE_DIR/ros2_ws/scout_ws/install/setup.bash"
-# echo "$WORKSPACE_DIR/ros2_ws/scout_ws/install/setup.bash"
-# ros2 launch scout_base scout_mini_base.launch.py &
-# SCOUT_PID=$!
+echo "🦾 Launching Scout Mini base node..."
+source /opt/ros/humble/setup.bash
+source "$WORKSPACE_DIR/ros2_ws/scout_ws/install/setup.bash"
+echo "$WORKSPACE_DIR/ros2_ws/scout_ws/install/setup.bash"
+ros2 launch scout_base scout_mini_base.launch.py &
+SCOUT_PID=$!
 
 python3 tools_control_panel/sensor/safety_checker.py &
 SAFETY_PID=$!

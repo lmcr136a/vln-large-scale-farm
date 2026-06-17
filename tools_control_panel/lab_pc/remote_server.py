@@ -40,9 +40,10 @@ class RemoteServer:
         self._schedule_file = os.path.join(cfg_dir, "schedule.json")
         self._path_nodes       = self._load_paths()
         self._path_mode        = False
-        self._bridge_connected = False
-        self._inet_connected   = False
-        self._inet_sid         = None
+        self._bridge_connected  = False
+        self._inet_connected    = False
+        self._inet_sid          = None
+        self._latest_landmarks: dict = {"landmarks": []}
 
         self.app = Flask(__name__, template_folder="../lab_pc")
         self.sio = SocketIO(
@@ -165,6 +166,11 @@ class RemoteServer:
             self._push_config_update(updates)
             return jsonify({"ok": True})
 
+        @self.app.route("/landmarks", methods=["GET"])
+        def handle_landmarks():
+            from flask import jsonify
+            return jsonify(self._latest_landmarks)
+
     # ── Panel events (browser ↔ server) ──────────────────────────────────────
 
     def _register_panel_events(self):
@@ -176,6 +182,8 @@ class RemoteServer:
             if self._path_nodes:
                 sio.emit("path_loaded", {"waypoints": self._path_nodes}, to=request.sid)
             self._send_map_to_client(request.sid)
+            if self._latest_landmarks.get("landmarks"):
+                sio.emit("landmarks_updated", self._latest_landmarks, to=request.sid)
 
         @sio.on("disconnect")
         def on_disconnect():
@@ -348,7 +356,10 @@ class RemoteServer:
             event = data.get("event")
             if event == "robot_pose":
                 return
-            sio.emit(event, data.get("data", {}), namespace="/")
+            payload = data.get("data", {})
+            if event == "landmarks_updated":
+                self._latest_landmarks = payload
+            sio.emit(event, payload, namespace="/")
 
         @sio.on("rgb_frame")
         def inet_rgb(data):

@@ -112,7 +112,7 @@ class AutonomousController(Node):
     def start(self, waypoints):
         if self._active:
             return False
-        min_wp = self.config['autonomous']['min_waypoints']
+        min_wp = self.config['autonomous'].get('min_waypoints', 2)
         if len(waypoints) < min_wp:
             self.get_logger().warn(f'Need >= {min_wp} waypoints (got {len(waypoints)})')
             return False
