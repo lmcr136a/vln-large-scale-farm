@@ -77,34 +77,45 @@ class ZEDSVORecorder(threading.Thread):
         self.latest_frame        = None
         self.frame_lock          = threading.Lock()
         self._cam_closed         = False  # guard against double-close
+        self.cam                 = None  # opened in run(), not here, so a slow/failing
+                                          # open() can't block the other recorders or the
+                                          # main thread's socket.io connection
 
+    def _open_cam(self):
         try:
             self.cam  = sl.Camera()
             init      = sl.InitParameters()
-            init.set_from_serial_number(serial_number)
+            init.set_from_serial_number(self.serial)
             init.depth_mode        = sl.DEPTH_MODE.ULTRA
             init.camera_resolution = sl.RESOLUTION.HD1080
             init.camera_fps        = 30
             init.sdk_verbose       = False
-            init.sensors_required  = False 
+            init.sensors_required  = False
 
+            # open() now runs on this recorder's own thread (not main), and Python's
+            # signal module only allows signal.signal() calls from the main thread.
             import signal as _signal
-            _prev_sigint  = _signal.getsignal(_signal.SIGINT)
-            _prev_sigterm = _signal.getsignal(_signal.SIGTERM)
+            on_main_thread = threading.current_thread() is threading.main_thread()
+            if on_main_thread:
+                _prev_sigint  = _signal.getsignal(_signal.SIGINT)
+                _prev_sigterm = _signal.getsignal(_signal.SIGTERM)
 
             status = self.cam.open(init)
-            
-            _signal.signal(_signal.SIGINT,  _prev_sigint)
-            _signal.signal(_signal.SIGTERM, _prev_sigterm)
-            
+
+            if on_main_thread:
+                _signal.signal(_signal.SIGINT,  _prev_sigint)
+                _signal.signal(_signal.SIGTERM, _prev_sigterm)
+
             if status != sl.ERROR_CODE.SUCCESS:
-                raise RuntimeError(f"ZED {serial_number} open failed: {status}")
+                raise RuntimeError(f"ZED {self.serial} open failed: {status}")
 
             self.image_zed = sl.Mat()
             self.runtime   = sl.RuntimeParameters()
+            return True
         except Exception as e:
             print(f"[{self.name}] Camera init error: {e}")
             self.cam = None
+            return False
 
     def _close_cam(self):
         if self.cam and not self._cam_closed:
@@ -120,7 +131,7 @@ class ZEDSVORecorder(threading.Thread):
             return self.latest_frame
 
     def run(self):
-        if self.cam is None:
+        if not self._open_cam():
             print(f"[{self.name}] Camera not available, thread exiting")
             return
 
