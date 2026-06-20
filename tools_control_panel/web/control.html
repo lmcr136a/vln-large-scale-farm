@@ -393,12 +393,13 @@
 
   <div id="robot-status"></div>
 
-  <!-- Bottom RGB streaming bar: shown only when internet is available -->
+  <!-- Left RGB column (Left/Front/Right/Back, internet only), each row paired
+       with that camera's own scene description (see syncLeftColumnTop in control.js) -->
   <div id="rgb-stream-bar">
-    <div class="rgb-cam"><span class="rgb-cam-label">Left</span><img  id="left-rgb-image"  alt="Left"  /></div>
-    <div class="rgb-cam"><span class="rgb-cam-label">Front</span><img id="front-rgb-image" alt="Front" /></div>
-    <div class="rgb-cam"><span class="rgb-cam-label">Right</span><img id="right-rgb-image" alt="Right" /></div>
-    <div class="rgb-cam"><span class="rgb-cam-label">Back</span><img  id="back-rgb-image"  alt="Back"  /></div>
+    <div class="rgb-cam"><div class="rgb-cam-imgwrap"><span class="rgb-cam-label">Left</span><img  id="left-rgb-image"  alt="Left"  /></div><div class="rgb-cam-desc" id="left-rgb-desc"></div></div>
+    <div class="rgb-cam"><div class="rgb-cam-imgwrap"><span class="rgb-cam-label">Front</span><img id="front-rgb-image" alt="Front" /></div><div class="rgb-cam-desc" id="front-rgb-desc"></div></div>
+    <div class="rgb-cam"><div class="rgb-cam-imgwrap"><span class="rgb-cam-label">Right</span><img id="right-rgb-image" alt="Right" /></div><div class="rgb-cam-desc" id="right-rgb-desc"></div></div>
+    <div class="rgb-cam"><div class="rgb-cam-imgwrap"><span class="rgb-cam-label">Back</span><img  id="back-rgb-image"  alt="Back"  /></div><div class="rgb-cam-desc" id="back-rgb-desc"></div></div>
   </div>
 
   <script src="schedule.js"></script>

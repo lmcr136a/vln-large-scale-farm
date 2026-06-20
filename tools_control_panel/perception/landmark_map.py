@@ -1,16 +1,26 @@
 """
 GPS-based top-down map generator.
 
-Generates a North-up PNG image + map_state.json in the same format the
-existing web panel expects (path_plan.js worldToPixel / pixelToWorld).
+Generates a North-up PNG image + map_state.json in the format the web panel
+expects (control.js / path_plan.js worldToPixel / pixelToWorld).
 
 map_state fields:
   resolution  — metres per pixel
-  origin_x    — world ENU x at image left edge (west)
-  origin_y    — world ENU y at image bottom (south)
+  origin_x    — ENU x at image left edge
+  origin_y    — ENU y at image bottom
   img_width   — pixels
   img_height  — pixels
-  rot_angle   — 0.0 (North-up ENU)
+  rot_angle   — always 0.0 (North-up); kept for web-panel compatibility.
+
+When a crop_field.json is available, the field's south edge (ref_x, y_south)
+is treated as a fixed, permanent survey baseline. rotation_deg tilts only the
+north end of each row sideways (a shear, not a rotation), so the south
+corners never move when rotation_deg is adjusted — the field renders as a
+parallelogram. The image is cropped tightly to this shape + CROP_MARGIN,
+expanded as needed so visible track/landmarks are never clipped.
+Without a crop_field.json, the map falls back to a North-up view sized from
+the visible track/landmarks (legacy behaviour, for use before the field is
+calibrated).
 """
 import json
 import logging
@@ -23,9 +33,16 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-RESOLUTION   = 0.2    # metres per pixel
+RESOLUTION   = 0.05   # metres per pixel (5 cm/px)
 GRID_SPACING = 10.0   # metres between grid lines
 MAP_INTERVAL = 3.0    # seconds between regeneration
+CROP_MARGIN  = 10.0   # metres of blank margin kept around the crop field
+MAX_IMG_PX   = 6000   # hard cap per image dimension
+
+ROBOT_HALF_M = 0.3    # robot footprint is 0.6 x 0.6 m (half-width = 0.3 m)
+
+# TEMP (user-requested): pause landmark drawing while accuracy work continues.
+LANDMARKS_PAUSED = True
 
 # RGB colours
 C_BG       = (255, 255, 255)   # white background
@@ -35,13 +52,13 @@ C_ROBOT    = (255, 100,   0)
 C_WAYPOINT = ( 60, 140, 220)
 
 TYPE_COLOURS = {
-    'metal_box':  ( 60,  60, 200),
-    'trailer':    (200,  60,  60),
-    'vehicle':    (200, 120,  40),
-    'building':   (120,  60, 180),
+    'metal_box':  (200, 160, 130),
+    'trailer':    (200, 160, 130),
+    'vehicle':    (200, 160, 130),
+    'building':   (200, 160, 130),
     'crop_stick': (200, 150,   0),
 }
-C_DEFAULT_LM = (120, 80, 180)
+C_DEFAULT_LM = (200, 160, 130)
 
 
 def _gps_to_enu(lat, lon, origin_lat, origin_lon):
@@ -54,19 +71,20 @@ def _gps_to_enu(lat, lon, origin_lat, origin_lon):
 # Field stripe constants
 _FT = 0.3048            # 1 foot in metres
 C_FIELD_GREEN = (180, 220, 200)
-STRIPE_GREEN_W = 8 * _FT   # 2.4384 m
-STRIPE_WHITE_W = 6 * _FT   # 1.8288 m
+STRIPE_GREEN_W = 10 * _FT  # 3.048 m
+STRIPE_WHITE_W = 4 * _FT   # 1.2192 m
 MAX_GREEN_STRIPES = 15
 
 
 def _load_crop(crop_file: str | None) -> dict | None:
-    """Load crop_field.json → {ref_x, y_south, y_north} or None."""
+    """Load crop_field.json → {ref_x, y_south, y_north, rotation_deg} or None."""
     if not crop_file:
         return None
     try:
         with open(crop_file) as f:
             d = json.load(f)
         if 'ref_x' in d and 'y_south' in d and 'y_north' in d:
+            d.setdefault('rotation_deg', 0.0)
             return d
     except Exception:
         pass
@@ -80,8 +98,10 @@ def generate_map(localizer, store, output_dir: str,
                  crop_file: str | None = None) -> dict:
     """
     Generate top-down PNG.
-    crop_file: path to crop_field.json with {ref_x, y_south, y_north}.
-               Stripes are drawn permanently from that file — never from mission points.
+    crop_file: path to crop_field.json with {ref_x, y_south, y_north, rotation_deg}.
+               When present, the image is cropped tightly to this field's shape
+               (+ CROP_MARGIN) and aligned to its orientation. Stripes are drawn
+               permanently from that file — never from mission points.
     Returns map_state dict (empty dict on failure).
     """
     try:
@@ -96,47 +116,82 @@ def generate_map(localizer, store, output_dir: str,
 
     track     = localizer.get_track()
     landmarks = store.get_all()
+    crop      = _load_crop(crop_file)
 
-    # Map bounds: current track + all past paths + landmarks → everything visible from first frame
-    PAD = 20.0
-    x_min, y_min, x_max, y_max = localizer.get_map_bounds_enu(padding_m=PAD)
+    # ── Field shape: south edge fixed, north edge sheared sideways ───────────
+    # rotation_deg tilts only the north end of each row; (ref_x, y_south) and
+    # the west edge at y_south never move, so the field is a parallelogram,
+    # not a rotated rectangle.
+    stripe_total_w = MAX_GREEN_STRIPES * STRIPE_GREEN_W + (MAX_GREEN_STRIPES - 1) * STRIPE_WHITE_W
+    dx_shift = 0.0
 
-    if past_paths:
-        for path in past_paths:
-            for p in path:
-                x_min = min(x_min, p['x'] - PAD)
-                y_min = min(y_min, p['y'] - PAD)
-                x_max = max(x_max, p['x'] + PAD)
-                y_max = max(y_max, p['y'] + PAD)
-
-    # Expand map bounds to show full crop field (stripes + y clip range)
-    crop = _load_crop(crop_file)
     if crop:
-        stripe_total_w = MAX_GREEN_STRIPES * STRIPE_GREEN_W + (MAX_GREEN_STRIPES - 1) * STRIPE_WHITE_W
-        x_min = min(x_min, crop['ref_x'] - stripe_total_w - PAD)
-        x_max = max(x_max, crop['ref_x'] + PAD)
-        y_min = min(y_min, crop['y_south'] - PAD)
-        y_max = max(y_max, crop['y_north'] + PAD)
+        theta    = math.radians(crop.get('rotation_deg', 0.0))
+        dx_shift = (crop['y_north'] - crop['y_south']) * math.sin(theta)
+        west_x   = crop['ref_x'] - stripe_total_w
 
-    if landmarks:
-        for lm in landmarks:
-            if lm.get('lat') is None:
-                continue
-            lx, ly = _gps_to_enu(lm['lat'], lm['lon'], origin_lat, origin_lon)
-            x_min = min(x_min, lx - PAD)
-            y_min = min(y_min, ly - PAD)
-            x_max = max(x_max, lx + PAD)
-            y_max = max(y_max, ly + PAD)
+        corners = [
+            (crop['ref_x'], crop['y_south']), (west_x,            crop['y_south']),
+            (crop['ref_x'] + dx_shift, crop['y_north']), (west_x + dx_shift, crop['y_north']),
+        ]
+        xs, ys = zip(*corners)
+        x_min, x_max = min(xs) - CROP_MARGIN, max(xs) + CROP_MARGIN
+        y_min, y_max = min(ys) - CROP_MARGIN, max(ys) + CROP_MARGIN
 
-    # Ensure minimum 60 × 60 m
-    cx  = (x_min + x_max) / 2
-    cy  = (y_min + y_max) / 2
-    ext = max(30.0, (x_max - x_min) / 2, (y_max - y_min) / 2)
-    x_min, x_max = cx - ext, cx + ext
-    y_min, y_max = cy - ext, cy + ext
+        # The field shape is only the *default* tight fit — expand to include
+        # all current/past trajectory data so previous visits are never clipped.
+        def _expand(wx, wy):
+            nonlocal x_min, x_max, y_min, y_max
+            x_min = min(x_min, wx - CROP_MARGIN); x_max = max(x_max, wx + CROP_MARGIN)
+            y_min = min(y_min, wy - CROP_MARGIN); y_max = max(y_max, wy + CROP_MARGIN)
 
-    W = min(4000, max(200, int((x_max - x_min) / RESOLUTION)))
-    H = min(4000, max(200, int((y_max - y_min) / RESOLUTION)))
+        for p in track:
+            _expand(p['x'], p['y'])
+        if past_paths:
+            for path in past_paths:
+                for p in path:
+                    _expand(p['x'], p['y'])
+        if landmarks:
+            for lm in landmarks:
+                if lm.get('lat') is None:
+                    continue
+                lx, ly = _gps_to_enu(lm['lat'], lm['lon'], origin_lat, origin_lon)
+                _expand(lx, ly)
+        if waypoints:
+            for wp in waypoints:
+                _expand(wp.get('x', 0), wp.get('y', 0))
+    else:
+        # ── Fallback (no crop configured yet): legacy North-up bounds ────────
+        PAD = 20.0
+        x_min, y_min, x_max, y_max = localizer.get_map_bounds_enu(padding_m=PAD)
+
+        if past_paths:
+            for path in past_paths:
+                for p in path:
+                    x_min = min(x_min, p['x'] - PAD)
+                    y_min = min(y_min, p['y'] - PAD)
+                    x_max = max(x_max, p['x'] + PAD)
+                    y_max = max(y_max, p['y'] + PAD)
+
+        if landmarks:
+            for lm in landmarks:
+                if lm.get('lat') is None:
+                    continue
+                lx, ly = _gps_to_enu(lm['lat'], lm['lon'], origin_lat, origin_lon)
+                x_min = min(x_min, lx - PAD)
+                y_min = min(y_min, ly - PAD)
+                x_max = max(x_max, lx + PAD)
+                y_max = max(y_max, ly + PAD)
+
+        # Ensure minimum 60 × 60 m
+        cx  = (x_min + x_max) / 2
+        cy  = (y_min + y_max) / 2
+        ext = max(30.0, (x_max - x_min) / 2, (y_max - y_min) / 2)
+        x_min, x_max = cx - ext, cx + ext
+        y_min, y_max = cy - ext, cy + ext
+
+    W = min(MAX_IMG_PX, max(200, int((x_max - x_min) / RESOLUTION)))
+    H = min(MAX_IMG_PX, max(200, int((y_max - y_min) / RESOLUTION)))
 
     def to_px(x, y):
         px = int((x - x_min) / RESOLUTION)
@@ -147,23 +202,23 @@ def generate_map(localizer, store, output_dir: str,
     draw = ImageDraw.Draw(img)
 
     # Field stripes from crop_field.json (permanent — never from mission points).
-    # Left of ref_x: green 8ft / white 6ft alternating, clipped to [y_south, y_north].
-    # Right of ref_x and outside y range: white background.
+    # South edge is fixed; north edge is shifted by dx_shift → each stripe is
+    # drawn as a parallelogram (south corners never move).
+    # Left of ref_x: green 9ft / white 5ft alternating.
     if crop:
-        # Y clip in pixel space (image y is flipped: North = small py)
-        py_top    = max(0, min(H - 1, H - 1 - int((crop['y_north'] - y_min) / RESOLUTION)))
-        py_bottom = max(0, min(H - 1, H - 1 - int((crop['y_south'] - y_min) / RESOLUTION)))
-        cur_x       = crop['ref_x']
-        green_count = 0
-        while green_count < MAX_GREEN_STRIPES and cur_x > x_min:
-            g_right = cur_x
-            g_left  = cur_x - STRIPE_GREEN_W
-            px_r = max(0, min(W - 1, int((g_right - x_min) / RESOLUTION)))
-            px_l = max(0, min(W - 1, int((g_left  - x_min) / RESOLUTION)))
-            if px_l < px_r and py_top < py_bottom:
-                draw.rectangle([px_l, py_top, px_r, py_bottom], fill=C_FIELD_GREEN)
-            cur_x = g_left - STRIPE_WHITE_W
-            green_count += 1
+        y_s, y_n  = crop['y_south'], crop['y_north']
+        cur_lx    = 0.0
+        for _ in range(MAX_GREEN_STRIPES):
+            g_right_lx = cur_lx
+            g_left_lx  = cur_lx - STRIPE_GREEN_W
+            quad = [
+                to_px(crop['ref_x'] + g_right_lx,            y_s),
+                to_px(crop['ref_x'] + g_left_lx,              y_s),
+                to_px(crop['ref_x'] + g_left_lx  + dx_shift,  y_n),
+                to_px(crop['ref_x'] + g_right_lx + dx_shift,  y_n),
+            ]
+            draw.polygon(quad, fill=C_FIELD_GREEN)
+            cur_lx = g_left_lx - STRIPE_WHITE_W
 
     # Grid
     x0 = math.ceil(x_min / GRID_SPACING) * GRID_SPACING
@@ -175,8 +230,8 @@ def generate_map(localizer, store, output_dir: str,
         _, py = to_px(x_min, gy)
         draw.line([(0, py), (W - 1, py)], fill=C_GRID, width=1)
 
-    # N arrow (top-right corner)
-    ax, ay = W - 20, 30
+    # N arrow (top-right corner, always points straight up — North-up frame)
+    ax, ay = W - 30, 30
     draw.line([(ax, ay + 15), (ax, ay - 15)], fill=(100, 100, 200), width=2)
     draw.polygon([(ax - 4, ay - 10), (ax + 4, ay - 10), (ax, ay - 20)], fill=(100, 100, 200))
     draw.text((ax - 3, ay - 32), 'N', fill=(60, 60, 160))
@@ -223,58 +278,62 @@ def generate_map(localizer, store, output_dir: str,
                 draw.line([wp_pts[i - 1], wp_pts[i]],
                           fill=(*C_WAYPOINT, 180), width=1)
         for i, p in enumerate(wp_pts):
-            r = 6 if i == 0 else 4
+            r = 3 if i == 0 else 2
             draw.ellipse([p[0]-r, p[1]-r, p[0]+r, p[1]+r],
                          fill=C_WAYPOINT, outline=(255, 255, 255))
 
-    # Landmarks
-    for lm in landmarks:
-        if lm.get('lat') is None:
-            continue
-        lx, ly = _gps_to_enu(lm['lat'], lm['lon'], origin_lat, origin_lon)
-        px, py = to_px(lx, ly)
-        colour = TYPE_COLOURS.get(lm['type'], C_DEFAULT_LM)
+    # Landmarks — TEMP (user-requested): not drawn while landmark accuracy work
+    # continues. Re-enable by removing this `if not LANDMARKS_PAUSED:` guard.
+    if not LANDMARKS_PAUSED:
+        for lm in landmarks:
+            if lm.get('lat') is None:
+                continue
+            lx, ly = _gps_to_enu(lm['lat'], lm['lon'], origin_lat, origin_lon)
+            px, py = to_px(lx, ly)
+            colour = TYPE_COLOURS.get(lm['type'], C_DEFAULT_LM)
 
-        if lm['type'] == 'crop_stick':
-            r = 4
-            draw.ellipse([px-r, py-r, px+r, py+r], fill=colour, outline=(0, 0, 0))
-            num = lm.get('number')
-            if num:
-                draw.text((px + 5, py - 6), str(num), fill=(0, 0, 0))
-        else:
-            # Draw bbox if available
-            if all(k in lm for k in ('lat_min', 'lat_max', 'lon_min', 'lon_max')):
-                x0l, y0l = _gps_to_enu(lm['lat_min'], lm['lon_min'], origin_lat, origin_lon)
-                x1l, y1l = _gps_to_enu(lm['lat_max'], lm['lon_max'], origin_lat, origin_lon)
-                p0 = to_px(x0l, y0l)
-                p1 = to_px(x1l, y1l)
-                x_left   = min(p0[0], p1[0])
-                x_right  = max(p0[0], p1[0])
-                y_top    = min(p0[1], p1[1])
-                y_bottom = max(p0[1], p1[1])
-                draw.rectangle([x_left, y_top, x_right, y_bottom],
-                               outline=colour, width=2)
+            if lm['type'] == 'crop_stick':
+                r = 4
+                draw.ellipse([px-r, py-r, px+r, py+r], fill=colour, outline=(0, 0, 0))
+                num = lm.get('number')
+                if num:
+                    draw.text((px + 5, py - 6), str(num), fill=(0, 0, 0))
             else:
-                r = 8
-                draw.rectangle([px-r, py-r, px+r, py+r], outline=colour, width=2)
-            label = lm.get('description') or lm['type']
-            draw.text((px + 10, py - 6), label[:20], fill=colour)
+                # Draw bbox if available
+                if all(k in lm for k in ('lat_min', 'lat_max', 'lon_min', 'lon_max')):
+                    x0l, y0l = _gps_to_enu(lm['lat_min'], lm['lon_min'], origin_lat, origin_lon)
+                    x1l, y1l = _gps_to_enu(lm['lat_max'], lm['lon_max'], origin_lat, origin_lon)
+                    p0 = to_px(x0l, y0l)
+                    p1 = to_px(x1l, y1l)
+                    x_left   = min(p0[0], p1[0])
+                    x_right  = max(p0[0], p1[0])
+                    y_top    = min(p0[1], p1[1])
+                    y_bottom = max(p0[1], p1[1])
+                    draw.rectangle([x_left, y_top, x_right, y_bottom],
+                                   outline=colour, width=2)
+                else:
+                    r = 8
+                    draw.rectangle([px-r, py-r, px+r, py+r], outline=colour, width=2)
+                label = lm.get('description') or lm['type']
+                draw.text((px + 10, py - 6), label[:20], fill=colour)
 
-    # Robot
+    # Robot — circle sized to the 0.6 x 0.6 m footprint, heading shown as a line
     if robot_pose:
-        rx  = robot_pose.get('x', 0)
-        ry  = robot_pose.get('y', 0)
+        rwx = robot_pose.get('x', 0)
+        rwy = robot_pose.get('y', 0)
         yaw = robot_pose.get('yaw', 0)
         heading_valid = robot_pose.get('heading_valid', True)
-        rpx, rpy = to_px(rx, ry)
-        rr = 6
-        draw.ellipse([rpx-rr, rpy-rr, rpx+rr, rpy+rr],
+        rpx, rpy = to_px(rwx, rwy)
+
+        rr = ROBOT_HALF_M / RESOLUTION
+        draw.ellipse([rpx - rr, rpy - rr, rpx + rr, rpy + rr],
                      fill=C_ROBOT, outline=(255, 255, 255))
+
         if heading_valid:
-            alen = 16
-            epx = int(rpx + alen * math.cos(yaw))
-            epy = int(rpy - alen * math.sin(yaw))  # screen y flips sign
-            draw.line([(rpx, rpy), (epx, epy)], fill=C_ROBOT, width=3)
+            alen = rr + 0.15 / RESOLUTION
+            dx =  alen * math.cos(yaw)
+            dy = -alen * math.sin(yaw)
+            draw.line([(rpx, rpy), (rpx + dx, rpy + dy)], fill=(255, 255, 255), width=2)
 
     # Save
     os.makedirs(output_dir, exist_ok=True)
@@ -325,7 +384,6 @@ class GpsMapLoop:
 
     def _loop(self):
         while True:
-            time.sleep(self._interval)
             try:
                 state = generate_map(
                     self._localizer,
@@ -341,3 +399,4 @@ class GpsMapLoop:
                     self._internet.send_map(png_path, state)
             except Exception as e:
                 log.warning(f'GpsMapLoop: {e}')
+            time.sleep(self._interval)

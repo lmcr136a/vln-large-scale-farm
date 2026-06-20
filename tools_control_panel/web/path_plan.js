@@ -6,6 +6,8 @@
 //                          (first = white square / start)
 //    • Click start marker (≥2 pts)  →  toggle closed loop
 //    • Click any other marker  →  remove it
+//    • Drag any marker  →  move that waypoint
+//    • Undo  →  reverses the most recent add/delete/move (in that order)
 // ═══════════════════════════════════════════════════════════════
 
 const host   = window.location.hostname;
@@ -22,6 +24,12 @@ let _downPos       = null;
 let _downOnMarker  = false;
 let _markerAction  = null;   // action queued from marker mousedown, executed on mouseup
 let landmarks      = [];     // [{id, type, lat, lon, x_enu, y_enu, number, description}]
+let history        = [];     // undo stack: {type:'add'|'delete'|'move', index, point, oldPoint}
+
+function pushHistory(action) {
+  history.push(action);
+  if (history.length > 200) history.shift();
+}
 
 // Convert landmark lat/lon → ENU world coords using map origin
 function landmarkToEnu(lm, meta) {
@@ -64,7 +72,7 @@ function initStage() {
     if (!_downPos) return;
     const dx = e.clientX - _downPos.x, dy = e.clientY - _downPos.y;
     _downPos = null;
-    if (Math.sqrt(dx*dx + dy*dy) > 5) return;
+    if (Math.sqrt(dx*dx + dy*dy) > 5) { _downOnMarker = false; _markerAction = null; return; }
     if (_downOnMarker) {
       _downOnMarker = false;
       const action = _markerAction;
@@ -126,20 +134,28 @@ function onMapClick(e) {
   );
   if (!world) return;
   waypoints.push(world);
+  pushHistory({ type: 'add', index: waypoints.length - 1 });
   redraw();
 }
 
 // ── Buttons ───────────────────────────────────────────────────
 function undoLast() {
-  if (!waypoints.length) return;
-  waypoints.pop();
+  const action = history.pop();
+  if (!action) return;
+  if (action.type === 'add') {
+    waypoints.splice(action.index, 1);
+  } else if (action.type === 'delete') {
+    waypoints.splice(action.index, 0, action.point);
+  } else if (action.type === 'move') {
+    waypoints[action.index] = action.oldPoint;
+  }
   if (waypoints.length < 2) isLoop = false;
   redraw();
 }
 function clearAll() {
   if (!waypoints.length) return;
   if (!confirm('Clear all points?')) return;
-  waypoints = []; isLoop = false; redraw();
+  waypoints = []; isLoop = false; history = []; redraw();
 }
 
 // ── Draw ──────────────────────────────────────────────────────
@@ -171,8 +187,14 @@ function redraw() {
     // Start marker: toggle loop (if ≥2 pts), else remove
     const onAction = (isStart && n > 1)
       ? () => { isLoop = !isLoop; redraw(); }
-      : () => { waypoints.splice(i,1); if (waypoints.length < 2) isLoop = false; redraw(); };
-    drawMarker(p.x, p.y, isStart ? 'start' : isEnd ? 'end' : 'mid', onAction);
+      : () => {
+          const removed = waypoints[i];
+          waypoints.splice(i, 1);
+          pushHistory({ type: 'delete', index: i, point: removed });
+          if (waypoints.length < 2) isLoop = false;
+          redraw();
+        };
+    drawMarker(p.x, p.y, isStart ? 'start' : isEnd ? 'end' : 'mid', onAction, i);
   });
 
   // Landmarks
@@ -194,13 +216,18 @@ function redraw() {
     }
   });
 
-  // Robot
+  // Robot — circle sized to the 0.6 x 0.6 m footprint, heading shown as an arrow
   if (robotPose && currentMapMeta) {
     const p = worldToPixel(robotPose.x, robotPose.y);
     if (p) {
-      const yaw = robotPose.yaw - currentMapMeta.rot_angle;
-      dynLayer.add(new Konva.Circle({ x:p.x,y:p.y,radius:4,fill:'rgba(255,100,0,0.95)',stroke:'white',strokeWidth:1.5,listening:false }));
-      dynLayer.add(new Konva.Arrow({ points:[p.x,p.y,p.x+Math.cos(yaw)*8,p.y-Math.sin(yaw)*8],pointerLength:5,pointerWidth:4,fill:'rgba(255,100,0,0.95)',stroke:'rgba(255,100,0,0.95)',strokeWidth:2,listening:false }));
+      const res     = currentMapMeta.resolution;   // m/px from map_state.json
+      const half_px = 0.3 / res;                   // ROBOT_HALF_M = 0.3m (60x60cm footprint)
+      const yaw     = robotPose.yaw - currentMapMeta.rot_angle;
+      dynLayer.add(new Konva.Circle({
+        x:p.x, y:p.y, radius:half_px,
+        fill:'rgba(255,100,0,0.95)', stroke:'white', strokeWidth:1.5, listening:false,
+      }));
+      dynLayer.add(new Konva.Arrow({ points:[p.x,p.y,p.x+Math.cos(yaw)*half_px*1.6,p.y-Math.sin(yaw)*half_px*1.6],pointerLength:5,pointerWidth:4,fill:'rgba(255,100,0,0.95)',stroke:'rgba(255,100,0,0.95)',strokeWidth:2,listening:false }));
     }
   }
 
@@ -211,15 +238,15 @@ function redraw() {
   dynLayer.draw();
 }
 
-function drawMarker(x, y, type, onAction) {
-  const g = new Konva.Group({ x, y });
-  const S = 10;
+function drawMarker(x, y, type, onAction, idx) {
+  const g = new Konva.Group({ x, y, draggable: true });
+  const S = 5;
   if (type === 'start')
     g.add(new Konva.Rect({ x:-S/2,y:-S/2,width:S,height:S,fill:'white',stroke:'black',strokeWidth:1 }));
   else if (type === 'end')
     g.add(new Konva.Rect({ x:-S/2,y:-S/2,width:S,height:S,fill:'#4499ff',stroke:'black',strokeWidth:1 }));
   else
-    g.add(new Konva.Circle({ radius:5,fill:'rgb(200,200,200)',stroke:'black',strokeWidth:1 }));
+    g.add(new Konva.Circle({ radius:2.5,fill:'rgb(200,200,200)',stroke:'black',strokeWidth:1 }));
 
   // Transparent hit area (Konva.Circle on Group child, not hitFunc)
   g.add(new Konva.Circle({ radius:14,fill:'transparent',stroke:null }));
@@ -227,6 +254,20 @@ function drawMarker(x, y, type, onAction) {
   g.on('mousedown', () => { _downOnMarker = true; _markerAction = onAction; });
   g.on('mouseenter',() => stage.container().style.cursor = 'pointer');
   g.on('mouseleave',() => stage.container().style.cursor = 'grab');
+
+  // Drag to move this waypoint. The stage's own click/pan handling (in
+  // initStage) already ignores gestures that moved >5px, so dragging here
+  // never also triggers the click-to-delete/toggle action above.
+  let oldPoint = null;
+  g.on('dragstart', () => { oldPoint = { ...waypoints[idx] }; });
+  g.on('dragend', () => {
+    const w = pixelToWorld(g.x(), g.y());
+    if (w) {
+      waypoints[idx] = w;
+      pushHistory({ type: 'move', index: idx, oldPoint });
+    }
+    redraw();
+  });
   dynLayer.add(g);
 }
 
@@ -254,6 +295,7 @@ async function loadMission() {
     const d = await r.json();
     waypoints = d.start ? [d.start, ...(d.waypoints||[])] : (d.waypoints||[]);
     isLoop    = d.isLoop || false;
+    history   = [];
     redraw();
   } catch {}
 }

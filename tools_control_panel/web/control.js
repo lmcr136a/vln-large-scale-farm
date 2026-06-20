@@ -187,6 +187,16 @@ function setRgbBarVisible(visible) {
   if (bar) bar.style.display = visible ? 'flex' : 'none';
 }
 
+// Keep the left RGB column pinned just below #top-panel's *actual* rendered
+// height (which varies with content), so it never overlaps the
+// safety-checker / radio-camera widgets above.
+function syncLeftColumnTop() {
+  const topPanel = document.getElementById('top-panel');
+  const bar       = document.getElementById('rgb-stream-bar');
+  if (!topPanel || !bar) return;
+  bar.style.top = `${topPanel.getBoundingClientRect().height}px`;
+}
+
 // Init: radio top image, bottom RGB bar hidden until internet is up
 (function initCameras() {
   const frontTop = document.getElementById('rgb-image');
@@ -195,6 +205,12 @@ function setRgbBarVisible(visible) {
     frontTop.src = _BLACK_FRAME;
   }
   setRgbBarVisible(false);
+  syncLeftColumnTop();
+  const topPanel = document.getElementById('top-panel');
+  if (topPanel && typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(syncLeftColumnTop).observe(topPanel);
+  }
+  window.addEventListener('resize', syncLeftColumnTop);
 })();
 
 socket.on('radio_frame', (data) => {
@@ -288,6 +304,15 @@ socket.on('robot_status', (data) => {
   const div = document.getElementById('robot-status');
   if (data.status) { div.textContent = data.status; div.style.display = 'block'; }
   else             { div.style.display = 'none'; }
+});
+
+socket.on('scene_description', (data) => {
+  const descriptions = data && data.descriptions;
+  if (!descriptions) return;
+  for (const [camera, text] of Object.entries(descriptions)) {
+    const div = document.getElementById(`${camera}-rgb-desc`);
+    if (div && text) { div.textContent = text; div.style.display = '-webkit-box'; }
+  }
 });
 
 socket.on('robot_telemetry', (data) => {
@@ -391,7 +416,7 @@ function redrawDynLayer() {
     const isStart = i === 0;
     const isEnd   = i === visibleNodes.length - 1;
     if (isStart || isEnd) {
-      const S = 10;
+      const S = 5;
       dynLayer.add(new Konva.Rect({
         x: n.stageX - S / 2, y: n.stageY - S / 2,
         width: S, height: S,
@@ -402,7 +427,7 @@ function redrawDynLayer() {
     } else {
       dynLayer.add(new Konva.Circle({
         x: n.stageX, y: n.stageY,
-        radius: n.reached ? 5 : 4,
+        radius: n.reached ? 2.5 : 2,
         fill: n.reached ? 'rgb(255,220,0)' : 'rgb(200,200,200)',
         stroke: 'black', strokeWidth: 1,
         listening: false,
@@ -413,9 +438,9 @@ function redrawDynLayer() {
   if (robotPose && currentMapMeta) {
     const p = worldToStagePixel(robotPose.x, robotPose.y);
     if (p) {
-      const res      = currentMapMeta.resolution;  // m/px from map_state.json
-      const r_px     = 0.3  / res;                 // ROBOT_RADIUS_M  = 0.3m
-      const arrow_px = 0.46 / res;                 // ROBOT_ARROW_LEN_M = 0.46m
+      const res      = currentMapMeta.resolution;   // m/px from map_state.json
+      const r_px     = 0.3  / res;                  // ROBOT_HALF_M = 0.3m (60x60cm footprint)
+      const arrow_px = 0.46 / res;                  // ROBOT_ARROW_LEN_M = 0.46m
       const lw       = Math.max(1, r_px * 0.25);
 
       const yawRad = robotPose.yaw - currentMapMeta.rot_angle;
@@ -425,8 +450,8 @@ function redrawDynLayer() {
       dynLayer.add(new Konva.Circle({
         x: p.x, y: p.y,
         radius: r_px,
-        fill: 'rgba(0,0,255,0.85)',
-        stroke: 'rgba(255,255,0,0.95)',
+        fill: 'rgba(255,100,0,0.95)',
+        stroke: 'white',
         strokeWidth: lw,
         listening: false,
       }));
@@ -434,8 +459,8 @@ function redrawDynLayer() {
         points: [p.x, p.y, p.x + dx, p.y + dy],
         pointerLength: r_px * 0.5,
         pointerWidth:  r_px * 0.4,
-        fill:   'rgba(255,255,0,0.95)',
-        stroke: 'rgba(255,255,0,0.95)',
+        fill:   'rgba(255,100,0,0.95)',
+        stroke: 'rgba(255,100,0,0.95)',
         strokeWidth: lw,
         listening: false,
       }));

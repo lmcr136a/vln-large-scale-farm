@@ -4,6 +4,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
 TOOLS_DIR="$WORKSPACE_DIR/tools_control_panel"
 
+# jetson_main.py runs YOLO + the VLM client and needs GPU-enabled torch — the
+# system python3's ~/.local torch can't see the Jetson GPU at all (CPU-only
+# fallback, ~100x slower). The vln conda env has a working CUDA torch build;
+# PYTHONNOUSERSITE keeps ~/.local's broken torch from shadowing it.
+JETSON_PYTHON="$HOME/anaconda3/envs/vln/bin/python3"
+export PYTHONNOUSERSITE=1
+
 cleanup() {
     echo ""
     echo "🛑 Stopping all services..."
@@ -17,7 +24,7 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
-# # sudo systemctl restart nvargus-daemon
+# # # sudo systemctl restart nvargus-daemon
 
 echo "🚗 Setting up CAN interface..."
 sudo ip link set can0 down 2>/dev/null
@@ -37,7 +44,7 @@ sleep 2
 echo ""
 echo "🤖 Starting Jetson agent..."
 cd "$WORKSPACE_DIR"
-python3 -u tools_control_panel/jetson/jetson_main.py &
+"$JETSON_PYTHON" -u tools_control_panel/jetson/jetson_main.py &
 JETSON_PID=$!
 
 wait

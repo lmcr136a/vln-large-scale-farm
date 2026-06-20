@@ -99,6 +99,19 @@ DEFAULT_YOLO_CLASSES = [
     'pallet',
 ]
 
+# Real-world objects don't suddenly grow — cap the estimated width so a loose
+# bbox or a noisy depth/triangulation read can't inflate a known-small object
+# (utility boxes are ~1m) into something the size of a building.
+MAX_WIDTH_M = {
+    'metal_box':  2.5,
+    'crop_stick': 1.0,
+}
+DEFAULT_MAX_WIDTH_M = 30.0
+
+# TEMP (user-requested): pause landmark observation/saving while accuracy work
+# continues. YOLO inference + annotated-frame streaming stay on either way.
+LANDMARKS_PAUSED = True
+
 # ── Triangulation helpers ─────────────────────────────────────────────────────
 
 def _ray_intersect(rays: list) -> tuple | None:
@@ -362,6 +375,11 @@ class LandmarkDetector:
             detections = self._run_yolo(snapshot)
             if not detections:
                 return
+            # TEMP (user-requested): landmark observation/saving is paused for now —
+            # YOLO inference + annotated-frame streaming above still runs as before.
+            # Re-enable by removing this early return.
+            if LANDMARKS_PAUSED:
+                return
             # Landmark saving requires valid GPS heading (unreliable until robot moves)
             if not self._localizer.is_heading_valid():
                 log.debug('LandmarkDetector: heading not yet valid, skipping save')
@@ -371,6 +389,8 @@ class LandmarkDetector:
                 return
             lat, lon, heading = gps
         else:
+            if LANDMARKS_PAUSED:
+                return
             gps = self._localizer.get_current_gps()
             if gps is None:
                 log.warning('LandmarkDetector: GPS not available, skipping')
@@ -409,7 +429,8 @@ class LandmarkDetector:
                     continue
 
                 # Width from pixel span and actual depth: w = (x2-x1) * Z / fx
-                width_m = max(0.3, min(30.0, (bbox[2] - bbox[0]) * Z / fx))
+                cap     = MAX_WIDTH_M.get(det['type'], DEFAULT_MAX_WIDTH_M)
+                width_m = max(0.3, min(cap, (bbox[2] - bbox[0]) * Z / fx))
 
                 lm_id = self._store.add_landmark(
                     lm_type     = det['type'],
@@ -443,7 +464,8 @@ class LandmarkDetector:
                 tri_dist    = math.hypot(obj_x - robot_x, obj_y - robot_y)
                 bbox_w_frac = det.get('bbox_w_frac', 0.15)
                 half_angle  = bbox_w_frac * self._cam_hfov
-                width_m     = max(0.5, min(30.0, 2 * tri_dist * math.tan(half_angle)))
+                cap         = MAX_WIDTH_M.get(det['type'], DEFAULT_MAX_WIDTH_M)
+                width_m     = max(0.5, min(cap, 2 * tri_dist * math.tan(half_angle)))
 
                 lm_id = self._store.add_landmark(
                     lm_type     = det['type'],
@@ -559,21 +581,50 @@ class LandmarkDetector:
         if entry is None:
             return None
         _, depth_arr, K = entry
-
-        # Bbox centre pixel (clamp to image bounds)
-        u = int((x1 + x2) / 2)
-        v = int((y1 + y2) / 2)
         h_arr, w_arr = depth_arr.shape[:2]
-        u = max(0, min(u, w_arr - 1))
-        v = max(0, min(v, h_arr - 1))
 
-        # Sample median depth in a ±12 px patch for robustness against single bad pixels
-        r = 12
-        patch = depth_arr[max(0, v - r):v + r + 1, max(0, u - r):u + r + 1]
-        valid = patch[np.isfinite(patch) & (patch > 0.3) & (patch < 80.0)]
-        if len(valid) < 10:
+        # Shrink the box ~20% inward before sampling — a loose YOLO bbox often
+        # includes a fringe of background, which would otherwise bias the
+        # distance estimate (and the resulting width) farther/larger than reality.
+        mx, my = (x2 - x1) * 0.20, (y2 - y1) * 0.20
+        xi1 = int(max(0, min(w_arr - 1, x1 + mx)))
+        xi2 = int(max(0, min(w_arr - 1, x2 - mx)))
+        yi1 = int(max(0, min(h_arr - 1, y1 + my)))
+        yi2 = int(max(0, min(h_arr - 1, y2 - my)))
+        if xi2 <= xi1 or yi2 <= yi1:
+            xi1, yi1 = int(max(0, min(w_arr - 1, x1))), int(max(0, min(h_arr - 1, y1)))
+            xi2, yi2 = int(max(0, min(w_arr - 1, x2))), int(max(0, min(h_arr - 1, y2)))
+        u = (xi1 + xi2) / 2.0
+        v = (yi1 + yi2) / 2.0
+
+        patch    = depth_arr[yi1:yi2 + 1, xi1:xi2 + 1].astype(np.float64)
+        min_pts  = max(10, int(0.3 * patch.size))   # scale with box size, not a flat count
+        finite   = patch[np.isfinite(patch) & (patch > 0)]
+        if len(finite) < min_pts:
             return None
-        Z = float(np.median(valid))
+
+        # Depth units vary by source: metres from SVO replay, but raw ZED SDK
+        # calls elsewhere may give millimetres. Detect by magnitude (no real
+        # farm-robot distance is in the thousands) and normalise to metres.
+        if float(np.median(finite)) > 1000.0:
+            finite = finite / 1000.0
+
+        valid = finite[(finite > 0.3) & (finite < 80.0)]
+        if len(valid) < min_pts:
+            return None
+
+        # Closest coherent cluster, not the midpoint — if the bbox still
+        # straddles some background, that background only ever pulls the
+        # distance farther, never closer, so a low percentile is the more
+        # reliable read of "the object" than the median.
+        Z = float(np.percentile(valid, 25))
+
+        # Reject contaminated samples: a tight, single-object box should have
+        # a narrow depth spread. A wide spread means the box still mixes
+        # foreground and background and Z can't be trusted.
+        spread = float(np.percentile(valid, 75) - np.percentile(valid, 25))
+        if spread > max(1.0, 0.5 * Z):
+            return None
 
         # Pinhole back-projection in camera frame (ZED: X=right, Y=down, Z=forward)
         X_cam = (u - K['cx']) * Z / K['fx']

@@ -19,13 +19,16 @@ from datetime import datetime
 
 log = logging.getLogger(__name__)
 
-# Radius within which two detections of the same type are merged (metres)
+# Radius within which two detections of the same type are merged (metres).
+# Sized to absorb the real position scatter between repeat sightings of the
+# same object (GPS/heading/depth noise) seen in practice — still well under
+# the typical real-world spacing between distinct utility boxes/trailers.
 MERGE_RADIUS = {
-    'metal_box':  6.0,
-    'trailer':    8.0,
+    'metal_box':  10.0,
+    'trailer':    10.0,
     'crop_stick': 1.5,
 }
-DEFAULT_MERGE_RADIUS = 4.0
+DEFAULT_MERGE_RADIUS = 6.0
 
 
 def _haversine_m(lat1, lon1, lat2, lon2) -> float:
@@ -68,41 +71,95 @@ class LandmarkStore:
         radius = MERGE_RADIUS.get(lm_type, DEFAULT_MERGE_RADIUS)
 
         with self._lock:
+            target = None
             for lm in self._landmarks:
-                if lm['type'] != lm_type:
-                    continue
-                if _haversine_m(lat, lon, lm['lat'], lm['lon']) < radius:
-                    # Merge: running average position
-                    n = lm['sighting_count']
-                    lm['lat'] = (lm['lat'] * n + lat) / (n + 1)
-                    lm['lon'] = (lm['lon'] * n + lon) / (n + 1)
-                    lm['sighting_count'] = n + 1
-                    lm['last_seen'] = now
-                    if number and not lm.get('number'):
-                        lm['number'] = number
-                    if description and not lm.get('description'):
-                        lm['description'] = description
-                    self._update_bbox(lm, lat, lon, width_m, height_m)
-                    return lm['id']
+                if lm['type'] == lm_type and _haversine_m(lat, lon, lm['lat'], lm['lon']) < radius:
+                    target = lm
+                    break
 
-            # New entry
-            lm_id = str(uuid.uuid4())[:8]
-            lm = {
-                'id':             lm_id,
-                'type':           lm_type,
-                'lat':            lat,
-                'lon':            lon,
-                'description':    description,
-                'number':         number,
-                'confidence':     confidence,
-                'sighting_count': 1,
-                'first_seen':     now,
-                'last_seen':      now,
-            }
-            self._update_bbox(lm, lat, lon, width_m, height_m)
-            self._landmarks.append(lm)
-            log.info(f'New landmark [{lm_type}] #{lm_id} at ({lat:.6f}, {lon:.6f})')
-            return lm_id
+            if target is not None:
+                # Merge: running average position AND size — a single noisy
+                # reading shouldn't be able to swing the displayed box size.
+                n = target['sighting_count']
+                target['lat'] = (target['lat'] * n + lat) / (n + 1)
+                target['lon'] = (target['lon'] * n + lon) / (n + 1)
+                avg_w = (target.get('width_m',  width_m)  * n + width_m)  / (n + 1)
+                avg_h = (target.get('height_m', height_m) * n + height_m) / (n + 1)
+                target['width_m']  = avg_w
+                target['height_m'] = avg_h
+                target['sighting_count'] = n + 1
+                target['last_seen'] = now
+                if number and not target.get('number'):
+                    target['number'] = number
+                if description and not target.get('description'):
+                    target['description'] = description
+                self._update_bbox(target, target['lat'], target['lon'], avg_w, avg_h)
+            else:
+                lm_id = str(uuid.uuid4())[:8]
+                target = {
+                    'id':             lm_id,
+                    'type':           lm_type,
+                    'lat':            lat,
+                    'lon':            lon,
+                    'description':    description,
+                    'number':         number,
+                    'confidence':     confidence,
+                    'width_m':        width_m,
+                    'height_m':       height_m,
+                    'sighting_count': 1,
+                    'first_seen':     now,
+                    'last_seen':      now,
+                }
+                self._update_bbox(target, lat, lon, width_m, height_m)
+                self._landmarks.append(target)
+                log.info(f'New landmark [{lm_type}] #{lm_id} at ({lat:.6f}, {lon:.6f})')
+
+            # Incremental merging is order-dependent: an entry's running-average
+            # centre may not yet have converged close enough to absorb a later
+            # sighting of the same object, even though it would have a few
+            # detections later. Sweep for any same-type entries that are now
+            # within the merge radius of each other and fold them together.
+            self._consolidate(lm_type, radius, keep=target)
+            return target['id']
+
+    def _consolidate(self, lm_type: str, radius: float, keep: dict | None = None):
+        """Merge any same-type landmarks left within `radius` of each other.
+
+        `keep`, if given, is always preserved as the surviving entry (its id
+        stays valid) when it ends up part of a merge pair.
+        """
+        merged_again = True
+        while merged_again:
+            merged_again = False
+            group = [lm for lm in self._landmarks if lm['type'] == lm_type]
+            for i, a in enumerate(group):
+                for b in group[i + 1:]:
+                    if _haversine_m(a['lat'], a['lon'], b['lat'], b['lon']) < radius:
+                        if b is keep:
+                            a, b = b, a
+                        self._merge_into(a, b)
+                        self._landmarks.remove(b)
+                        merged_again = True
+                        break
+                if merged_again:
+                    break
+
+    @staticmethod
+    def _merge_into(dst: dict, src: dict):
+        n1, n2 = dst['sighting_count'], src['sighting_count']
+        total  = n1 + n2
+        dst['lat'] = (dst['lat'] * n1 + src['lat'] * n2) / total
+        dst['lon'] = (dst['lon'] * n1 + src['lon'] * n2) / total
+        dst['width_m']  = (dst.get('width_m',  0) * n1 + src.get('width_m',  0) * n2) / total
+        dst['height_m'] = (dst.get('height_m', 0) * n1 + src.get('height_m', 0) * n2) / total
+        dst['sighting_count'] = total
+        dst['first_seen'] = min(dst['first_seen'], src['first_seen'])
+        dst['last_seen']  = max(dst['last_seen'],  src['last_seen'])
+        if not dst.get('number') and src.get('number'):
+            dst['number'] = src['number']
+        if not dst.get('description') and src.get('description'):
+            dst['description'] = src['description']
+        LandmarkStore._update_bbox(dst, dst['lat'], dst['lon'], dst['width_m'], dst['height_m'])
 
     def get_all(self) -> list[dict]:
         with self._lock:
@@ -126,12 +183,19 @@ class LandmarkStore:
 
     @staticmethod
     def _update_bbox(lm: dict, lat: float, lon: float, width_m: float, height_m: float):
+        """Set the bbox from the current (merged) centre + latest size estimate.
+
+        Deliberately NOT a running min/max over all sightings — that would let
+        the box grow without bound as noisy detections jitter in, even though
+        the centre itself (a running average) converges fine. A fresh box each
+        time keeps the displayed size matched to the real object.
+        """
         half_lat = (height_m / 2) / 111319.5
         half_lon = (width_m  / 2) / (111319.5 * math.cos(math.radians(lat)))
-        lm['lat_min'] = min(lm.get('lat_min',  1e9), lat - half_lat)
-        lm['lat_max'] = max(lm.get('lat_max', -1e9), lat + half_lat)
-        lm['lon_min'] = min(lm.get('lon_min',  1e9), lon - half_lon)
-        lm['lon_max'] = max(lm.get('lon_max', -1e9), lon + half_lon)
+        lm['lat_min'] = lat - half_lat
+        lm['lat_max'] = lat + half_lat
+        lm['lon_min'] = lon - half_lon
+        lm['lon_max'] = lon + half_lon
 
     def _load(self):
         try:

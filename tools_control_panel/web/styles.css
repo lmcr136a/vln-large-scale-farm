@@ -211,35 +211,68 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   border-radius: 5px;
   color: white;
   display: none;
-  z-index: 20;
+  z-index: 30;
 }
 
-/* ── Bottom RGB streaming bar (internet only) ──────────────── */
+/* ── Left RGB column (Left/Front/Right/Back, internet only) ── */
+/* `top` is set from JS (syncLeftColumnTop) to track #top-panel's real height,
+   so it never overlaps the safety-checker / radio-camera widgets above it. */
 #rgb-stream-bar {
   position: fixed;
-  bottom: 0; left: 0;
-  width: 100%;
-  display: none;                 /* shown by JS when internet is up */
-  justify-content: center;
-  align-items: flex-end;
-  gap: 4px;
+  top: var(--rgb-h); left: 0; bottom: 0;
+  width: auto;
+  display: none;                 /* shown (flex) by JS when internet is up */
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 6px;
   background: rgba(0,0,0,0.55);
-  padding: 4px 6px;
-  z-index: 20;
+  padding: 8px;
+  z-index: 15;
+  overflow-y: auto;
+}
+/* Back camera sticks to the bottom of the column; Left/Front/Right stay
+   grouped at the top (back is the last .rgb-cam child — see control.html). */
+#rgb-stream-bar > .rgb-cam:last-child {
+  margin-top: auto;
 }
 .rgb-cam {
-  position: relative;
   display: flex;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 8px;
   min-width: 0;
 }
+.rgb-cam-imgwrap {
+  position: relative;     /* anchors .rgb-cam-label to the image only, not the description */
+  display: flex;
+  flex-shrink: 0;
+}
 .rgb-cam img {
-  max-height: 170px;
+  max-height: 20vh;
+  max-width: 280px;
   width: auto;
-  max-width: 24vw;
+  height: auto;
   object-fit: contain;
   display: block;
   background: #000;
+}
+/* Per-camera scene description — sits to the right of that camera's image,
+   same height, so a long sentence truncates with "…" instead of overflowing. */
+.rgb-cam-desc {
+  width: 400px;
+  height: 20vh;
+  background: rgba(0,0,0,0.6);
+  color: rgba(255,255,255,0.92);
+  font-size: 9pt;
+  padding: 4px 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  display: none;          /* JS sets this to '-webkit-box' when a description arrives */
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 12;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
 }
 .rgb-cam-label {
   position: absolute;

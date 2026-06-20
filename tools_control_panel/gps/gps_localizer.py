@@ -15,16 +15,40 @@ import math
 import os
 import threading
 import time
+from collections import deque
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Imu, NavSatFix, NavSatStatus
+from std_msgs.msg import String
 
 log = logging.getLogger(__name__)
 
 R_EARTH = 6378137.0
+
+# Heading-from-GPS is derived from displacement over a short time window rather
+# than between two consecutive fixes — a single-step distance check is fooled by
+# RTK jitter when the robot is stationary (noise can exceed the step threshold in
+# a random direction). Averaging over a longer baseline makes real travel (which
+# grows linearly with time) dominate jitter (which doesn't).
+HEADING_WINDOW_S  = 0.8   # seconds of GPS history kept for the baseline
+HEADING_MIN_DT    = 0.3   # minimum window span before trusting it
+HEADING_MIN_DIST  = 0.3   # minimum baseline displacement (m) to trust GPS heading
+HEADING_MAX_AGE_S = 1.5   # is_heading_valid() rejects a heading older than this —
+                          # a stale fused_yaw (e.g. right after a turn or a pause)
+                          # can be several degrees off, which at typical landmark
+                          # detection range turns into metres of lateral scatter
+
+# GPS antenna lever arm relative to the LiDAR/camera reference frame (the frame
+# camera_extrinsics / lidar_extrinsics are defined in), in robot body
+# coordinates (x=forward, y=left). The antenna sits 20cm behind, 20cm right,
+# 10cm below that point, so correcting TO that point moves forward+left.
+# Uncorrected, this ~28cm horizontal offset gets rotated into a different ENU
+# direction every time the heading changes, scattering repeat sightings of the
+# same landmark instead of letting them land on top of each other.
+GPS_ANTENNA_OFFSET_BODY = (0.20, 0.20)   # (dx_forward, dy_left), metres
 
 BEST_EFFORT = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -70,8 +94,15 @@ class GpsLocalizer(Node):
         self._current_lon: float | None = None
         self._current_yaw: float = 0.0   # from IMU (fallback)
         self._gps_heading: float | None = None  # derived from GPS displacement (preferred)
+        self._gps_heading_t: float | None = None  # msg-stamp time _gps_heading was last set
+        self._latest_gps_t: float | None = None    # msg-stamp time of the most recent GPS fix
+        # /gps/fix's NavSatStatus alone cannot tell RTK Fixed (cm-accurate) apart
+        # from RTK Float / DGPS (can be 0.1-several metres off) — both report the
+        # same STATUS_GBAS_FIX value. /gps/rtk_status carries the real distinction.
+        self._rtk_fixed: bool = False
         self._current_x: float | None = None
         self._current_y: float | None = None
+        self._gps_window: deque = deque()  # (t, x, y) baseline samples for heading
 
         self._gps_track: list[dict] = []
         self._track_dirty = False
@@ -80,6 +111,7 @@ class GpsLocalizer(Node):
         self._fused_yaw: float = 0.0
         self._fused_yaw_init: bool = False
         self._last_imu_t: float | None = None
+        self._last_gyro_z: float = 0.0   # latest yaw rate for straight-motion detection
 
         # Locate data directory relative to project root
         proj_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -94,13 +126,15 @@ class GpsLocalizer(Node):
         self._load_track()
 
         topics = config.get('ros2', {}).get('topics', {})
-        gps_topic      = topics.get('gps',      '/gps/fix')
-        imu_topic      = topics.get('imu',       '/xsens/imu/data')
-        pose_out_topic = topics.get('gps_pose',  '/gps_pose')
+        gps_topic       = topics.get('gps',        '/gps/fix')
+        imu_topic       = topics.get('imu',        '/xsens/imu/data')
+        pose_out_topic  = topics.get('gps_pose',   '/gps_pose')
+        rtk_status_topic = topics.get('gps_status', '/gps/rtk_status')
 
         self._pub = self.create_publisher(PoseStamped, pose_out_topic, 10)
         self.create_subscription(NavSatFix, gps_topic, self._on_gps, BEST_EFFORT)
         self.create_subscription(Imu,       imu_topic, self._on_imu, BEST_EFFORT)
+        self.create_subscription(String, rtk_status_topic, self._on_rtk_status, BEST_EFFORT)
 
         # Periodically flush GPS track to disk
         self.create_timer(30.0, self._flush_track)
@@ -113,11 +147,20 @@ class GpsLocalizer(Node):
 
     # ── Callbacks ────────────────────────────────────────────────────────────
 
+    def _on_rtk_status(self, msg: String):
+        try:
+            d = json.loads(msg.data)
+        except Exception:
+            return
+        with self._lock:
+            self._rtk_fixed = bool(d.get('rtk_fixed', False))
+
     def _on_imu(self, msg: Imu):
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         q = msg.orientation
         with self._lock:
             self._current_yaw = _quat_to_yaw(q.x, q.y, q.z, q.w)
+            self._last_gyro_z = msg.angular_velocity.z
             if not self._fused_yaw_init:
                 # Seed fused yaw from the IMU filter on first message
                 self._fused_yaw = self._current_yaw
@@ -133,26 +176,52 @@ class GpsLocalizer(Node):
         if msg.status.status < NavSatStatus.STATUS_FIX:
             return
         lat, lon = msg.latitude, msg.longitude
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         with self._lock:
             self._current_lat = lat
             self._current_lon = lon
+            self._latest_gps_t = t
             if self._origin_lat is None:
                 self._origin_lat = lat
                 self._origin_lon = lon
                 self._save_origin()
                 self.get_logger().info(f'GPS origin auto-set: {lat:.7f}, {lon:.7f}')
-            x, y = gps_to_enu(lat, lon, self._origin_lat, self._origin_lon)
-            # GPS correction to fused yaw — runs only when displacement is reliable
-            if self._current_x is not None:
-                dx = x - self._current_x
-                dy = y - self._current_y
+            x_ant, y_ant = gps_to_enu(lat, lon, self._origin_lat, self._origin_lon)
+
+            # Lever-arm correction: shift from the antenna's GPS fix to the
+            # LiDAR/camera reference point, using the best heading estimate
+            # available so far (one sample stale at most — negligible).
+            heading_now = self._fused_yaw if self._fused_yaw_init else (
+                self._gps_heading if self._gps_heading is not None else self._current_yaw
+            )
+            ofx, ofy = GPS_ANTENNA_OFFSET_BODY
+            cos_h, sin_h = math.cos(heading_now), math.sin(heading_now)
+            x = x_ant + ofx * cos_h - ofy * sin_h
+            y = y_ant + ofx * sin_h + ofy * cos_h
+
+            # GPS correction to fused yaw — uses displacement over a time window
+            # (not just the last fix) so stationary RTK jitter can't masquerade
+            # as a heading. Jitter stays bounded as the window grows; real travel
+            # doesn't, so a minimum baseline distance reliably separates the two.
+            self._gps_window.append((t, x, y))
+            while self._gps_window and t - self._gps_window[0][0] > HEADING_WINDOW_S:
+                self._gps_window.popleft()
+            if self._gps_window:
+                t0, x0, y0 = self._gps_window[0]
+                dx, dy = x - x0, y - y0
+                dt = t - t0
                 dist = math.hypot(dx, dy)
-                if dist > 0.1:   # 10 cm — safe for RTK
+                if dt >= HEADING_MIN_DT and dist >= HEADING_MIN_DIST:
                     gps_yaw = math.atan2(dy, dx)
-                    self._gps_heading = gps_yaw
-                    # Blend strength: stronger when moving faster (> 50 cm per GPS step)
-                    alpha = 0.8 if dist > 0.5 else 0.3
-                    self._fused_yaw += alpha * _angle_diff(gps_yaw, self._fused_yaw)
+                    self._gps_heading   = gps_yaw
+                    self._gps_heading_t = t
+                    # Straight motion: low yaw rate + sufficient displacement → hard refresh.
+                    # This clears any accumulated gyro drift after rotations.
+                    if abs(self._last_gyro_z) < 0.05:  # < ~3 deg/s → going straight
+                        self._fused_yaw = gps_yaw
+                    else:
+                        # Turning: GPS heading less reliable — soft blend only
+                        self._fused_yaw += 0.3 * _angle_diff(gps_yaw, self._fused_yaw)
             self._current_x = x
             self._current_y = y
             yaw = self._fused_yaw if self._fused_yaw_init else (
@@ -222,9 +291,28 @@ class GpsLocalizer(Node):
             return enu_to_gps(x, y, self._origin_lat, self._origin_lon)
 
     def is_heading_valid(self) -> bool:
-        """True once the robot has moved enough to compute GPS-derived heading."""
+        """True only while the pose is currently trustworthy for landmark placement.
+
+        Two independent failure modes, both checked here:
+        - Staleness: _fused_yaw can drift (gyro integration) between GPS
+          corrections, especially right after a turn or a pause, by enough to
+          turn a sharp landmark fix into metres of lateral error. Requiring a
+          *recent* GPS heading update is a cheap proxy for "fused_yaw is
+          currently trustworthy", since straight-line driving (the common
+          case while passing a row of landmarks) keeps refreshing it.
+        - RTK quality: /gps/fix's NavSatStatus can't tell RTK Fixed (~cm) apart
+          from RTK Float / DGPS (0.1-several metres) — both report the same
+          STATUS_GBAS_FIX value. Without this, a degraded fix silently feeds
+          metre-scale position error into every landmark seen during it.
+        """
         with self._lock:
-            return self._gps_heading is not None
+            if not self._rtk_fixed:
+                return False
+            if self._gps_heading is None or self._gps_heading_t is None:
+                return False
+            if self._latest_gps_t is None:
+                return False
+            return (self._latest_gps_t - self._gps_heading_t) < HEADING_MAX_AGE_S
 
     def reset_for_replay(self):
         """Clear in-memory state for a fresh replay session (keeps persisted origin file)."""
@@ -234,12 +322,17 @@ class GpsLocalizer(Node):
             self._gps_track   = []
             self._track_dirty = False
             self._gps_heading    = None
+            self._gps_heading_t  = None
+            self._latest_gps_t   = None
             self._current_x      = None
             self._current_y      = None
             self._current_lat    = None
             self._current_lon    = None
+            self._gps_window.clear()
             self._fused_yaw_init = False
             self._last_imu_t     = None
+            self._last_gyro_z    = 0.0
+            self._rtk_fixed      = False
         if should_archive:
             self._archive_track_data(track_snapshot)
         log.info('GpsLocalizer: session reset for replay')

@@ -1,3 +1,6 @@
+weights/
+yolo*
+
 # ROS2 Build artifacts
 build/
 install/

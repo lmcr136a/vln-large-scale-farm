@@ -66,6 +66,8 @@ from gps.gps_localizer import GpsLocalizer
 from perception.landmark_store import LandmarkStore
 from perception.landmark_detector import LandmarkDetector
 from perception.landmark_map import GpsMapLoop
+from perception.scene_describer import SceneDescriber
+from sensor.safety_guard import SafetyGuard
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("jetson_main")
@@ -109,7 +111,7 @@ class RecorderProxy:
 
     def __init__(self, internet, telemetry=None, radio=None, image_width=60,
                  manual_check=None, image_interval=1.5, radio_camera="front",
-                 landmark_detector=None):
+                 landmark_detector=None, scene_describer=None):
         self._internet           = internet
         self._telemetry          = telemetry
         self._radio              = radio
@@ -119,6 +121,7 @@ class RecorderProxy:
         self._image_int          = image_interval
         self._radio_cam          = radio_camera
         self._landmark_detector  = landmark_detector
+        self._scene_describer    = scene_describer
         self._yolo_ann: dict[str, tuple[float, str]] = {}  # camera -> (ts, b64)
 
     def set_yolo_annotation(self, camera: str, b64: str):
@@ -142,6 +145,8 @@ class RecorderProxy:
             self._telemetry.touch(f"zed_{camera}")
         if self._landmark_detector:
             self._landmark_detector.on_image_b64(camera, raw_b64)  # always raw, no feedback loop
+        if self._scene_describer:
+            self._scene_describer.on_image_b64(camera, raw_b64)
         if camera == self._radio_cam and self._radio:
             if self._manual_check and self._manual_check():
                 return
@@ -343,6 +348,28 @@ def build_extrinsic_T_B_L(cfg: dict) -> np.ndarray:
     return T
 
 
+def _peek_bag_start_ns(bag_path: str) -> int | None:
+    """Earliest message timestamp (epoch ns) in a rosbag, without playing it.
+
+    Same epoch as ZED's TIME_REFERENCE.IMAGE timestamps (verified directly
+    against this recorder's output) — lets replay align SVO frame 0 with the
+    bag's actual first message instead of guessing a fixed startup delay.
+    """
+    import glob
+    import sqlite3
+    db_files = glob.glob(os.path.join(bag_path, '*.db3'))
+    if not db_files:
+        return None
+    try:
+        con = sqlite3.connect(db_files[0])
+        row = con.execute('SELECT MIN(timestamp) FROM messages').fetchone()
+        con.close()
+        return int(row[0]) if row and row[0] is not None else None
+    except Exception as e:
+        log.warning(f'_peek_bag_start_ns: {e}')
+        return None
+
+
 def apply_extrinsic(T_B_L: np.ndarray, pos: list, quat_xyzw: list):
     R_M_L        = _quat_xyzw_to_matrix(quat_xyzw)
     T_M_L        = np.eye(4)
@@ -365,9 +392,12 @@ def main():
     parser.add_argument("--config", default=default_cfg)
     parser.add_argument("--replay", metavar="SESSION_DIR", default=None,
                         help="Replay a recorded session: plays rosbag + SVO2 files together")
+    parser.add_argument("--replay-speed", type=float, default=1.0,
+                        help="Replay playback speed multiplier (e.g. 3.0 = 3x faster)")
     args = parser.parse_args()
-    cfg_path    = os.path.abspath(args.config)
-    replay_dir  = os.path.abspath(args.replay) if args.replay else None
+    cfg_path     = os.path.abspath(args.config)
+    replay_dir   = os.path.abspath(args.replay) if args.replay else None
+    replay_speed = max(args.replay_speed, 0.01)
 
     cfg = load_config(cfg_path)
 
@@ -416,6 +446,11 @@ def main():
     )
 
     proxy     = SocketIOProxy(radio, internet, uploader, telemetry)
+
+    # Scene describer — every vlm.scene_interval_sec, one-sentence VLM description
+    # of the 4 RGB cameras, pushed to the web panel as 'scene_description'.
+    scene_describer = SceneDescriber(cfg, proxy)
+    scene_describer.start()
 
     tmux_session     = cfg.get("tmux", {}).get("session", "vln")
     tmux_cfg_windows = cfg.get("tmux", {}).get("windows", None)
@@ -528,6 +563,19 @@ def main():
             pass
 
     base_node.create_subscription(_StdString, '/safety_checker', safety_cb, 10)
+
+    def _safety_status_getter():
+        return _safety_status[0] if time.time() - _safety_last_t[0] < _SAFETY_TIMEOUT else {}
+
+    def _safety_notify(msg):
+        proxy.emit('robot_status', {'status': msg}, namespace='/')
+
+    _safety_cfg     = cfg.get('safety', {})
+    _safety_wait    = float(_safety_cfg.get('wait_sec', 10.0))
+    _recover_speed  = float(_safety_cfg.get('recover_speed') or cfg['autonomous']['t1'][0])
+    safety_guard = SafetyGuard(_safety_status_getter, commander, _recover_speed,
+                               wait_sec=_safety_wait, notify=_safety_notify)
+    safety_guard.start()
 
     def pointcloud_loop():
         while True:
@@ -654,7 +702,8 @@ def main():
                               manual_check=commander.is_manual,
                               image_interval=cfg.get("radio", {}).get("image_interval", 1.5),
                               radio_camera=cfg.get("radio", {}).get("camera", "front"),
-                              landmark_detector=landmark_detector)
+                              landmark_detector=landmark_detector,
+                              scene_describer=scene_describer)
 
     # YOLO annotated frames → cached in rec_proxy, injected into the live stream for TTL seconds
     def _on_annotated_frame(camera: str, jpeg_bytes: bytes):
@@ -662,6 +711,10 @@ def main():
         rec_proxy.set_yolo_annotation(camera, b64)
 
     landmark_detector.set_annotated_frame_callback(_on_annotated_frame)
+
+    # Load/generate the GPS map before opening the RGBD (ZED) cameras so the
+    # web panel has a map to show as soon as camera streaming starts.
+    gps_map_loop.start()
 
     if replay_dir:
         # ── Replay mode: play rosbag + SVO2 files together ──────────────────
@@ -681,21 +734,38 @@ def main():
             on_frame=_on_svo_frame,
             on_depth=_on_svo_depth,
             stream_fps=cfg["recording"].get("web_stream_hz", 5),
+            speed=replay_speed,
         )
         svo_player.start()
-        log.info(f"Replay mode: {replay_dir} — waiting for ZED cameras to open...")
-
-        # Give ZED SDK time to open SVO files before rosbag starts publishing GPS/IMU.
-        # Without this, GPS positions update on the map while the camera feed is still dark.
-        time.sleep(2.0)
+        log.info(f"Replay mode: {replay_dir} (speed={replay_speed}x) — waiting for first SVO frame...")
 
         bag_path = os.path.join(replay_dir, 'rosbag')
+        bag_start_ns = _peek_bag_start_ns(bag_path)
+
+        # Align bag playback to the SVO stream's own recorded start time, instead
+        # of a guessed fixed delay. ZED's recorded timestamps and the rosbag's
+        # recorded timestamps share the same epoch (recorder.py starts both
+        # close together), so the gap between them is meaningful and small.
+        # Once the bag starts, SvoPlayer's /clock subscription takes over and
+        # keeps every subsequent frame in lockstep for the rest of the session.
+        got_frame = svo_player.ready_event.wait(timeout=60.0)
+        if got_frame and bag_start_ns is not None:
+            gap_s = (bag_start_ns - svo_player.first_frame_ts_ns) / 1e9
+            log.info(f"Replay sync: bag's first message is {gap_s:+.3f}s "
+                     f"(recorded time) from the first SVO frame")
+            if gap_s > 0:
+                time.sleep(gap_s / replay_speed)
+        else:
+            log.warning("Replay sync: no SVO frame / bag timestamp available — "
+                        "starting bag play after a fixed 2s delay instead")
+            time.sleep(2.0)
+
         if not os.path.exists(bag_path):
             log.error(f"Replay: rosbag not found at {bag_path}")
         else:
-            log.info(f"Replay: starting ros2 bag play {bag_path}")
+            log.info(f"Replay: starting ros2 bag play {bag_path} --rate {replay_speed}")
             import subprocess as _sp
-            _sp.Popen(['ros2', 'bag', 'play', bag_path, '--clock'])
+            _sp.Popen(['ros2', 'bag', 'play', bag_path, '--clock', '--rate', str(replay_speed)])
     else:
         # ── Live mode: open ZED cameras ───────────────────────────────────────
         try:
@@ -789,8 +859,6 @@ def main():
         gps_map_loop.update_waypoints(waypoints)
         return _orig_auto_start(waypoints)
     auto_ctrl.start = _auto_start_with_map
-
-    gps_map_loop.start()
 
     executor = MultiThreadedExecutor()
     executor.add_node(telemetry)
