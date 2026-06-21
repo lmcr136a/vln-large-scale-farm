@@ -11,14 +11,12 @@ tools_control_panel/
 │   └── autonomous_mode.py      # ROS2 node: pose tracking, drive loop, recording
 ├── config/
 │   ├── farm_config.yaml        # Robot and system configuration
-│   ├── mission.json            # Saved path (start + waypoints + isLoop)
-│   └── schedule.json           # Weekly autonomous schedule
+│   └── mission.json            # Saved path (start + waypoints + isLoop)
 ├── jetson/              # Runs on Jetson (robot onboard)
 │   ├── jetson_main.py          # Entry point: wires all components
 │   ├── commander.py            # Priority command handler (estop > manual > auto)
 │   ├── internet_comm.py        # Socket.IO client to lab PC (Tailscale)
 │   ├── radio_comm.py           # Serial radio link to local PC
-│   ├── scheduler.py            # Weekly schedule from schedule.json with retry
 │   ├── station_uploader.py     # SCP upload on autonomous run completion
 │   ├── telemetry_node.py       # ROS2 node: battery, sensors, disk
 │   └── auto_nav_logger.py      # Session log files in auto_nav_log/
@@ -30,7 +28,6 @@ tools_control_panel/
 ├── web/                 # Browser panel
 │   ├── control.html            # Main control panel
 │   ├── control.js              # Map, robot display, commands
-│   ├── schedule.js             # Weekly calendar UI + countdown
 │   ├── path_plan.html          # Path planning page
 │   ├── path_plan.js            # Click-to-set waypoints
 │   └── styles.css              # Panel styles
@@ -67,10 +64,12 @@ vln-large-scale-farm/
 4. Camera + rosbag recording auto-starts → saved to `data/auto_nav/<timestamp>/`  
 5. Log saved to `auto_nav_log/<timestamp>.log`
 
-### Schedule
-Edit `config/schedule.json` via the weekly calendar in the control panel.  
-Format: `{"enabled": true, "mon": ["5am", "5pm"], "tue": [], ...}`  
-On schedule fire: 10 retries × 1 min if start fails.
+### Run / Resume
+Autonomous driving is started manually from the control panel:
+- **RUN** — drive the saved path from the first waypoint. Press again to stop
+  (soft stop of path following).
+- **Resume** — after stopping mid-drive, continue from the waypoint nearest the
+  robot's current position (not the first one).
 
 ## Configuration
 

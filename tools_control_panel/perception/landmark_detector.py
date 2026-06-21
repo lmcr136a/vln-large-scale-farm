@@ -516,9 +516,9 @@ class LandmarkDetector:
                 img,
                 imgsz   = self._input_size,
                 conf    = self._conf_threshold,
-                verbose = True,
+                verbose = False,
             )
-            log.info(f'YOLO [{cam}]: {len(results[0].boxes)} detections')
+            log.debug(f'YOLO [{cam}]: {len(results[0].boxes)} detections')
 
             # Annotate frame (seg mask if available, bbox otherwise) and stream back
             if self._on_annotated_frame is not None:

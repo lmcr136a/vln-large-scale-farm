@@ -73,7 +73,7 @@ class ZEDSVORecorder(threading.Thread):
         self.stream_period       = 1.0 / self.stream_fps
         self._streaming_enabled  = True
         self._stream_lock        = threading.Lock()
-        self.web_rgb_height      = 200
+        self.web_rgb_height      = 160
         self.latest_frame        = None
         self.frame_lock          = threading.Lock()
         self._cam_closed         = False  # guard against double-close
@@ -86,7 +86,7 @@ class ZEDSVORecorder(threading.Thread):
             self.cam  = sl.Camera()
             init      = sl.InitParameters()
             init.set_from_serial_number(self.serial)
-            init.depth_mode        = sl.DEPTH_MODE.ULTRA
+            init.depth_mode        = sl.DEPTH_MODE.NONE
             init.camera_resolution = sl.RESOLUTION.HD1080
             init.camera_fps        = 30
             init.sdk_verbose       = False

@@ -156,42 +156,37 @@
     .run-row { display: flex; gap: 6px; align-items: center; }
     .rec-row { display: flex; gap: 6px; align-items: center; }
 
-    /* ── Column 3: Schedule ──────────────────────────────────── */
-    #col-schedule {
+    /* ── Column 3: Run / Resume ──────────────────────────────── */
+    #col-run {
       min-width: 190px;
-      gap: 0;
+      gap: 8px;
       padding-right: 6px;
       flex-shrink: 0;
+      justify-content: center;
     }
-    #upcoming-next {
-      font-size: 12pt;
+    #btn-run-big {
+      width: 100%;
+      padding: 18px 10px;
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      background: rgba(0,110,0,0.6);
+      border-color: rgba(0,220,0,0.8);
+    }
+    #btn-run-big:hover { background: rgba(0,160,0,0.85); }
+    #btn-run-big.active-auto {
+      background: rgba(180,0,0,0.75);
+      border-color: rgba(255,80,80,0.9);
+    }
+    #btn-resume-big {
+      width: 100%;
+      padding: 10px;
+      font-size: 15px;
       font-weight: 700;
-      color: rgba(255,255,255,0.95);
-      line-height: 1.4;
-      white-space: nowrap;
+      background: rgba(0,80,150,0.55);
+      border-color: rgba(80,160,255,0.8);
     }
-    #upcoming-countdown {
-      font-size: 12pt;
-      font-weight: 600;
-      color: rgba(255,255,255,0.55);
-      margin-bottom: 5px;
-    }
-    .upcoming-item {
-      font-size: 10pt;
-      color: rgba(255,255,255,0.6);
-      line-height: 1.7;
-      white-space: nowrap;
-    }
-    #sched-enabled-row {
-      font-size: 9px;
-      color: rgba(255,255,255,0.3);
-      margin-top: 4px;
-    }
-    #sched-enabled-row span {
-      cursor: pointer;
-      color: rgba(100,180,255,0.7);
-      text-decoration: underline;
-    }
+    #btn-resume-big:hover { background: rgba(0,110,200,0.8); }
 
     /* ── Column 4: Process Status (10pt everything) ──────────── */
     #col-tmux {
@@ -354,31 +349,14 @@
         <button id="btn-rec-stop"  onclick="stopRecording()" style="display:none;">Stop</button>
       </div>
 
-      <div style="height:8px;"></div>
-
-      <div class="run-row">
-        <button id="autoButton" onclick="runNow()"
-                style="padding:5px 10px;font-size:13px;">&#x25B6; Run Now</button>
-      </div>
-      <div class="run-row" style="margin-top:4px;">
-        <button onclick="emergencyStop()"
-                style="background:#cc0000;color:#fff;font-weight:bold;padding:5px 10px;font-size:13px;width:100%;">
-          &#x1F6D1; E-STOP
-        </button>
-      </div>
-
     </div>
 
     <div class="col-divider"></div>
 
-    <!-- Column 3: Schedule -->
-    <div class="panel-col" id="col-schedule">
-      <div id="upcoming-next">—</div>
-      <div id="upcoming-countdown">—</div>
-      <div id="upcoming-list"></div>
-      <div id="sched-enabled-row">
-        Schedule: <span onclick="toggleScheduleEnabled()" id="sched-enabled-lbl">ON</span>
-      </div>
+    <!-- Column 3: Run / Resume -->
+    <div class="panel-col" id="col-run">
+      <button id="btn-run-big" onclick="runNow()">&#x25B6; RUN</button>
+      <button id="btn-resume-big" onclick="resumeRun()">&#x21BB; Resume</button>
     </div>
 
     <div class="col-divider"></div>
@@ -393,16 +371,14 @@
 
   <div id="robot-status"></div>
 
-  <!-- Left RGB column (Left/Front/Right/Back, internet only), each row paired
-       with that camera's own scene description (see syncLeftColumnTop in control.js) -->
+  <!-- Left RGB column (Left/Front/Right/Back, internet only) — image stream only -->
   <div id="rgb-stream-bar">
-    <div class="rgb-cam"><div class="rgb-cam-imgwrap"><span class="rgb-cam-label">Left</span><img  id="left-rgb-image"  alt="Left"  /></div><div class="rgb-cam-desc" id="left-rgb-desc"></div></div>
-    <div class="rgb-cam"><div class="rgb-cam-imgwrap"><span class="rgb-cam-label">Front</span><img id="front-rgb-image" alt="Front" /></div><div class="rgb-cam-desc" id="front-rgb-desc"></div></div>
-    <div class="rgb-cam"><div class="rgb-cam-imgwrap"><span class="rgb-cam-label">Right</span><img id="right-rgb-image" alt="Right" /></div><div class="rgb-cam-desc" id="right-rgb-desc"></div></div>
-    <div class="rgb-cam"><div class="rgb-cam-imgwrap"><span class="rgb-cam-label">Back</span><img  id="back-rgb-image"  alt="Back"  /></div><div class="rgb-cam-desc" id="back-rgb-desc"></div></div>
+    <div class="rgb-cam"><div class="rgb-cam-imgwrap"><span class="rgb-cam-label">Left</span><img  id="left-rgb-image"  alt="Left"  /></div></div>
+    <div class="rgb-cam"><div class="rgb-cam-imgwrap"><span class="rgb-cam-label">Front</span><img id="front-rgb-image" alt="Front" /></div></div>
+    <div class="rgb-cam"><div class="rgb-cam-imgwrap"><span class="rgb-cam-label">Right</span><img id="right-rgb-image" alt="Right" /></div></div>
+    <div class="rgb-cam"><div class="rgb-cam-imgwrap"><span class="rgb-cam-label">Back</span><img  id="back-rgb-image"  alt="Back"  /></div></div>
   </div>
 
-  <script src="schedule.js"></script>
   <script src="control.js"></script>
 </body>
 </html>

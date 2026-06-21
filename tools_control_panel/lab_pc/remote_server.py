@@ -37,13 +37,16 @@ class RemoteServer:
         cfg_dir = os.path.dirname(self._config_path)
         self._paths_file    = os.path.join(cfg_dir, self.cfg["paths"].get("paths_file",   "paths.json"))
         self._mission_file  = os.path.join(cfg_dir, self.cfg["paths"].get("mission_file", "mission.json"))
-        self._schedule_file = os.path.join(cfg_dir, "schedule.json")
         self._path_nodes       = self._load_paths()
         self._path_mode        = False
         self._bridge_connected  = False
         self._inet_connected    = False
         self._inet_sid          = None
         self._latest_landmarks: dict = {"landmarks": []}
+        # On a fresh server start the on-disk saved_map.png is from a PREVIOUS
+        # session, so don't push it to clients — wait for this session's first
+        # live map_frame. Avoids the old SLAM map flashing before the real one.
+        self._have_fresh_map    = False
 
         self.app = Flask(__name__, template_folder="../lab_pc")
         self.sio = SocketIO(
@@ -95,11 +98,6 @@ class RemoteServer:
             r.headers["Cache-Control"] = "no-store"
             return r
 
-        @self.app.route("/schedule.js")
-        def serve_schedule_js():
-            r = send_file(os.path.join(web_dir, "schedule.js"), mimetype="application/javascript")
-            r.headers["Cache-Control"] = "no-store"
-            return r
 
         @self.app.route("/mission", methods=["GET", "POST"])
         def handle_mission():
@@ -123,30 +121,6 @@ class RemoteServer:
                 log.info(f"Mission saved: {1 + len(waypoints)} pts, loop={is_loop}")
             except Exception as e:
                 log.error(f"Mission save error: {e}")
-                return jsonify({"ok": False})
-            full_path = ([start] if start else []) + waypoints
-            if is_loop and start:
-                full_path.append(start)
-            self._push_config_update({"autonomous": {"waypoints": full_path}})
-            return jsonify({"ok": True})
-
-        @self.app.route("/schedule", methods=["GET", "POST"])
-        def handle_schedule():
-            from flask import jsonify, request as req
-            if req.method == "GET":
-                try:
-                    with open(self._schedule_file) as f:
-                        return jsonify(json.load(f))
-                except FileNotFoundError:
-                    default = {"enabled": True,
-                               "sun":[],"mon":[],"tue":[],"wed":[],"thu":[],"fri":[],"sat":[]}
-                    return jsonify(default)
-            data = req.get_json(force=True)
-            try:
-                with open(self._schedule_file, "w") as f:
-                    json.dump(data, f, indent=2)
-            except Exception as e:
-                log.error(f"Schedule save error: {e}")
                 return jsonify({"ok": False})
             return jsonify({"ok": True})
 
@@ -235,24 +209,21 @@ class RemoteServer:
 
         @sio.on("start_autonomous")
         def on_start(data):
-            waypoints = data.get("waypoints", [])
-            if not waypoints:
-                try:
-                    with open(self._mission_file) as f:
-                        mission = json.load(f)
-                    start   = mission.get("start")
-                    wps     = mission.get("waypoints", [])
-                    is_loop = mission.get("isLoop", False)
-                    waypoints = ([start] if start else []) + wps
-                    if is_loop and start:
-                        waypoints.append(start)
-                    log.info(f"start_autonomous: loaded {len(waypoints)} waypoints from mission file")
-                except Exception as e:
-                    log.warning(f"start_autonomous: no waypoints and mission load failed: {e}")
+            waypoints = self._resolve_waypoints(data)
             if not waypoints:
                 log.warning("start_autonomous: no waypoints available, ignoring")
                 return
-            self._to_robot({"cmd": "continue", "waypoints": waypoints})
+            # resume=False → drive the whole path from the first waypoint.
+            self._to_robot({"cmd": "continue", "waypoints": waypoints, "resume": False})
+
+        @sio.on("resume_autonomous")
+        def on_resume(data):
+            waypoints = self._resolve_waypoints(data)
+            if not waypoints:
+                log.warning("resume_autonomous: no waypoints available, ignoring")
+                return
+            # resume=True → robot continues from the waypoint nearest its position.
+            self._to_robot({"cmd": "continue", "waypoints": waypoints, "resume": True})
 
         @sio.on("stop_autonomous")
         def on_stop():
@@ -286,7 +257,6 @@ class RemoteServer:
         @sio.on("save_path")
         def on_save_path():
             self._save_paths(self._path_nodes)
-            self._push_config_update({"autonomous": {"waypoints": self._path_nodes}})
             sio.emit("path_saved", {"count": len(self._path_nodes)})
 
         @sio.on("set_quality")
@@ -389,6 +359,7 @@ class RemoteServer:
                     json.dump(meta, f)
             except Exception as e:
                 log.error(f"map_frame save: {e}")
+            self._have_fresh_map = True
             self._monitor.notify_jetson_map()
             self._monitor._map_version += 1
             sio.emit("map_updated", {
@@ -419,6 +390,10 @@ class RemoteServer:
 
     def _send_map_to_client(self, sid: str):
         import base64
+        # Skip until this session has produced a real map — the file on disk may
+        # be a stale map from a previous run (would flash before the live one).
+        if not self._have_fresh_map:
+            return
         save_dir   = self._monitor._saved_map_dir
         png_path   = os.path.join(save_dir, "saved_map.png")
         state_path = os.path.join(save_dir, "saved_map_state.json")
@@ -442,6 +417,26 @@ class RemoteServer:
             }, to=sid, namespace="/")
         except Exception as e:
             log.error(f"send map on connect: {e}")
+
+    def _resolve_waypoints(self, data: dict) -> list:
+        """Waypoints from the panel payload, or fall back to the saved mission
+        file (start + waypoints, plus the loop-closing return to start)."""
+        waypoints = (data or {}).get("waypoints", [])
+        if waypoints:
+            return waypoints
+        try:
+            with open(self._mission_file) as f:
+                mission = json.load(f)
+            start   = mission.get("start")
+            wps     = mission.get("waypoints", [])
+            is_loop = mission.get("isLoop", False)
+            waypoints = ([start] if start else []) + wps
+            if is_loop and start:
+                waypoints.append(start)
+            log.info(f"loaded {len(waypoints)} waypoints from mission file")
+        except Exception as e:
+            log.warning(f"mission load failed: {e}")
+        return waypoints
 
     def _load_paths(self) -> list:
         try:

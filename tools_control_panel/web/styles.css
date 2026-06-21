@@ -188,17 +188,6 @@ button:hover  { background: rgba(80,80,80,0.7); }
 button:active { background: rgba(120,120,120,0.7); }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-#autoButton {
-  background: rgba(0,110,0,0.6);
-  border-color: rgba(0,220,0,0.8);
-}
-#autoButton:hover { background: rgba(0,160,0,0.8); }
-#autoButton.active-auto {
-  background: rgba(180,0,0,0.7);
-  border-color: rgba(255,80,80,0.9);
-}
-
-
 /* ── Robot status (map overlay) ────────────────────────────── */
 #robot-status {
   position: fixed;

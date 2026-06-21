@@ -109,20 +109,33 @@ class AutonomousController(Node):
     def is_active(self):
         return self._active
 
-    def start(self, waypoints):
+    def start(self, waypoints, resume=False):
         if self._active:
             return False
         min_wp = self.config['autonomous'].get('min_waypoints', 2)
         if len(waypoints) < min_wp:
             self.get_logger().warn(f'Need >= {min_wp} waypoints (got {len(waypoints)})')
             return False
-        self.get_logger().info(f'Starting — {len(waypoints)} waypoints')
+        self.get_logger().info(
+            f'{"Resuming" if resume else "Starting"} — {len(waypoints)} waypoints')
         self._active = True
         self._stop_event.clear()
         self._thread = threading.Thread(
-            target=self._drive_loop, args=(waypoints,), daemon=True)
+            target=self._drive_loop, args=(waypoints, resume), daemon=True)
         self._thread.start()
         return True
+
+    def _nearest_waypoint_index(self, waypoints) -> int:
+        """Index of the waypoint closest to the robot's current position — used
+        by Resume so we continue from where we stopped, not the first point."""
+        pose = self.get_current_pose()
+        if pose is None:
+            return 0
+        rx, ry = pose['x'], pose['y']
+        return min(
+            range(len(waypoints)),
+            key=lambda i: (waypoints[i]['x'] - rx) ** 2 + (waypoints[i]['y'] - ry) ** 2,
+        )
 
     def stop(self):
         if not self._active:
@@ -133,10 +146,16 @@ class AutonomousController(Node):
         self._zero_vel()
         return True
 
-    def _drive_loop(self, waypoints):
+    def _drive_loop(self, waypoints, resume=False):
         print(f'[drive_loop] started, {len(waypoints)} waypoints', flush=True)
         logger, log_path = create_session_logger()
-        logger.info(f'Session started — {len(waypoints)} waypoints')
+        logger.info(f'Session started — {len(waypoints)} waypoints (resume={resume})')
+
+        # Resume continues from the waypoint nearest the robot; a normal Run
+        # (and every lap after the first) starts from the beginning.
+        first_lap_start = self._nearest_waypoint_index(waypoints) if resume else 0
+        if resume:
+            logger.info(f'Resuming from nearest waypoint index {first_lap_start}')
 
         try:
             max_laps = self.config['autonomous'].get('max_repeat_num', 1)
@@ -158,8 +177,10 @@ class AutonomousController(Node):
                 self.get_logger().info(f'Lap {lap + 1}/{max_laps}')
                 logger.info(f'Lap {lap + 1}/{max_laps} started')
 
+                lap_start = first_lap_start if lap == 0 else 0
                 for cmd in autonomous_driving.run(
-                        waypoints, self.get_current_pose, params):
+                        waypoints, self.get_current_pose, params,
+                        start_index=lap_start):
 
                     if self._stop_event.is_set():
                         logger.info('Interrupted by stop signal')

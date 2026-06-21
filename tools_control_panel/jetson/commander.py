@@ -114,8 +114,9 @@ class Commander:
                 self._vx = self._vz = 0.0
                 waypoints = cmd.get("waypoints")
                 if waypoints:
-                    self._auto.start(waypoints)
-                log.info("Resumed autonomous")
+                    resume = bool(cmd.get("resume", False))
+                    self._auto.start(waypoints, resume=resume)
+                log.info("Resumed autonomous" if cmd.get("resume") else "Started autonomous")
 
             elif ctype == "new_path":
                 if not self._estopped and not self._manual:

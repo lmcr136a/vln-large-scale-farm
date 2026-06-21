@@ -59,7 +59,6 @@ from telemetry_node import TelemetryNode
 from radio_comm import RadioComm
 from internet_comm import InternetComm
 from commander import Commander
-from scheduler import Scheduler
 from station_uploader import StationUploader
 from autonomous.autonomous_mode import AutonomousController
 from gps.gps_localizer import GpsLocalizer
@@ -435,6 +434,11 @@ def main():
     _map_dir    = os.path.normpath(os.path.join(_proj_dir, cfg["paths"]["map_dir"]))
     landmark_store    = LandmarkStore(os.path.join(_data_dir, "landmarks.json"))
     landmark_detector = LandmarkDetector(gps_localizer, landmark_store, cfg)
+    # YOLO landmark detection disabled — no inference, no annotated-frame stream.
+    # Keeping the object (disabled) so the wiring below stays no-op without guards:
+    # start() returns early, is_enabled() is False (no LiDAR sub), and the image/
+    # depth/pointcloud callbacks just store data nothing consumes.
+    landmark_detector._enabled = False
     landmark_store.set_origin(*gps_localizer.get_origin())  # may be None if no origin yet
 
     # GPS top-down map loop
@@ -447,10 +451,10 @@ def main():
 
     proxy     = SocketIOProxy(radio, internet, uploader, telemetry)
 
-    # Scene describer — every vlm.scene_interval_sec, one-sentence VLM description
-    # of the 4 RGB cameras, pushed to the web panel as 'scene_description'.
-    scene_describer = SceneDescriber(cfg, proxy)
-    scene_describer.start()
+    # Scene description (VLM) disabled — the control panel streams the camera
+    # images only, with no per-camera VLM text. Leaving this off also frees the
+    # GPU the ZED cameras need to open reliably.
+    scene_describer = None
 
     tmux_session     = cfg.get("tmux", {}).get("session", "vln")
     tmux_cfg_windows = cfg.get("tmux", {}).get("windows", None)
@@ -540,8 +544,6 @@ def main():
     radio.start()
     internet.start()
 
-    Scheduler(cfg_path, auto_ctrl.start, lab_url=cfg['internet']['lab_ws_url']).run()
-
     pc_topic    = cfg["internet"]["pointcloud_topic"]
     pc_interval = float(cfg["internet"]["pointcloud_interval"])
     _latest_pc: list = [None]
@@ -599,7 +601,10 @@ def main():
         png_path   = os.path.join(map_dir, cfg["paths"].get("map_image",  "map_latest.png"))
         state_path = os.path.join(map_dir, cfg["paths"].get("map_state",  "map_state.json"))
         interval   = cfg.get("map", {}).get("update_interval", 1.0)
-        last_mtime    = 0.0
+        # Seed with the current time so a stale map_latest.png left on disk from a
+        # previous session is NOT pushed on startup (that caused the old SLAM map
+        # to flash). Only maps GLIM regenerates this session (newer mtime) are sent.
+        last_mtime    = time.time()
         map_not_found = False
         while not shutdown.is_set():
             if shutdown.wait(timeout=interval):

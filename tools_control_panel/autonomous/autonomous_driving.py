@@ -34,10 +34,14 @@ def _angle_diff(a, b):
     return (a - b + math.pi) % (2 * math.pi) - math.pi
 
 
-def run(waypoints, get_robot_pose, params=None):
+def run(waypoints, get_robot_pose, params=None, start_index=0):
     """
     Generator yielding command dicts:
       {'vt', 'vr', 'dt', 'status', 'completed', 'waypoint_reached'(optional)}
+
+    start_index: index of the first waypoint to head for. Used by "Resume" to
+    continue from the nearest waypoint after a mid-drive stop instead of the
+    first one. Defaults to 0 (drive the whole path from the start).
     """
     p          = params or {}
     pos_tol    = p.get('position_tolerance', 0.3)
@@ -55,8 +59,8 @@ def run(waypoints, get_robot_pose, params=None):
     # Angular P-gain for simultaneous steering: full max_simul_vr at ori_tol_r
     max_simul_vr = r_stages[1][0] if len(r_stages) > 1 else r_stages[0][0]
 
-    wp_idx  = 0
     n_wp    = len(waypoints)
+    wp_idx  = max(0, min(start_index, n_wp - 1)) if n_wp else 0
     prev_xy = None   # start of current path leg (set to robot pos on first iteration)
 
     while wp_idx < n_wp:

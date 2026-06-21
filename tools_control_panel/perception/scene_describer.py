@@ -22,15 +22,23 @@ log = logging.getLogger(__name__)
 CAM_LABEL = {'front': 'front', 'back': 'back', 'left': 'left', 'right': 'right'}
 
 
-def _build_prompt(camera: str) -> str:
-    """Camera-specific prompt — one independent description per camera, not a
-    fused summary, so each camera's view of the crop can be judged on its own."""
+def _build_batch_prompt(cameras: list) -> str:
+    """One prompt for all camera views in a single VLM call — the images are
+    passed in `cameras` order and each is tagged so the model attributes its
+    description to the right camera. The model must answer one labelled line per
+    camera so the response can be parsed back into {camera: text}."""
+    order  = '\n'.join(f'image {i + 1} = {CAM_LABEL.get(c, c).upper()} camera'
+                       for i, c in enumerate(cameras))
+    labels = '\n'.join(f'{CAM_LABEL.get(c, c).upper()}: <description>'
+                       for c in cameras)
     return (
-        f'This is the {CAM_LABEL.get(camera, camera)} camera of a robot driving '
-        'around a flax farm. There might be utility boxes and trailers. Focusing on '
-        "the flax crop's size, growth stage, and any signs of pests or disease "
-        'damage, describe what is visible in 2-3 short plain sentences '
-        '(max ~50 words), in English.'
+        'These are the camera views from a robot driving around a flax farm, '
+        f'given in this exact order:\n{order}\n'
+        'There might be utility boxes and trailers. For EACH camera separately, '
+        "focusing on the flax crop's size, growth stage, and any signs of pests "
+        'or disease damage, describe what is visible in 2-3 short plain sentences '
+        '(max ~50 words each), in English. Respond in EXACTLY this format, one '
+        f'camera per line, and nothing else:\n{labels}'
     )
 
 
@@ -96,16 +104,15 @@ class SceneDescriber:
         with self._lock:
             snapshot = {cam: data for cam, (_, data) in self._images.items()}
 
-        descriptions: dict[str, str] = {}
-        for cam in ('front', 'back', 'left', 'right'):
-            if cam not in snapshot:
-                continue
-            b64  = base64.b64encode(snapshot[cam]).decode()
-            text = self._call_ollama(cam, b64) if self._backend == 'ollama' \
-                   else self._call_claude(cam, b64)
-            if not text:
-                continue
-            descriptions[cam] = ' '.join(text.strip().split())  # collapse whitespace/newlines
+        # All present cameras go to the VLM in ONE call (one prefill of N images
+        # instead of N separate calls), in a fixed order matching the prompt tags.
+        cams = [c for c in ('front', 'back', 'left', 'right') if c in snapshot]
+        if not cams:
+            return
+        b64s = [base64.b64encode(snapshot[c]).decode() for c in cams]
+        raw  = self._call_ollama(cams, b64s) if self._backend == 'ollama' \
+               else self._call_claude(cams, b64s)
+        descriptions = self._parse_batch(raw, cams) if raw else {}
 
         if not descriptions:
             return
@@ -181,16 +188,34 @@ class SceneDescriber:
             except Exception as e:
                 log.warning(f'SceneDescriber: log save failed [{cam}]: {e}')
 
-    def _call_ollama(self, camera: str, b64: str) -> str | None:
+    def _parse_batch(self, text: str, cams: list) -> dict:
+        """Map the model's labelled lines (FRONT: ... / BACK: ...) back to
+        {camera: description}. Lines that don't match a known camera label are
+        ignored, so a malformed line only drops that one camera, not the batch."""
+        out: dict[str, str] = {}
+        for line in text.splitlines():
+            label, sep, desc = line.partition(':')
+            if not sep:
+                continue
+            key = label.strip().lower().strip('*#-• ').strip()
+            for cam in cams:
+                if key == cam or key == CAM_LABEL.get(cam, cam):
+                    desc = ' '.join(desc.strip().split())  # collapse whitespace
+                    if desc:
+                        out[cam] = desc
+                    break
+        return out
+
+    def _call_ollama(self, cams: list, b64s: list) -> str | None:
         try:
             import requests
         except ImportError:
             return None
         payload = {
-            'model': self._model, 'prompt': _build_prompt(camera),
-            'images': [self._resize_jpeg(b64)], 'stream': False,
+            'model': self._model, 'prompt': _build_batch_prompt(cams),
+            'images': [self._resize_jpeg(b) for b in b64s], 'stream': False,
             'keep_alive': self._keep_alive,
-            'options': {'temperature': 0.2, 'num_predict': 140},
+            'options': {'temperature': 0.2, 'num_predict': 140 * len(cams)},
         }
         try:
             resp = requests.post(f'{self._ollama_url}/api/generate',
@@ -198,10 +223,10 @@ class SceneDescriber:
             resp.raise_for_status()
             return resp.json().get('response', '').strip() or None
         except Exception as e:
-            log.warning(f'Ollama scene call failed [{camera}]: {e}')
+            log.warning(f'Ollama scene call failed: {e}')
             return None
 
-    def _call_claude(self, camera: str, b64: str) -> str | None:
+    def _call_claude(self, cams: list, b64s: list) -> str | None:
         try:
             import anthropic
         except ImportError:
@@ -211,14 +236,16 @@ class SceneDescriber:
             client  = anthropic.Anthropic(api_key=self._api_key)
             content = [
                 {'type': 'image',
-                 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': b64}},
-                {'type': 'text', 'text': _build_prompt(camera)},
+                 'source': {'type': 'base64', 'media_type': 'image/jpeg',
+                            'data': self._resize_jpeg(b)}}
+                for b in b64s
             ]
-            resp = client.messages.create(model=self._model, max_tokens=140,
+            content.append({'type': 'text', 'text': _build_batch_prompt(cams)})
+            resp = client.messages.create(model=self._model, max_tokens=140 * len(cams),
                                           messages=[{'role': 'user', 'content': content}])
             return resp.content[0].text.strip() or None
         except Exception as e:
-            log.warning(f'Claude scene call failed [{camera}]: {e}')
+            log.warning(f'Claude scene call failed: {e}')
             return None
 
     @staticmethod

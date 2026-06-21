@@ -111,7 +111,6 @@ function onMapClick(e) {
 socket.on('connect', () => {
   console.log('Socket.IO connected:', socket.id);
   loadMission();
-  if (typeof initSchedule === 'function') initSchedule();
 });
 socket.on('disconnect',    () => console.log('Socket.IO disconnected'));
 socket.on('connect_error', (e) => console.error('Connection error:', e));
@@ -298,21 +297,13 @@ socket.on('sysmon', (data) => {
   }
 });
 
-socket.on('auto_mode_completed', () => { if (isAutoMode) runNow(); });
+// Path finished — return the button to idle (no auto-restart; Run is manual).
+socket.on('auto_mode_completed', () => { setAutoButton(false); });
 
 socket.on('robot_status', (data) => {
   const div = document.getElementById('robot-status');
   if (data.status) { div.textContent = data.status; div.style.display = 'block'; }
   else             { div.style.display = 'none'; }
-});
-
-socket.on('scene_description', (data) => {
-  const descriptions = data && data.descriptions;
-  if (!descriptions) return;
-  for (const [camera, text] of Object.entries(descriptions)) {
-    const div = document.getElementById(`${camera}-rgb-desc`);
-    if (div && text) { div.textContent = text; div.style.display = '-webkit-box'; }
-  }
 });
 
 socket.on('robot_telemetry', (data) => {
@@ -473,20 +464,36 @@ function redrawDynLayer() {
 // ═══════════════════════════════════════════════════════════════
 //  Auto Mode
 // ═══════════════════════════════════════════════════════════════
+// Reflect run state on the big RUN/Stop button.
+function setAutoButton(active) {
+  isAutoMode = active;
+  const btn = document.getElementById('btn-run-big');
+  if (!btn) return;
+  btn.innerHTML = active ? '⏹ STOP' : '▶ RUN';
+  btn.classList.toggle('active-auto', active);
+}
+
+function _currentWaypoints() {
+  return pathNodes.map(n => ({ x: n.worldX, y: n.worldY }));
+}
+
+// RUN button: first press starts from the beginning; pressing again stops
+// (same as the old E-STOP — soft stop of path following).
 function runNow() {
   if (isAutoMode) {
-    isAutoMode = false;
-    document.getElementById('autoButton').textContent = '▶ Run Now';
-    document.getElementById('autoButton').classList.remove('active-auto');
+    setAutoButton(false);
     socket.emit('stop_autonomous');
     return;
   }
-  isAutoMode = true;
-  document.getElementById('autoButton').textContent = '⏹ Stop';
-  document.getElementById('autoButton').classList.add('active-auto');
-  socket.emit('start_autonomous', {
-    waypoints: pathNodes.map(n => ({ x: n.worldX, y: n.worldY })),
-  });
+  setAutoButton(true);
+  socket.emit('start_autonomous', { waypoints: _currentWaypoints() });
+}
+
+// Resume button: continue from the waypoint nearest the robot (not the first),
+// e.g. after stopping mid-drive.
+function resumeRun() {
+  setAutoButton(true);
+  socket.emit('resume_autonomous', { waypoints: _currentWaypoints() });
 }
 
 function resetMapZoom() {
@@ -525,15 +532,6 @@ function stopRecording() {
 }
 
 socket.on('recording_status', (data) => { setRecordingState(data.active, data.dirname); });
-
-function emergencyStop() {
-  socket.emit('estop');
-  if (isAutoMode) {
-    isAutoMode = false;
-    const btn = document.getElementById('autoButton');
-    if (btn) { btn.textContent = '▶ Run Now'; btn.classList.remove('active-auto'); }
-  }
-}
 
 function clearEstop() {
   socket.emit('command', { cmd: 'clear_estop' });
@@ -695,9 +693,6 @@ const TMUX_WINDOW_LABELS = {
   lidar:         'LiDAR',
   imu:           'IMU',
   gps:           'GPS Node',
-  slam:          'SLAM',
-  map_saver:     '2D Map',
-  ground:        'Ground Seg',
 };
 
 function updateTmuxPanel(status) {
