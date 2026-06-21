@@ -171,6 +171,12 @@ class AutonomousController(Node):
         (its position projects beyond that waypoint, toward the following one),
         advance to the next index instead of re-targeting a point behind us."""
         pose = self.get_current_pose()
+        # After a restart the first pose may not have arrived yet; wait briefly so
+        # Resume heads to the nearest upcoming point instead of falling back to wp 0.
+        deadline = time.time() + 3.0
+        while pose is None and time.time() < deadline and not self._stop_event.is_set():
+            time.sleep(0.05)
+            pose = self.get_current_pose()
         if pose is None:
             return 0
         rx, ry = pose['x'], pose['y']

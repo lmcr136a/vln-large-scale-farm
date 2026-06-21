@@ -529,11 +529,15 @@ function runNow() {
   socket.emit('start_autonomous', { waypoints: _currentWaypoints() });
 }
 
-// Resume button: continue from the waypoint nearest the robot (not the first),
-// e.g. after stopping mid-drive.
+// Resume button: continue from a specific point number (the "from pt" input,
+// 1-based, matching the marker labels). Left blank → nearest upcoming waypoint.
 function resumeRun() {
   setAutoButton(true);
-  socket.emit('resume_autonomous', { waypoints: _currentWaypoints() });
+  const raw = document.getElementById('resume-index')?.value;
+  const n   = raw ? parseInt(raw, 10) : NaN;
+  const msg = { waypoints: _currentWaypoints() };
+  if (Number.isInteger(n) && n >= 1) msg.start_index = n - 1;   // 1-based → 0-based
+  socket.emit('resume_autonomous', msg);
 }
 
 function resetMapZoom() {

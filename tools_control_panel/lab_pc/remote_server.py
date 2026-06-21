@@ -222,8 +222,12 @@ class RemoteServer:
             if not waypoints:
                 log.warning("resume_autonomous: no waypoints available, ignoring")
                 return
-            # resume=True → robot continues from the waypoint nearest its position.
-            self._to_robot({"cmd": "continue", "waypoints": waypoints, "resume": True})
+            # resume=True → continue from start_index if given (1-based in UI,
+            # already 0-based here), else the waypoint nearest the robot.
+            msg = {"cmd": "continue", "waypoints": waypoints, "resume": True}
+            if isinstance(data, dict) and data.get("start_index") is not None:
+                msg["start_index"] = int(data["start_index"])
+            self._to_robot(msg)
 
         @sio.on("stop_autonomous")
         def on_stop():
