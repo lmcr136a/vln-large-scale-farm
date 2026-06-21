@@ -25,7 +25,7 @@ def _gps_to_enu(lat, lon, olat, olon):
 def main(out_path):
     landmarks_path = os.path.join(BASE, 'data', 'landmarks.json')
     track_path     = os.path.join(BASE, 'data', 'gps_track.json')
-    crop_path      = os.path.join(BASE, 'data', 'crop_field.json')
+    crop_path      = os.path.join(BASE, 'config', 'crop_field.json')
 
     lm_data = json.load(open(landmarks_path))
     origin  = lm_data.get('origin') or {}

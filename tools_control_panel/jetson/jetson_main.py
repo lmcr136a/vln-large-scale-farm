@@ -468,7 +468,7 @@ def main():
     landmark_store.set_origin(*gps_localizer.get_origin())  # may be None if no origin yet
 
     # GPS top-down map loop
-    _crop_file = os.path.join(_data_dir, 'crop_field.json')
+    _crop_file = os.path.join(os.path.dirname(cfg_path), 'crop_field.json')  # config/, like mission.json
     gps_map_loop = GpsMapLoop(
         gps_localizer, landmark_store, internet, _map_dir,
         interval=cfg.get("map", {}).get("update_interval", 3.0),
