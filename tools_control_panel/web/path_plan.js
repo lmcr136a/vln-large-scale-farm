@@ -248,6 +248,11 @@ function drawMarker(x, y, type, onAction, idx) {
   else
     g.add(new Konva.Circle({ radius:2.5,fill:'rgb(200,200,200)',stroke:'black',strokeWidth:1 }));
 
+  // Order number — the waypoint's position in the drive sequence (1-based), so
+  // the path order is explicit and visible (not inferred from edit time).
+  g.add(new Konva.Text({ x:5, y:-5, text:String(idx + 1), fontSize:9,
+                         fill:'black', stroke:'white', strokeWidth:0.4, listening:false }));
+
   // Transparent hit area — kept tight (≈ the visible marker) so only a click
   // landing ON the point deletes/toggles it. A click even slightly off falls
   // through to the map handler and adds a new waypoint there instead.

@@ -42,6 +42,7 @@ HEADING_MIN_DIST  = 0.3   # minimum baseline displacement (m) to trust GPS headi
 # baseline is what made the displayed heading jitter / flip — so we don't.
 HEADING_ESTABLISH_DIST = 1.0   # m of travel needed to confirm the GPS heading
 HEADING_START_YAW = math.pi / 2.0  # assume the robot starts facing North (0=E, π/2=N)
+GYRO_DEADBAND = 0.05   # rad/s (~3°/s) — ignore gyro rates below this as bump/vibration noise
 HEADING_MAX_AGE_S = 1.5   # is_heading_valid() rejects a heading older than this —
                           # a stale fused_yaw (e.g. right after a turn or a pause)
                           # can be several degrees off, which at typical landmark
@@ -183,9 +184,13 @@ class GpsLocalizer(Node):
                 self._fused_yaw_init = True
             else:
                 dt = t - self._last_imu_t if self._last_imu_t is not None else 0.0
-                # Integrate gyro yaw rate — valid for any motion, especially in-place rotation
-                if 0.0 < dt < 0.5:
-                    self._fused_yaw += msg.angular_velocity.z * dt
+                wz = msg.angular_velocity.z
+                # Integrate gyro yaw rate, but ignore small rates: on bumpy ground
+                # the shaking injects vibration noise into gyro_z that, integrated,
+                # drags the heading off the real travel direction. Only rates above
+                # GYRO_DEADBAND (a real turn) count.
+                if 0.0 < dt < 0.5 and abs(wz) > GYRO_DEADBAND:
+                    self._fused_yaw += wz * dt
             self._last_imu_t = t
 
     def _on_gps(self, msg: NavSatFix):

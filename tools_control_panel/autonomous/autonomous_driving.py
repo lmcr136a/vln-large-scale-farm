@@ -156,15 +156,12 @@ def run(waypoints, get_robot_pose, params=None, start_index=0):
                 vr = (angle_err / ori_tol_r) * max_simul_vr * dir_gain
                 vr = max(-max_simul_vr, min(max_simul_vr, vr))
 
-                # Slow down proportionally to angle error so steering can keep up
-                vt *= max(0.5, 1.0 - abs_err / stop_rot_r)
-
-                # ── Hard cross-track safety: never let the robot leave the line by
-                # more than cte_max. Forward speed tapers from full (at half the
-                # limit) down to 0 (at the limit), so it stops advancing and only
-                # steers back to the line instead of drifting further out.
-                if cte_max > 0:
-                    vt *= max(0.0, min(1.0, (cte_max - cte) / (0.5 * cte_max)))
+                # Keep FULL forward speed — never taper vt down. A reduced vt was
+                # dropping under the motor deadband and stalling the robot. Steering
+                # (vr) alone corrects heading and cross-track error. Hard-stop only
+                # if the robot actually reaches the cross-track limit.
+                if cte_max > 0 and cte >= cte_max:
+                    vt = 0.0
 
                 cte_str = f'  cte={cte:.2f}m' if cte > 0.05 else ''
                 yield {'vt': vt, 'vr': vr, 'dt': CONTROL_DT,

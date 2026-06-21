@@ -459,6 +459,11 @@ function redrawDynLayer() {
         listening: false,
       }));
     }
+    // Order number (1-based) — explicit drive sequence, not edit order.
+    dynLayer.add(new Konva.Text({
+      x: n.stageX + 4, y: n.stageY - 5, text: String(i + 1),
+      fontSize: 9, fill: 'black', stroke: 'white', strokeWidth: 0.4, listening: false,
+    }));
   });
 
   if (robotPose && currentMapMeta) {

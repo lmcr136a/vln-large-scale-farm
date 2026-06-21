@@ -3,7 +3,7 @@ autonomous:
   cross_track_limit: 0.3
   cross_track_gain: 1.0            # higher → cuts back to the line harder
   cross_track_softening: 0.4       # m — steering correction reaches ~45° at this offset
-  direction_correction_gain: 1.0   # heading-correction strength (1.0 = plain, 2.0 = twice as strong)
+  direction_correction_gain: 0.1   # heading-correction strength (1.0 = plain, 2.0 = twice as strong)
   linear_speed: 0.7
   max_repeat_num: 1
   min_waypoints: 2
