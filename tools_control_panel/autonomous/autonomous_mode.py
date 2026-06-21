@@ -204,16 +204,23 @@ class AutonomousController(Node):
         self._zero_vel()
         return True
 
-    def _drive_loop(self, waypoints, resume=False):
+    def _drive_loop(self, waypoints, resume=False, start_index=None):
         print(f'[drive_loop] started, {len(waypoints)} waypoints', flush=True)
         logger, log_path = create_session_logger()
         logger.info(f'Session started — {len(waypoints)} waypoints (resume={resume})')
 
-        # Resume continues from the waypoint nearest the robot; a normal Run
-        # (and every lap after the first) starts from the beginning.
-        first_lap_start = self._nearest_waypoint_index(waypoints) if resume else 0
-        if resume:
+        # First-lap start point:
+        #  • explicit start_index (from the "from pt" input) wins, clamped to range
+        #  • else Resume → nearest upcoming waypoint
+        #  • else (normal Run) → from the beginning
+        if start_index is not None:
+            first_lap_start = max(0, min(int(start_index), len(waypoints) - 1))
+            logger.info(f'Starting from requested waypoint index {first_lap_start}')
+        elif resume:
+            first_lap_start = self._nearest_waypoint_index(waypoints)
             logger.info(f'Resuming from nearest waypoint index {first_lap_start}')
+        else:
+            first_lap_start = 0
 
         try:
             max_laps = self.config['autonomous'].get('max_repeat_num', 1)
