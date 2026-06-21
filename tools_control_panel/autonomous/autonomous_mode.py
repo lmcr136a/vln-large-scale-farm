@@ -146,7 +146,7 @@ class AutonomousController(Node):
     def is_active(self):
         return self._active
 
-    def start(self, waypoints, resume=False):
+    def start(self, waypoints, resume=False, start_index=None):
         if self._active:
             return False
         min_wp = self.config['autonomous'].get('min_waypoints', 2)
@@ -159,7 +159,7 @@ class AutonomousController(Node):
         self._stop_event.clear()
         self._pause_event.clear()
         self._thread = threading.Thread(
-            target=self._drive_loop, args=(waypoints, resume), daemon=True)
+            target=self._drive_loop, args=(waypoints, resume, start_index), daemon=True)
         self._thread.start()
         return True
 

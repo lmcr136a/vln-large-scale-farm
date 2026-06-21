@@ -122,7 +122,8 @@ class Commander:
                 waypoints = cmd.get("waypoints")
                 if waypoints:
                     resume = bool(cmd.get("resume", False))
-                    self._auto.start(waypoints, resume=resume)
+                    self._auto.start(waypoints, resume=resume,
+                                     start_index=cmd.get("start_index"))
                 log.info("Resumed autonomous" if cmd.get("resume") else "Started autonomous")
 
             elif ctype == "new_path":
