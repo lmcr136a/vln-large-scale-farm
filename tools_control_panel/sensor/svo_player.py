@@ -151,7 +151,11 @@ class SvoPlayer:
         # return as fast as it can decode rather than the SDK's own real-time gate.
         init.svo_real_time_mode = False
         init.coordinate_units   = sl.UNIT.METER
-        init.depth_mode         = sl.DEPTH_MODE.QUALITY   # accurate stereo depth for landmark localization
+        # Stereo depth (QUALITY) is the heaviest GPU op per frame. Only compute it
+        # when there's actually a depth consumer (on_depth set, i.e. landmark
+        # detection on). With YOLO/landmark off, NONE lets grab() decode RGB only
+        # and replay runs far faster.
+        init.depth_mode         = sl.DEPTH_MODE.QUALITY if self._on_depth else sl.DEPTH_MODE.NONE
 
         cam = sl.Camera()
         err = cam.open(init)
@@ -215,7 +219,9 @@ class SvoPlayer:
                 )
                 if ok and self._on_frame:
                     try:
-                        self._on_frame(name, buf.tobytes())
+                        # Pass the frame's recorded sim-time (ns) so the panel can
+                        # match the RGB to the GPS pose of that same moment.
+                        self._on_frame(name, buf.tobytes(), cur_ts_ns)
                     except Exception as e:
                         log.debug(f'SvoPlayer on_frame error: {e}')
 

@@ -183,7 +183,7 @@ const RGB_CAM_IMG = {
 
 function setRgbBarVisible(visible) {
   const bar = document.getElementById('rgb-stream-bar');
-  if (bar) bar.style.display = visible ? 'flex' : 'none';
+  if (bar) bar.style.display = visible ? 'grid' : 'none';
 }
 
 // Keep the left RGB column pinned just below #top-panel's *actual* rendered
@@ -218,10 +218,38 @@ socket.on('radio_frame', (data) => {
   _lastRadioFrameTime = Date.now();
 });
 
+// ── RGB ↔ GPS frame matching (replay only) ───────────────────────
+// Each RGB frame and each pose carries its sim-time `t`. We hold the displayed
+// robot pose to the timestamp of the latest FRONT frame, so the map marker shows
+// where the robot was when that scene was captured. Stale/out-of-order frames
+// are dropped so nothing queues up. Live mode (no `t`) keeps the old behavior.
+let poseBuffer = [];            // [{t, data}] recent timestamped poses
+const _lastFrameT = {};         // camera -> last shown sim-time
+const SYNC_CAM = 'front';       // camera whose timestamp drives the pose
+
+function _poseAt(t) {
+  let best = null, bestDt = Infinity;
+  for (const p of poseBuffer) {
+    const dt = Math.abs(p.t - t);
+    if (dt < bestDt) { bestDt = dt; best = p; }
+  }
+  return best ? best.data : null;
+}
+
 function _bindRgbCam(camera, elemId) {
   socket.on(`${camera}_frame`, (data) => {
+    // Drop stale / out-of-order frames so the panel never shows a backlog.
+    if (data.t != null) {
+      if (_lastFrameT[camera] != null && data.t <= _lastFrameT[camera]) return;
+      _lastFrameT[camera] = data.t;
+    }
     const img = document.getElementById(elemId);
     if (img) img.src = 'data:image/jpeg;base64,' + data.data;
+    // Sync the map's robot pose to THIS frame's moment (front cam = clock).
+    if (data.t != null && camera === SYNC_CAM) {
+      const p = _poseAt(data.t);
+      if (p) { robotPose = p; redrawDynLayer(); }
+    }
   });
 }
 for (const [camera, elemId] of Object.entries(RGB_CAM_IMG)) {
@@ -277,6 +305,13 @@ socket.on('map_updated', (data) => {
 
 socket.on('robot_pose', (data) => {
   const isFirst = robotPose === null;
+  if (data.t != null) {
+    // Replay: buffer the timestamped pose; the matching RGB frame drives the
+    // displayed marker (see _bindRgbCam). Seed the marker once so it appears.
+    poseBuffer.push({ t: data.t, data });
+    if (poseBuffer.length > 400) poseBuffer.shift();
+    if (!isFirst) return;
+  }
   robotPose = data;
   if (isFirst && currentMapMeta && pathNodes.length === 0) {
     pathNodes.push({ worldX: data.x, worldY: data.y, reached: false });
@@ -396,9 +431,9 @@ function redrawDynLayer() {
     visibleNodes.forEach(n => pts.push(n.stageX, n.stageY));
     dynLayer.add(new Konva.Line({
       points: pts,
-      stroke: 'rgba(200,200,200,0.5)',
-      strokeWidth: 1,
-      dash: [6, 3],
+      stroke: 'rgba(0,0,0,0.95)',
+      strokeWidth: 3,
+      dash: [8, 4],
       listening: false,
     }));
   }

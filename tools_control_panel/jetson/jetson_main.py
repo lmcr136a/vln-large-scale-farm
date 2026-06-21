@@ -80,8 +80,10 @@ BEST_EFFORT_QOS = QoSProfile(
 )
 
 
-def _scale_jpeg_b64(b64: str, width: int) -> str | None:
-    """Scale a JPEG base64 string to given width using OpenCV (always on Jetson)."""
+def _scale_jpeg_b64(b64: str, size: int, long_edge: bool = False) -> str | None:
+    """Scale a JPEG base64 string using OpenCV (always on Jetson).
+    size = target width, or (when long_edge=True) the target for the longer side
+    so the result fits within size px regardless of orientation."""
     try:
         import base64 as _b64
         import numpy as _np
@@ -93,8 +95,14 @@ def _scale_jpeg_b64(b64: str, width: int) -> str | None:
             log.warning("_scale_jpeg_b64: imdecode returned None")
             return None
         h, w = img.shape[:2]
-        new_h = max(1, round(h * width / w))
-        small = _cv2.resize(img, (width, new_h), interpolation=_cv2.INTER_AREA)
+        if long_edge:
+            scale = size / max(h, w)
+            new_w = max(1, round(w * scale))
+            new_h = max(1, round(h * scale))
+        else:
+            new_w = size
+            new_h = max(1, round(h * size / w))
+        small = _cv2.resize(img, (new_w, new_h), interpolation=_cv2.INTER_AREA)
         ok, buf = _cv2.imencode('.jpg', small, [_cv2.IMWRITE_JPEG_QUALITY, 50])
         if not ok:
             log.warning("_scale_jpeg_b64: imencode failed")
@@ -110,12 +118,16 @@ class RecorderProxy:
 
     def __init__(self, internet, telemetry=None, radio=None, image_width=60,
                  manual_check=None, image_interval=1.5, radio_camera="front",
-                 landmark_detector=None, scene_describer=None):
+                 landmark_detector=None, scene_describer=None,
+                 panel_width=200, panel_hz=3.0):
         self._internet           = internet
         self._telemetry          = telemetry
         self._radio              = radio
         self._last_radio         = 0.0
         self._radio_width        = image_width
+        self._panel_width        = panel_width   # long-edge px for control-panel RGB
+        self._panel_hz           = panel_hz      # control-panel send rate (own throttle)
+        self._last_panel: dict[str, float] = {}  # camera -> last panel send time
         self._manual_check       = manual_check
         self._image_int          = image_interval
         self._radio_cam          = radio_camera
@@ -135,14 +147,28 @@ class RecorderProxy:
         if not raw_b64:
             return
 
-        # Send YOLO annotation while fresh, otherwise raw frame
-        ann = self._yolo_ann.get(camera)
-        send_b64 = ann[1] if ann and (time.time() - ann[0]) < self._ANN_TTL else raw_b64
+        # Panel feed has its OWN sparse rate (panel_hz), independent of the live
+        # internet QUALITY tier. Gate FIRST (cheap) so surplus frames are dropped
+        # before the expensive decode/resize/encode — this is what keeps the feed
+        # from backing up at 2x/3x replay.
+        now = time.time()
+        if self._panel_hz > 0 and \
+           now - self._last_panel.get(camera, 0.0) >= 1.0 / self._panel_hz:
+            self._last_panel[camera] = now
+            # Send YOLO annotation while fresh, otherwise raw frame
+            ann = self._yolo_ann.get(camera)
+            send_b64 = ann[1] if ann and (now - ann[0]) < self._ANN_TTL else raw_b64
 
-        self._internet.send_rgb_b64(send_b64, camera)
+            # Shrink to a small long-edge so each frame is tiny → low latency.
+            if self._panel_width:
+                send_b64 = _scale_jpeg_b64(send_b64, self._panel_width, long_edge=True) or send_b64
+
+            self._internet.emit_rgb_b64(send_b64, camera, data.get("t"))
         if self._telemetry:
             self._telemetry.touch(f"zed_{camera}")
-        if self._landmark_detector:
+        # YOLO/VLM are disabled — skip their per-frame callbacks entirely so a
+        # replay never wastes a b64-decode on data nothing consumes.
+        if self._landmark_detector and self._landmark_detector.is_enabled():
             self._landmark_detector.on_image_b64(camera, raw_b64)  # always raw, no feedback loop
         if self._scene_describer:
             self._scene_describer.on_image_b64(camera, raw_b64)
@@ -714,9 +740,12 @@ def main():
         )
         heading_valid = gps_localizer.is_heading_valid()
         now_s = time.time()
+        # Pose's own sim-time (bag stamp) so the panel can pair it with the RGB
+        # frame of the same instant during replay.
+        pose_t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         if internet.connected and (now_s - _pose_send_state["last"]) >= 1.0 / POSE_INTERNET_HZ:
             _pose_send_state["last"] = now_s
-            internet.send_pose(p.x, p.y, yaw)
+            internet.send_pose(p.x, p.y, yaw, t=pose_t)
             gps_map_loop.update_robot_pose(
                 {"x": p.x, "y": p.y, "yaw": yaw, "heading_valid": heading_valid}
             )
@@ -736,7 +765,9 @@ def main():
                               image_interval=cfg.get("radio", {}).get("image_interval", 1.5),
                               radio_camera=cfg.get("radio", {}).get("camera", "front"),
                               landmark_detector=landmark_detector,
-                              scene_describer=scene_describer)
+                              scene_describer=scene_describer,
+                              panel_width=cfg.get("control_panel", {}).get("rgb_width", 200),
+                              panel_hz=cfg.get("control_panel", {}).get("rgb_hz", 3.0))
 
     # YOLO annotated frames → cached in rec_proxy, injected into the live stream for TTL seconds
     def _on_annotated_frame(camera: str, jpeg_bytes: bytes):
@@ -754,18 +785,26 @@ def main():
         # Clear in-memory state so old track/heading don't bleed into this session
         gps_localizer.reset_for_replay()
 
-        def _on_svo_frame(camera: str, jpeg_bytes: bytes):
+        def _on_svo_frame(camera: str, jpeg_bytes: bytes, ts_ns: int = None):
             b64 = base64.b64encode(jpeg_bytes).decode()
-            rec_proxy.emit(f"{camera}_frame", {"data": b64})
+            data = {"data": b64}
+            if ts_ns is not None:
+                data["t"] = ts_ns / 1e9   # sim-time seconds, for panel RGB↔GPS sync
+            rec_proxy.emit(f"{camera}_frame", data)
 
         def _on_svo_depth(camera: str, depth_arr, intrinsics: dict):
-            landmark_detector.on_depth_frame(camera, depth_arr, intrinsics)
+            # YOLO/landmark detection is disabled — depth would only be stored for
+            # an inference step that never runs, so skip it during replay.
+            if landmark_detector.is_enabled():
+                landmark_detector.on_depth_frame(camera, depth_arr, intrinsics)
 
         from sensor.svo_player import SvoPlayer
         svo_player = SvoPlayer(
             session_dir=replay_dir,
             on_frame=_on_svo_frame,
-            on_depth=_on_svo_depth,
+            # No depth consumer when landmark detection is off → SvoPlayer skips
+            # depth compute entirely (DEPTH_MODE.NONE), which is the big replay win.
+            on_depth=(_on_svo_depth if landmark_detector.is_enabled() else None),
             stream_fps=cfg["recording"].get("web_stream_hz", 5),
             speed=replay_speed,
         )

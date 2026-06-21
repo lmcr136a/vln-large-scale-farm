@@ -168,7 +168,7 @@ function redraw() {
   if (n > 1) {
     const pts = waypoints.flatMap(p => { const px = worldToPixel(p.x,p.y); return px ? [px.x,px.y] : []; });
     if (pts.length >= 4)
-      dynLayer.add(new Konva.Line({ points: pts, stroke: 'rgba(200,200,200,0.5)', strokeWidth: 1, dash: [6,3], listening: false }));
+      dynLayer.add(new Konva.Line({ points: pts, stroke: 'rgba(0,0,0,0.95)', strokeWidth: 3, dash: [8,4], listening: false }));
     // Loop closing line
     if (isLoop) {
       const p0 = worldToPixel(waypoints[0].x, waypoints[0].y);
@@ -248,8 +248,10 @@ function drawMarker(x, y, type, onAction, idx) {
   else
     g.add(new Konva.Circle({ radius:2.5,fill:'rgb(200,200,200)',stroke:'black',strokeWidth:1 }));
 
-  // Transparent hit area (Konva.Circle on Group child, not hitFunc)
-  g.add(new Konva.Circle({ radius:14,fill:'transparent',stroke:null }));
+  // Transparent hit area — kept tight (≈ the visible marker) so only a click
+  // landing ON the point deletes/toggles it. A click even slightly off falls
+  // through to the map handler and adds a new waypoint there instead.
+  g.add(new Konva.Circle({ radius:5,fill:'transparent',stroke:null }));
 
   g.on('mousedown', () => { _downOnMarker = true; _markerAction = onAction; });
   g.on('mouseenter',() => stage.container().style.cursor = 'pointer');
@@ -301,7 +303,14 @@ async function loadMission() {
 }
 
 // ── Socket ────────────────────────────────────────────────────
-socket.on('connect', () => { console.log('[planner] connected'); loadMission(); });
+// Auto-load the saved mission only on the FIRST connect. Reconnects (network
+// blip, server restart) must NOT clobber a path the user is drawing/has not
+// saved yet — that silent overwrite is what made edits "revert" to the old path.
+let missionLoaded = false;
+socket.on('connect', () => {
+  console.log('[planner] connected');
+  if (!missionLoaded) { missionLoaded = true; loadMission(); }
+});
 
 socket.on('map_updated', (data) => {
   currentMapMeta = { resolution:data.resolution,origin_x:data.origin_x,origin_y:data.origin_y,width:data.width,height:data.height,rot_angle:data.rot_angle??0 };

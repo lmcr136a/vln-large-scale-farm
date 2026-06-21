@@ -11,8 +11,8 @@ log = logging.getLogger(__name__)
 
 QUALITY = {
     "low":    {"rgb_hz": 0.1, "pc_ratio": 0.08},
-    "medium": {"rgb_hz": 1.0, "pc_ratio": 0.20},
-    "high":   {"rgb_hz": 5.0, "pc_ratio": 0.40},
+    "medium": {"rgb_hz": 10.0, "pc_ratio": 0.20},
+    "high":   {"rgb_hz": 30.0, "pc_ratio": 0.40},
 }
 
 # RTT thresholds (seconds) for bandwidth-level selection
@@ -60,8 +60,11 @@ class InternetComm:
     def send_telemetry(self, payload: dict):
         self._emit("telemetry", payload)
 
-    def send_pose(self, x: float, y: float, yaw: float):
-        self._emit("pose", {"x": x, "y": y, "yaw": yaw})
+    def send_pose(self, x: float, y: float, yaw: float, t=None):
+        payload = {"x": x, "y": y, "yaw": yaw}
+        if t is not None:
+            payload["t"] = t   # sim-time (s) so the panel can match RGB to this pose
+        self._emit("pose", payload)
 
     def send_event(self, event: str, data):
         self._emit("robot_event", {"event": event, "data": data})
@@ -72,13 +75,30 @@ class InternetComm:
     def send_rgb_b64(self, b64: str, camera: str):
         self._send_rgb_internal(b64, camera)
 
-    def _send_rgb_internal(self, b64: str, camera: str):
+    def rgb_due(self, camera: str) -> bool:
+        """True if enough wall-clock time has passed to send another RGB frame for
+        this camera (rate = QUALITY[quality]['rgb_hz']); records the send time.
+        Call this BEFORE any expensive resize/encode so dropped frames are cheap —
+        this is what keeps 2x/3x replay from backing up the panel feed."""
         q = QUALITY[self._quality]
         interval = 1.0 / q["rgb_hz"] if q["rgb_hz"] > 0 else float("inf")
-        if time.time() - self._last_rgb.get(camera, 0.0) < interval:
-            return
-        self._last_rgb[camera] = time.time()
-        self._emit("rgb_frame", {"camera": camera, "data": b64})
+        now = time.time()
+        if now - self._last_rgb.get(camera, 0.0) < interval:
+            return False
+        self._last_rgb[camera] = now
+        return True
+
+    def emit_rgb_b64(self, b64: str, camera: str, t=None):
+        """Send an RGB frame with no rate limiting (caller already gated via rgb_due).
+        t = the frame's sim-time (s) for panel RGB↔GPS matching; omitted when live."""
+        payload = {"camera": camera, "data": b64}
+        if t is not None:
+            payload["t"] = t
+        self._emit("rgb_frame", payload)
+
+    def _send_rgb_internal(self, b64: str, camera: str):
+        if self.rgb_due(camera):
+            self._emit("rgb_frame", {"camera": camera, "data": b64})
 
     def send_pointcloud(self, points: np.ndarray):
         ratio = QUALITY[self._quality]["pc_ratio"]

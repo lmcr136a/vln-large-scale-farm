@@ -26,7 +26,7 @@ tmux select-layout -t $SESSION:0 even-horizontal
 
 # Window 1: SLAM
 tmux new-window -t $SESSION:1 -n "Claude"
-tmux send-keys -t $SESSION:1 "claude" C-m
+tmux send-keys -t $SESSION:1 "claude -c" C-m
 
 # Window 2: Control Panel
 tmux new-window -t $SESSION:2 -n "Main"

@@ -36,6 +36,12 @@ R_EARTH = 6378137.0
 HEADING_WINDOW_S  = 0.8   # seconds of GPS history kept for the baseline
 HEADING_MIN_DT    = 0.3   # minimum window span before trusting it
 HEADING_MIN_DIST  = 0.3   # minimum baseline displacement (m) to trust GPS heading
+# The absolute heading is CONFIRMED once, from the first stretch of forward
+# travel (a deliberate ~1 m nudge in real-time, or the first straight leg in
+# replay), then held via gyro integration. Re-deriving it from every short GPS
+# baseline is what made the displayed heading jitter / flip — so we don't.
+HEADING_ESTABLISH_DIST = 1.0   # m of travel needed to confirm the GPS heading
+HEADING_START_YAW = math.pi / 2.0  # assume the robot starts facing North (0=E, π/2=N)
 HEADING_MAX_AGE_S = 1.5   # is_heading_valid() rejects a heading older than this —
                           # a stale fused_yaw (e.g. right after a turn or a pause)
                           # can be several degrees off, which at typical landmark
@@ -107,11 +113,15 @@ class GpsLocalizer(Node):
         self._gps_track: list[dict] = []
         self._track_dirty = False
 
-        # Gyro-integrated yaw — corrected by GPS when moving, gyro fills in during rotation
+        # Gyro-integrated yaw — confirmed once from GPS travel, then gyro-held.
         self._fused_yaw: float = 0.0
         self._fused_yaw_init: bool = False
         self._last_imu_t: float | None = None
         self._last_gyro_z: float = 0.0   # latest yaw rate for straight-motion detection
+        # Heading confirmation: start assuming North, lock to the GPS course once
+        # the robot has driven HEADING_ESTABLISH_DIST forward.
+        self._heading_established: bool = False
+        self._establish_origin: tuple | None = None   # (x, y) where the baseline starts
 
         # Locate data directory relative to project root
         proj_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -162,8 +172,9 @@ class GpsLocalizer(Node):
             self._current_yaw = _quat_to_yaw(q.x, q.y, q.z, q.w)
             self._last_gyro_z = msg.angular_velocity.z
             if not self._fused_yaw_init:
-                # Seed fused yaw from the IMU filter on first message
-                self._fused_yaw = self._current_yaw
+                # Start assuming North; the first ~1 m of travel confirms the real
+                # heading (see _on_gps). Gyro integrates turns from here.
+                self._fused_yaw = HEADING_START_YAW
                 self._fused_yaw_init = True
             else:
                 dt = t - self._last_imu_t if self._last_imu_t is not None else 0.0
@@ -199,29 +210,49 @@ class GpsLocalizer(Node):
             x = x_ant + ofx * cos_h - ofy * sin_h
             y = y_ant + ofx * sin_h + ofy * cos_h
 
-            # GPS correction to fused yaw — uses displacement over a time window
-            # (not just the last fix) so stationary RTK jitter can't masquerade
-            # as a heading. Jitter stays bounded as the window grows; real travel
-            # doesn't, so a minimum baseline distance reliably separates the two.
-            self._gps_window.append((t, x, y))
-            while self._gps_window and t - self._gps_window[0][0] > HEADING_WINDOW_S:
-                self._gps_window.popleft()
-            if self._gps_window:
-                t0, x0, y0 = self._gps_window[0]
-                dx, dy = x - x0, y - y0
-                dt = t - t0
-                dist = math.hypot(dx, dy)
-                if dt >= HEADING_MIN_DT and dist >= HEADING_MIN_DIST:
-                    gps_yaw = math.atan2(dy, dx)
-                    self._gps_heading   = gps_yaw
-                    self._gps_heading_t = t
-                    # Straight motion: low yaw rate + sufficient displacement → hard refresh.
-                    # This clears any accumulated gyro drift after rotations.
-                    if abs(self._last_gyro_z) < 0.05:  # < ~3 deg/s → going straight
-                        self._fused_yaw = gps_yaw
-                    else:
-                        # Turning: GPS heading less reliable — soft blend only
-                        self._fused_yaw += 0.3 * _angle_diff(gps_yaw, self._fused_yaw)
+            # ── Heading: confirm forward direction once, then maintain ────────
+            # Until confirmed, heading = North assumption + gyro. Once the robot has
+            # moved HEADING_ESTABLISH_DIST, the straight-line course over that
+            # baseline IS the heading — this also locks which way is "forward".
+            if self._establish_origin is None:
+                self._establish_origin = (x, y)
+
+            if not self._heading_established:
+                ox, oy = self._establish_origin
+                if math.hypot(x - ox, y - oy) >= HEADING_ESTABLISH_DIST:
+                    course = math.atan2(y - oy, x - ox)
+                    self._fused_yaw           = course
+                    self._gps_heading         = course
+                    self._gps_heading_t       = t
+                    self._heading_established = True
+                    self.get_logger().info(
+                        f'[heading] confirmed from {HEADING_ESTABLISH_DIST:.0f} m '
+                        f'travel: {math.degrees(course):.0f}°  (was assuming North)')
+            else:
+                # Maintenance after confirmation:
+                #  • straight driving  → snap heading to the GPS course, which WIPES
+                #    any accumulated gyro drift (gyro is exact for rate, drifts over time).
+                #  • in-place rotation → GPS gives no course, so the gyro integration
+                #    in _on_imu carries the heading (the fallback).
+                #  • the forward/reverse 180° choice is LOCKED against the held
+                #    heading, so backing up never flips the displayed heading.
+                self._gps_window.append((t, x, y))
+                while self._gps_window and t - self._gps_window[0][0] > HEADING_WINDOW_S:
+                    self._gps_window.popleft()
+                if self._gps_window:
+                    t0, x0, y0 = self._gps_window[0]
+                    dx, dy = x - x0, y - y0
+                    if t - t0 >= HEADING_MIN_DT and math.hypot(dx, dy) >= HEADING_MIN_DIST:
+                        gps_yaw = math.atan2(dy, dx)
+                        # Lock the 180° ambiguity: if the travel course opposes the
+                        # held heading, we're reversing → flip back to body-forward.
+                        if abs(_angle_diff(gps_yaw, self._fused_yaw)) > math.pi / 2:
+                            gps_yaw = _angle_diff(gps_yaw + math.pi, 0.0)
+                        self._gps_heading   = gps_yaw
+                        self._gps_heading_t = t
+                        # Going straight (not rotating in place) → adopt GPS, clearing drift.
+                        if abs(self._last_gyro_z) < 0.05:   # < ~3 deg/s
+                            self._fused_yaw = gps_yaw
             self._current_x = x
             self._current_y = y
             yaw = self._fused_yaw if self._fused_yaw_init else (
@@ -330,6 +361,8 @@ class GpsLocalizer(Node):
             self._current_lon    = None
             self._gps_window.clear()
             self._fused_yaw_init = False
+            self._heading_established = False
+            self._establish_origin    = None
             self._last_imu_t     = None
             self._last_gyro_z    = 0.0
             self._rtk_fixed      = False

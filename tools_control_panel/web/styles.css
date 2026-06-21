@@ -67,13 +67,8 @@ body {
   align-items: center;
 }
 
-#back-rgb-image {
-  display: block;
-  height: var(--rgb-h);
-  width: auto;
-  object-fit: contain;
-  background: black;
-}
+/* #back-rgb-image intentionally has no special sizing — it inherits .rgb-cam img
+   so all four camera feeds (Left/Front/Right/Back) render at identical size. */
 
 /* ── Column 2: Front camera ────────────────────────────────── */
 #col-front {
@@ -208,23 +203,26 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
    so it never overlaps the safety-checker / radio-camera widgets above it. */
 #rgb-stream-bar {
   position: fixed;
-  top: var(--rgb-h); left: 0; bottom: 0;
+  top: var(--rgb-h); left: 0;
   width: auto;
-  display: none;                 /* shown (flex) by JS when internet is up */
-  flex-direction: column;
-  justify-content: flex-start;
-  align-items: flex-start;
-  gap: 6px;
+  display: none;                 /* shown (grid) by JS when internet is up */
+  /* Cross/diamond layout: Front top-center, Left/Right on the middle sides,
+     Back bottom-center. */
+  grid-template-columns: repeat(3, auto);
+  grid-template-rows: repeat(3, auto);
+  justify-items: center;
+  align-items: center;
+  gap: 4px;
   background: rgba(0,0,0,0.55);
   padding: 8px;
   z-index: 15;
-  overflow-y: auto;
 }
-/* Back camera sticks to the bottom of the column; Left/Front/Right stay
-   grouped at the top (back is the last .rgb-cam child — see control.html). */
-#rgb-stream-bar > .rgb-cam:last-child {
-  margin-top: auto;
-}
+/* HTML order in #rgb-stream-bar is Left, Front, Right, Back — place each into
+   its cross cell (grid-area: row / column). */
+#rgb-stream-bar > .rgb-cam:nth-child(1) { grid-area: 2 / 1; }  /* Left  */
+#rgb-stream-bar > .rgb-cam:nth-child(2) { grid-area: 1 / 2; }  /* Front */
+#rgb-stream-bar > .rgb-cam:nth-child(3) { grid-area: 2 / 3; }  /* Right */
+#rgb-stream-bar > .rgb-cam:nth-child(4) { grid-area: 3 / 2; }  /* Back  */
 .rgb-cam {
   display: flex;
   flex: 0 0 auto;

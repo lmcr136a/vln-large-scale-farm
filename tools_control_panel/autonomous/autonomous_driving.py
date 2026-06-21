@@ -3,7 +3,9 @@ Autonomous driving — closed-loop path following in the map frame.
 Yields one command dict per CONTROL_DT for the caller to publish.
 
 Control strategy:
-  - Pure-pursuit look-ahead on the path segment keeps cross-track error ≤ cross_track_limit.
+  - Cross-track regulator steers to hold the path LINE itself: target heading is the
+    path direction plus a correction angle that grows with the perpendicular offset
+    (saturates at ±90°) and decays to 0 on the line → converges parallel, no overshoot.
   - In the translate phase, vt and vr are issued simultaneously (proportional steering).
   - Stop-and-rotate only when |angle_error| exceeds stop_rot_r = 2 × ori_tol.
 """
@@ -14,7 +16,7 @@ CONTROL_DT = 0.1
 # Strength of the continuous heading-correction while translating. The angular
 # velocity is proportional to (target_yaw − yaw); this gain multiplies that
 # response. 2.0 = twice as aggressive as the plain proportional term.
-DIRECTION_CORRECTION_GAIN = 2.0
+DIRECTION_CORRECTION_GAIN = 1.0
 
 DEFAULT_R_STAGES = [(0.3, 15), (0.5, 60), (0.7, 360)]
 DEFAULT_T_STAGES = [(0.3, 1.5), (0.5, 3.0), (0.8, 999)]
@@ -56,7 +58,11 @@ def run(waypoints, get_robot_pose, params=None, start_index=0):
     # Between the two         → still translate + vr, capped at max_simul_vr.
     stop_rot_r = math.radians(p.get('stop_rotate_threshold', 15))
     cte_max    = p.get('cross_track_limit',  0.5)   # m — max allowed deviation from path line
-    lookahead  = p.get('lookahead_distance', 1.5)   # m — base look-ahead distance
+    # Cross-track regulator: steer to hold the path LINE itself (no look-ahead point).
+    cte_gain   = p.get('cross_track_gain', 1.0)        # higher → cuts back to the line harder
+    cte_soft   = p.get('cross_track_softening', 0.4)   # m — correction reaches ~45° at this offset
+    # Heading-correction strength (1.0 = plain proportional, 2.0 = twice as aggressive).
+    dir_gain   = p.get('direction_correction_gain', DIRECTION_CORRECTION_GAIN)
 
     r_stages = _load_stages(p, 'r', DEFAULT_R_STAGES)
     t_stages = _load_stages(p, 't', DEFAULT_T_STAGES)
@@ -99,28 +105,25 @@ def run(waypoints, get_robot_pose, params=None, start_index=0):
                 wp_idx += 1
                 break
 
-            # ── Pure-pursuit: look-ahead point on the path line ───────────────
+            # ── Cross-track regulator: hold the path LINE (no look-ahead point) ─
             prev_x, prev_y = prev_xy
             path_dx = tx - prev_x
             path_dy = ty - prev_y
             path_len = math.hypot(path_dx, path_dy)
 
             if path_len > 0.1:
-                # Scalar projection of robot onto [prev_xy → wp] segment
-                t_proj = ((rx - prev_x) * path_dx + (ry - prev_y) * path_dy) / (path_len ** 2)
-                t_proj = max(0.0, min(1.0, t_proj))
+                path_yaw = math.atan2(path_dy, path_dx)
+                # Signed cross-track error: >0 when robot is LEFT of the path
+                # direction, <0 when RIGHT. Magnitude = perpendicular distance.
+                cross = (path_dx * (ry - prev_y) - path_dy * (rx - prev_x)) / path_len
+                cte   = abs(cross)
 
-                # Cross-track error (perpendicular distance from robot to path)
-                clos_x = prev_x + t_proj * path_dx
-                clos_y = prev_y + t_proj * path_dy
-                cte    = math.hypot(rx - clos_x, ry - clos_y)
-
-                # Look-ahead shrinks when cte is large → stronger pull back to path
-                la   = max(0.3, lookahead * max(0.0, 1.0 - cte / cte_max))
-                la_t = min(1.0, t_proj + la / path_len)
-                la_x = prev_x + la_t * path_dx
-                la_y = prev_y + la_t * path_dy
-                target_yaw = math.atan2(la_y - ry, la_x - rx)
+                # Steer back toward the line: the correction angle grows with the
+                # offset and saturates at ±90° (heads straight at the line when far
+                # off), then decays to 0 as the robot reaches the line → ends up
+                # parallel with no overshoot. cte_gain/cte_soft tune the stiffness.
+                corr = math.atan2(cte_gain * cross, cte_soft)
+                target_yaw = path_yaw - corr
             else:
                 cte        = 0.0
                 target_yaw = math.atan2(dy, dx)
@@ -150,11 +153,18 @@ def run(waypoints, get_robot_pose, params=None, start_index=0):
                 # Proportional vr: full max_simul_vr at ori_tol_r, tapers to 0 as error → 0.
                 # DIRECTION_CORRECTION_GAIN makes the heading correction stronger so the
                 # robot snaps back onto the target heading faster (saturates sooner).
-                vr = (angle_err / ori_tol_r) * max_simul_vr * DIRECTION_CORRECTION_GAIN
+                vr = (angle_err / ori_tol_r) * max_simul_vr * dir_gain
                 vr = max(-max_simul_vr, min(max_simul_vr, vr))
 
                 # Slow down proportionally to angle error so steering can keep up
                 vt *= max(0.5, 1.0 - abs_err / stop_rot_r)
+
+                # ── Hard cross-track safety: never let the robot leave the line by
+                # more than cte_max. Forward speed tapers from full (at half the
+                # limit) down to 0 (at the limit), so it stops advancing and only
+                # steers back to the line instead of drifting further out.
+                if cte_max > 0:
+                    vt *= max(0.0, min(1.0, (cte_max - cte) / (0.5 * cte_max)))
 
                 cte_str = f'  cte={cte:.2f}m' if cte > 0.05 else ''
                 yield {'vt': vt, 'vr': vr, 'dt': CONTROL_DT,

@@ -336,7 +336,10 @@ class RemoteServer:
         @sio.on("rgb_frame")
         def inet_rgb(data):
             cam = data.get("camera", "front")
-            sio.emit(f"{cam}_frame", {"data": data["data"]}, namespace="/")
+            payload = {"data": data["data"]}
+            if "t" in data:                 # frame sim-time → panel RGB↔GPS matching
+                payload["t"] = data["t"]
+            sio.emit(f"{cam}_frame", payload, namespace="/")
 
         @sio.on("pose")
         def inet_pose(data):
