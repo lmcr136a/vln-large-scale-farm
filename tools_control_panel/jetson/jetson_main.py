@@ -519,12 +519,39 @@ def main():
 
     _restart_lock = threading.Lock()
 
+    # Default network-recovery command — overridable in farm_config.yaml under
+    # network.reconnect_cmd. Runs on the Jetson when the panel sends a
+    # 'network_reconnect' command (which can travel over radio even when wifi /
+    # tailscale is down, since that's the whole point of the radio link).
+    _net_reconnect_cmd = cfg.get("network", {}).get(
+        "reconnect_cmd",
+        "nmcli radio wifi off; sleep 3; nmcli radio wifi on; sleep 5; "
+        "nmcli device connect wlan0; sudo systemctl restart tailscaled",
+    )
+
+    def _run_shell(cmd_str: str):
+        cmd_str = (cmd_str or "").strip()
+        if not cmd_str:
+            return
+        log.warning(f"Running shell command from panel over link: {cmd_str}")
+        try:
+            subprocess.Popen(cmd_str, shell=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            log.error(f"shell command failed: {e}")
+
     def on_command(cmd):
         ctype = cmd.get("cmd")
         if ctype == "start_recording":
             start_rec_cb(cmd.get("dirname", "manual"))
         elif ctype == "stop_recording":
             stop_rec_cb()
+        elif ctype == "shell":
+            # Free-form recovery command from the control panel (e.g. bring the
+            # network back). Sent over radio so it works even with no internet.
+            _run_shell(cmd.get("command", ""))
+        elif ctype == "network_reconnect":
+            _run_shell(_net_reconnect_cmd)
         elif ctype == "restart_window":
             key = cmd.get("window", "")
             if key == "jetson_agent":
@@ -576,7 +603,8 @@ def main():
     _safety_wait    = float(_safety_cfg.get('wait_sec', 10.0))
     _recover_speed  = float(_safety_cfg.get('recover_speed') or cfg['autonomous']['t1'][0])
     safety_guard = SafetyGuard(_safety_status_getter, commander, _recover_speed,
-                               wait_sec=_safety_wait, notify=_safety_notify)
+                               wait_sec=_safety_wait, notify=_safety_notify,
+                               auto_ctrl=auto_ctrl)
     safety_guard.start()
 
     def pointcloud_loop():
@@ -860,9 +888,9 @@ def main():
 
     # Keep GPS map waypoints in sync with autonomous controller
     _orig_auto_start = auto_ctrl.start
-    def _auto_start_with_map(waypoints):
+    def _auto_start_with_map(waypoints, *args, **kwargs):
         gps_map_loop.update_waypoints(waypoints)
-        return _orig_auto_start(waypoints)
+        return _orig_auto_start(waypoints, *args, **kwargs)
     auto_ctrl.start = _auto_start_with_map
 
     executor = MultiThreadedExecutor()

@@ -8,10 +8,10 @@ autonomous:
   orientation_tolerance: 3
   position_tolerance: 0.3
   r1:
-  - 0.1
+  - 0.2
   - 10
   r2:
-  - 0.2
+  - 0.3
   - 20
   r3:
   - 0.5
@@ -20,10 +20,10 @@ autonomous:
   - 0.2
   - 1.0
   t2:
-  - 0.2
+  - 0.4
   - 1.0
   t3:
-  - 0.3
+  - 0.4
   - 999
 camera_extrinsics:
   back:
@@ -61,6 +61,11 @@ map:
   update_interval: 3
 monitor:
   update_interval: 1.0
+network:
+  # Run on the Jetson when the control panel sends "Reconnect Network" (over
+  # radio, so it works even when wifi/tailscale are down). Adjust the wifi
+  # interface name / SSID and tailscale handling for this machine as needed.
+  reconnect_cmd: 'nmcli radio wifi off; sleep 3; nmcli radio wifi on; sleep 5; nmcli device connect wlan0; sudo systemctl restart tailscaled'
 paths:
   data_dir: ../data
   map_dir: ../output_glim

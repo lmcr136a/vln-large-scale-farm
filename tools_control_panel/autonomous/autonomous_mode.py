@@ -34,6 +34,10 @@ class AutonomousController(Node):
         self._current_pose = None
         self._active       = False
         self._stop_event   = threading.Event()
+        # Paused (set) = mission stays active but stops issuing/publishing velocity,
+        # so SafetyGuard can take over (back away from a red zone) without ending
+        # the run. Cleared again → path following continues from where it held.
+        self._pause_event  = threading.Event()
         self._thread       = None
 
         # shared target velocity + watchdog
@@ -41,6 +45,10 @@ class AutonomousController(Node):
         self._target_vt     = 0.0
         self._target_vr     = 0.0
         self._vel_updated_at = 0.0   # timestamp of last control-loop update
+        # Last velocity actually commanded by the drive loop — read by SafetyGuard
+        # to reverse the motion (e.g. was turning left → turn right back).
+        self._last_cmd_vt   = 0.0
+        self._last_cmd_vr   = 0.0
 
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          durability=DurabilityPolicy.VOLATILE,
@@ -81,7 +89,9 @@ class AutonomousController(Node):
                 tgt_vt  = self._target_vt
                 tgt_vr  = self._target_vr
 
-            if active:
+            # While paused, publish nothing so the Commander's safety override
+            # (reverse / back-away) is the sole writer of cmd_vel.
+            if active and not self._pause_event.is_set():
                 twist = Twist()
                 if age < WATCHDOG_TIMEOUT:
                     twist.linear.x  = tgt_vt
@@ -97,12 +107,39 @@ class AutonomousController(Node):
             self._target_vt      = vt
             self._target_vr      = vr
             self._vel_updated_at = time.time()
+            if vt != 0.0 or vr != 0.0:
+                self._last_cmd_vt = vt
+                self._last_cmd_vr = vr
 
     def _zero_vel(self):
         with self._vel_lock:
             self._target_vt      = 0.0
             self._target_vr      = 0.0
             self._vel_updated_at = 0.0   # let watchdog keep it zero
+
+    def last_command(self):
+        """Most recent non-zero (vt, vr) the drive loop issued. SafetyGuard uses
+        this to reverse the motion when a close object appears."""
+        with self._vel_lock:
+            return self._last_cmd_vt, self._last_cmd_vr
+
+    # ── Pause / resume (SafetyGuard back-away without ending the mission) ──────
+
+    def pause(self):
+        """Suspend velocity output but keep the mission active. Idempotent."""
+        if self._active and not self._pause_event.is_set():
+            self._pause_event.set()
+            self._zero_vel()
+            self.get_logger().info('Autonomous paused (safety) — mission still active')
+
+    def resume(self):
+        """Resume path following after a pause. Idempotent."""
+        if self._pause_event.is_set():
+            self._pause_event.clear()
+            self.get_logger().info('Autonomous resumed after safety hold')
+
+    def is_paused(self):
+        return self._pause_event.is_set()
 
     # ── Control ───────────────────────────────────────────────────────────────
 
@@ -120,28 +157,43 @@ class AutonomousController(Node):
             f'{"Resuming" if resume else "Starting"} — {len(waypoints)} waypoints')
         self._active = True
         self._stop_event.clear()
+        self._pause_event.clear()
         self._thread = threading.Thread(
             target=self._drive_loop, args=(waypoints, resume), daemon=True)
         self._thread.start()
         return True
 
     def _nearest_waypoint_index(self, waypoints) -> int:
-        """Index of the waypoint closest to the robot's current position — used
-        by Resume so we continue from where we stopped, not the first point."""
+        """Index of the closest *upcoming* waypoint — used by Resume so we head to
+        the next point ahead, never one the robot has already driven past.
+
+        We take the nearest waypoint, then if the robot has already passed it
+        (its position projects beyond that waypoint, toward the following one),
+        advance to the next index instead of re-targeting a point behind us."""
         pose = self.get_current_pose()
         if pose is None:
             return 0
         rx, ry = pose['x'], pose['y']
-        return min(
-            range(len(waypoints)),
-            key=lambda i: (waypoints[i]['x'] - rx) ** 2 + (waypoints[i]['y'] - ry) ** 2,
+        n = len(waypoints)
+        i = min(
+            range(n),
+            key=lambda j: (waypoints[j]['x'] - rx) ** 2 + (waypoints[j]['y'] - ry) ** 2,
         )
+        if i < n - 1:
+            ax, ay = waypoints[i]['x'],     waypoints[i]['y']
+            bx, by = waypoints[i + 1]['x'], waypoints[i + 1]['y']
+            seg_x, seg_y = bx - ax, by - ay
+            # Robot projects past wp[i] along the leg toward wp[i+1] → already passed it.
+            if (rx - ax) * seg_x + (ry - ay) * seg_y > 0:
+                return i + 1
+        return i
 
     def stop(self):
         if not self._active:
             return False
         self.get_logger().info('Stopping')
         self._stop_event.set()
+        self._pause_event.clear()
         self._active = False
         self._zero_vel()
         return True
@@ -178,9 +230,22 @@ class AutonomousController(Node):
                 logger.info(f'Lap {lap + 1}/{max_laps} started')
 
                 lap_start = first_lap_start if lap == 0 else 0
-                for cmd in autonomous_driving.run(
-                        waypoints, self.get_current_pose, params,
-                        start_index=lap_start):
+                gen = autonomous_driving.run(
+                    waypoints, self.get_current_pose, params,
+                    start_index=lap_start)
+                while True:
+                    # Hold here while paused (SafetyGuard backing away). The
+                    # generator is NOT advanced, so when we resume it recomputes
+                    # from the robot's current pose toward the same next waypoint.
+                    while self._pause_event.is_set() and not self._stop_event.is_set():
+                        time.sleep(0.05)
+                    if self._stop_event.is_set():
+                        logger.info('Interrupted by stop signal')
+                        return
+                    try:
+                        cmd = next(gen)
+                    except StopIteration:
+                        break
 
                     if self._stop_event.is_set():
                         logger.info('Interrupted by stop signal')

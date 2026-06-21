@@ -714,3 +714,20 @@ function restartWindow(key) {
   if (!confirm(`Restart "${TMUX_WINDOW_LABELS[key] || key}"?`)) return;
   socket.emit('command', { cmd: 'restart_window', window: key });
 }
+
+// Network recovery — sent as a generic command, which the lab server relays over
+// the radio bridge too, so it reaches the Jetson even when wifi/tailscale are down.
+function reconnectNetwork() {
+  if (!confirm('Tell the Jetson to reconnect its network (wifi + tailscale)?')) return;
+  socket.emit('command', { cmd: 'network_reconnect' });
+}
+
+function sendJetsonCmd() {
+  const el = document.getElementById('jetson-cmd-input');
+  if (!el) return;
+  const command = el.value.trim();
+  if (!command) return;
+  if (!confirm(`Run on Jetson:\n${command}`)) return;
+  socket.emit('command', { cmd: 'shell', command });
+  el.value = '';
+}

@@ -11,6 +11,11 @@ import math
 
 CONTROL_DT = 0.1
 
+# Strength of the continuous heading-correction while translating. The angular
+# velocity is proportional to (target_yaw − yaw); this gain multiplies that
+# response. 2.0 = twice as aggressive as the plain proportional term.
+DIRECTION_CORRECTION_GAIN = 2.0
+
 DEFAULT_R_STAGES = [(0.3, 15), (0.5, 60), (0.7, 360)]
 DEFAULT_T_STAGES = [(0.3, 1.5), (0.5, 3.0), (0.8, 999)]
 
@@ -142,8 +147,10 @@ def run(waypoints, get_robot_pose, params=None, start_index=0):
                 # Simultaneous forward + proportional angular correction
                 vt, stage = _pick_vel(dist, t_stages)
 
-                # Proportional vr: full max_simul_vr at ori_tol_r, tapers to 0 as error → 0
-                vr = (angle_err / ori_tol_r) * max_simul_vr
+                # Proportional vr: full max_simul_vr at ori_tol_r, tapers to 0 as error → 0.
+                # DIRECTION_CORRECTION_GAIN makes the heading correction stronger so the
+                # robot snaps back onto the target heading faster (saturates sooner).
+                vr = (angle_err / ori_tol_r) * max_simul_vr * DIRECTION_CORRECTION_GAIN
                 vr = max(-max_simul_vr, min(max_simul_vr, vr))
 
                 # Slow down proportionally to angle error so steering can keep up

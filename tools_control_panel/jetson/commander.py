@@ -35,31 +35,38 @@ class Commander:
         self._vz = 0.0
         self._last_estop_warn = 0.0
         self._safety_vt = None   # None = no override; else forced linear.x (SafetyGuard)
+        self._safety_vr = 0.0    # forced angular.z while override active
 
         threading.Thread(target=self._control_loop, daemon=True).start()
 
     # ── Safety override (highest priority — see sensor/safety_guard.py) ───────
 
-    def set_safety_override(self, vt: float):
-        """Force cmd_vel to (vt, 0), pre-empting estop/manual/autonomous.
+    def set_safety_override(self, vt: float, vr: float = 0.0):
+        """Force cmd_vel to (vt, vr), pre-empting estop/manual/autonomous.
 
-        Stops any active autonomous mission once, on the first call after the
-        override was clear.
+        On the first call after the override was clear, *pauses* any active
+        autonomous mission (it is NOT stopped) so that once the obstacle clears
+        the robot resumes path following on its own. A non-zero vt/vr lets
+        SafetyGuard back the robot away from a close object (e.g. reverse the
+        last motion: was turning left → turn right back).
         """
         with self._lock:
             first = self._safety_vt is None
             self._safety_vt = vt
+            self._safety_vr = vr
             self._manual = False
         if first:
-            self._auto.stop()
-            log.warning("Safety override engaged — driving halted")
+            self._auto.pause()
+            log.warning("Safety override engaged — autonomous paused, backing away if needed")
 
     def clear_safety_override(self):
         with self._lock:
             if self._safety_vt is None:
                 return
             self._safety_vt = None
-        log.info("Safety override cleared")
+            self._safety_vr = 0.0
+        self._auto.resume()
+        log.info("Safety override cleared — autonomous resumed")
 
     def is_safety_overridden(self) -> bool:
         with self._lock:
@@ -143,7 +150,8 @@ class Commander:
             with self._lock:
                 if self._safety_vt is not None:
                     twist = Twist()                       # SafetyGuard override
-                    twist.linear.x = self._safety_vt
+                    twist.linear.x  = self._safety_vt
+                    twist.angular.z = self._safety_vr
                 elif self._estopped:
                     twist = Twist()                       # hold stop
                 elif self._auto.is_active():
