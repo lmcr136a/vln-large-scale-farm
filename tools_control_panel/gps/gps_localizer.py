@@ -135,6 +135,10 @@ class GpsLocalizer(Node):
         self._load_origin()
         self._load_track()
 
+        # RTK Float is often cm-accurate too; accept it as "fixed" for heading/
+        # landmark gating when the base is solid. Toggle via gps.accept_rtk_float.
+        self._accept_float = bool(config.get('gps', {}).get('accept_rtk_float', True))
+
         topics = config.get('ros2', {}).get('topics', {})
         gps_topic       = topics.get('gps',        '/gps/fix')
         imu_topic       = topics.get('imu',        '/xsens/imu/data')
@@ -163,7 +167,8 @@ class GpsLocalizer(Node):
         except Exception:
             return
         with self._lock:
-            self._rtk_fixed = bool(d.get('rtk_fixed', False))
+            self._rtk_fixed = bool(d.get('rtk_fixed', False)
+                                   or (self._accept_float and d.get('rtk_float', False)))
 
     def _on_imu(self, msg: Imu):
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9

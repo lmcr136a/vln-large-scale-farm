@@ -53,9 +53,11 @@ class SafetyGuard:
 
     def _tick(self):
         status    = self._get_status() or {}
-        any_red   = any(v == 'red' for v in status.values())
         front_red = any(status.get(z) == 'red' for z in FRONT_ZONES)
         back_red  = any(status.get(z) == 'red' for z in BACK_ZONES)
+        # Only front/back obstacles block driving. An object purely to the left or
+        # right ('left'/'right' zones) must NOT stop forward/backward motion.
+        any_red   = front_red or back_red
 
         if not any_red:
             if self._held:
@@ -87,9 +89,6 @@ class SafetyGuard:
         elif back_red:
             self._commander.set_safety_override(self._recover_speed, self._recover_vr)
             self._announce('Obstacle behind — moving forward')
-        else:
-            self._commander.set_safety_override(0.0, 0.0)
-            self._announce('Obstacle to the side — holding position')
 
     def _announce(self, msg: str):
         if msg == self._last_msg:

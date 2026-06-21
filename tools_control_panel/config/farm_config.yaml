@@ -27,6 +27,8 @@ autonomous:
   t3:
   - 0.4
   - 999
+gps:
+  accept_rtk_float: true   # treat RTK Float as good (cm-accurate base)
 camera_extrinsics:
   back:
   - -0.1
