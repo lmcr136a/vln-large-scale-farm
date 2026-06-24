@@ -383,6 +383,14 @@ class GpsLocalizer(Node):
         with self._lock:
             return self._heading_established
 
+    def is_rtk_fixed(self) -> bool:
+        """True when the GPS solution is good enough to drive on. Reflects
+        _rtk_fixed, which is real RTK Fixed (cm) — or also Float when
+        gps.accept_rtk_float is enabled. Used by the autonomous controller to
+        gate driving on RTK Fixed (require_rtk_fixed)."""
+        with self._lock:
+            return self._rtk_fixed
+
     def is_heading_valid(self) -> bool:
         """True only while the pose is currently trustworthy for landmark placement.
 

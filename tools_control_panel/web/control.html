@@ -116,7 +116,7 @@
       margin-top: 1px;
     }
     .gps-fixed { background: rgba(255,255,255,0.22);    color: #b0faf6; border: 1px solid rgba(164,255,243,0.4); }
-    .gps-float { background: rgba(228,236,243,0.18);    color: #6a91b6; border: 1px solid rgba(60,160,255,0.4); }
+    .gps-float { background: rgba(160,150,0,0.18);    color: rgb(160,150,0); border: 1px solid rgba(160,150,0,0.5); }
     .gps-dgps  { background: rgba(255,190,40,0.18);     color: #b8ae97; border: 1px solid rgba(224,216,197,0.4); }
     .gps-nofix { background: rgba(255,70,70,0.15);      color: #8d7676; border: 1px solid rgba(214,174,174,0.3); }
 
@@ -356,6 +356,17 @@
       <div id="gps-base-line">Base —</div>
       <div style="color:rgba(255,255,255,0.65);line-height:1.5;">
         SV: <span id="gps-sv">—</span>&nbsp;&nbsp;HDOP: <span id="gps-hdop">—</span>
+      </div>
+      <!-- RTK fix-quality diagnostics: why Float vs Fixed -->
+      <div id="gps-rtk-diag" style="color:rgba(255,255,255,0.55);line-height:1.5;font-size:11px;">
+        <span class="lbl">hAcc </span><span id="gps-hacc">—</span>
+        &nbsp;<span class="lbl">strong </span><span id="gps-strong">—</span>
+        &nbsp;<span class="lbl">carr </span><span id="gps-carr">—</span><br>
+        <span class="lbl">cr </span><span id="gps-cruse">—</span>
+        &nbsp;<span class="lbl">L2 </span><span id="gps-l2cr">—</span>
+        &nbsp;<span class="lbl">base </span><span id="gps-baseline">—</span><br>
+        <span class="lbl">RTCM </span><span id="gps-rtcm">—</span>
+        &nbsp;<span class="lbl">link </span><span id="gps-gnssq">—</span>
       </div>
       <div class="gps-coord">
         <span class="lbl">Lat </span><span id="gps-lat">—</span>

@@ -543,7 +543,8 @@ def main():
     auto_ctrl = AutonomousController(cmd_vel_pub, proxy, cfg,
                                       start_recording=start_rec_cb,
                                       stop_recording=stop_rec_cb,
-                                      heading_check=gps_localizer.is_heading_established)
+                                      heading_check=gps_localizer.is_heading_established,
+                                      rtk_check=gps_localizer.is_rtk_fixed)
     commander = Commander(cmd_vel_pub, auto_ctrl, cfg_path)
 
     _restart_lock = threading.Lock()

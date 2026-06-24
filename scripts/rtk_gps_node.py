@@ -498,7 +498,7 @@ class RtkGpsNode(Node):
             color  = "\033[38;2;180;245;255m"
             suffix = "  ✓ FIXED PUBLISHING"
         elif s["rtk_float"]:
-            color  = "\033[38;2;150;200;230m"
+            color  = "\033[38;2;160;150;0m"
             suffix = "  ~ FLOAT PUBLISHING"
         else:
             color  = "\033[38;2;150;150;150m"

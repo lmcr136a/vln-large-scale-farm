@@ -29,7 +29,8 @@ def _quat_to_yaw(x, y, z, w):
 
 class AutonomousController(Node):
     def __init__(self, publisher, socketio, config,
-                 start_recording=None, stop_recording=None, heading_check=None):
+                 start_recording=None, stop_recording=None, heading_check=None,
+                 rtk_check=None):
         super().__init__('autonomous_controller')
         self.pub      = publisher
         self.socketio = socketio
@@ -39,6 +40,16 @@ class AutonomousController(Node):
         # Returns True once the GPS heading is locked. Used to skip the
         # start-of-run forward nudge when the direction is already established.
         self._heading_check   = heading_check
+
+        # Returns True when the GPS solution is good enough to drive on. With
+        # require_rtk_fixed, the run won't start (and holds mid-drive) unless
+        # this is True — i.e. RTK Fixed (cm), not Float (decimetres of wander).
+        self._rtk_check = rtk_check
+        _ap = config.get('autonomous', {})
+        self._require_rtk_fixed = bool(_ap.get('require_rtk_fixed', False))
+        self._rtk_wait_s  = float(_ap.get('rtk_fixed_wait_s', 60.0))
+        self._rtk_grace_s = float(_ap.get('rtk_fixed_grace_s', 2.0))
+        self._rtk_lost_t  = None   # when RTK Fixed was first lost (None = currently OK)
 
         self._pose_lock    = threading.Lock()
         self._current_pose = None
@@ -255,6 +266,62 @@ class AutonomousController(Node):
         self._zero_vel()
         logger.info('Heading nudge complete')
 
+    # ── RTK Fixed gating ────────────────────────────────────────────────────
+    def _wait_initial_rtk(self, logger) -> bool:
+        """Before driving: block until RTK Fixed (up to rtk_fixed_wait_s).
+        Returns True if OK to drive, False if it should abort."""
+        if not (self._require_rtk_fixed and self._rtk_check):
+            return True
+        if self._rtk_check():
+            return True
+        logger.info('Waiting for RTK Fixed before start…')
+        self.socketio.emit('robot_status',
+                           {'status': '⏳ Waiting for RTK Fixed…'}, namespace='/')
+        deadline = time.time() + self._rtk_wait_s
+        while time.time() < deadline:
+            if self._stop_event.is_set():
+                return False
+            if self._rtk_check():
+                logger.info('RTK Fixed acquired — starting')
+                return True
+            time.sleep(0.2)
+        logger.info('RTK Fixed not acquired within timeout — aborting run')
+        self.socketio.emit('robot_status',
+                           {'status': '✗ RTK Fixed not acquired — run aborted'},
+                           namespace='/')
+        return False
+
+    def _rtk_hold_if_needed(self, logger):
+        """During driving: if RTK Fixed is lost past the grace period, zero
+        velocity and block until it returns (or stop/pause). Brief Float dips
+        within rtk_fixed_grace_s are tolerated so the robot doesn't stutter."""
+        if not (self._require_rtk_fixed and self._rtk_check):
+            return
+        if self._rtk_check():
+            self._rtk_lost_t = None
+            return
+        now = time.time()
+        if self._rtk_lost_t is None:
+            self._rtk_lost_t = now
+        if now - self._rtk_lost_t < self._rtk_grace_s:
+            return                      # tolerate a momentary dip
+        logger.info('RTK Fixed lost — holding until restored')
+        self._zero_vel()
+        self.socketio.emit('robot_status',
+                           {'status': '⏸ Paused — waiting for RTK Fixed'},
+                           namespace='/')
+        while (not self._rtk_check()
+               and not self._stop_event.is_set()
+               and not self._pause_event.is_set()):
+            self._zero_vel()
+            time.sleep(0.1)
+        self._rtk_lost_t = None
+        if self._rtk_check():
+            logger.info('RTK Fixed restored — resuming')
+            self.socketio.emit('robot_status',
+                               {'status': 'RTK Fixed restored — resuming'},
+                               namespace='/')
+
     def _drive_loop(self, waypoints, resume=False, start_index=None):
         print(f'[drive_loop] started, {len(waypoints)} waypoints', flush=True)
         logger, log_path = create_session_logger()
@@ -287,6 +354,11 @@ class AutonomousController(Node):
                                {'status': f'Navigating — {len(waypoints)} waypoints'},
                                namespace='/')
 
+            # Require RTK Fixed (cm) before moving — refuse to drive on a Float
+            # solution that wanders by decimetres. Waits up to rtk_fixed_wait_s.
+            if not self._wait_initial_rtk(logger):
+                return
+
             # Heading nudge: only on a fresh RUN and only if not already locked.
             # (Resume / "from pt" keep the heading already established earlier.)
             if not resume:
@@ -310,6 +382,11 @@ class AutonomousController(Node):
                     # from the robot's current pose toward the same next waypoint.
                     while self._pause_event.is_set() and not self._stop_event.is_set():
                         time.sleep(0.05)
+                    if self._stop_event.is_set():
+                        logger.info('Interrupted by stop signal')
+                        return
+                    # Hold here if RTK Fixed drops out mid-drive.
+                    self._rtk_hold_if_needed(logger)
                     if self._stop_event.is_set():
                         logger.info('Interrupted by stop signal')
                         return

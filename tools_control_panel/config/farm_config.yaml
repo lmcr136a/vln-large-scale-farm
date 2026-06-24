@@ -16,6 +16,10 @@ autonomous:
   steer_slew_rate: 1.5       # rad/s² — how fast vr may change (lower = smoother, less jerk)
   max_correction_deg: 50     # cap on how sharp a heading the line-pull may demand
   stop_rotate_threshold: 45  # deg — only beyond this does it stop & rotate in place
+  # ── RTK Fixed gating: refuse to drive on a wandering RTK Float solution ──
+  require_rtk_fixed: true     # true → only drive when RTK Fixed (needs accept_rtk_float:false to mean strict Fixed)
+  rtk_fixed_wait_s: 60        # s — wait this long for RTK Fixed at start before aborting the run
+  rtk_fixed_grace_s: 2        # s — tolerate brief Fixed→Float dips this long before holding
   r1:
   - 0.2
   - 10
@@ -35,7 +39,7 @@ autonomous:
   - 0.4
   - 999
 gps:
-  accept_rtk_float: true   # treat RTK Float as good (cm-accurate base)
+  accept_rtk_float: false  # false → only real RTK Fixed (cm) counts; Float (decimetre wander) is rejected for driving/landmarks
 camera_extrinsics:
   back:
   - -0.1
@@ -55,8 +59,8 @@ camera_extrinsics:
   - -0.15
   - -0.15
 internet:
-  # lab_ws_url: http://100.103.65.50:8000
-  lab_ws_url: http://127.0.0.1:8000
+  lab_ws_url: http://100.103.65.50:8000
+  # lab_ws_url: http://127.0.0.1:8000
   pointcloud_interval: 5.0
   pointcloud_topic: /glim_ros/globalmap
 lidar_extrinsics:

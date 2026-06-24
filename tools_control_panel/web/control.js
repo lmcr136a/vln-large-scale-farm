@@ -798,6 +798,41 @@ function updateGpsPanel(g) {
 
   set('gps-sv',   g.sv);
   set('gps-hdop', g.hdop != null ? g.hdop.toFixed(1) : null);
+
+  // RTK fix-quality diagnostics — explains why the receiver is Float vs Fixed.
+  // hAcc: Fixed ~0.01-0.03m, Float ~0.2-1m+ | carr: None/Float/Fixed
+  // cr (carrier-range used) & L2 (dual-band) drive ambiguity fixing.
+  const hAcc = g.h_acc;
+  const haccEl = document.getElementById('gps-hacc');
+  if (haccEl) {
+    haccEl.textContent = hAcc != null ? `${hAcc.toFixed(2)}m` : '—';
+    haccEl.style.color = hAcc == null ? '' : (hAcc <= 0.05 ? '#7fffb0'
+                                            : hAcc <= 0.30 ? '#ffd27f' : '#ff8f8f');
+  }
+  set('gps-strong', g.strong_sv);
+  const carrEl = document.getElementById('gps-carr');
+  if (carrEl) {
+    carrEl.textContent = g.carr_soln || '—';
+    carrEl.style.color = g.carr_soln === 'Fixed' ? '#7fffb0'
+                       : g.carr_soln === 'Float' ? '#ffd27f' : '';
+  }
+  set('gps-cruse', g.cr_used);
+  const l2El = document.getElementById('gps-l2cr');
+  if (l2El) {
+    l2El.textContent = g.l2_cr ?? '—';
+    // 0 L2 signals → fixing is slow/unlikely; flag it.
+    l2El.style.color = (g.l2_cr === 0) ? '#ff8f8f' : '';
+  }
+  set('gps-baseline', g.baseline_m != null ? `${g.baseline_m}m` : null);
+  set('gps-rtcm', g.rtcm_count != null
+        ? `${g.rtcm_count}${g.rtcm_bad ? ` (bad ${g.rtcm_bad})` : ''}` : null);
+  const gq = g.gnss_radio_quality;
+  const gqEl = document.getElementById('gps-gnssq');
+  if (gqEl) {
+    gqEl.textContent = gq != null ? `${gq}%` : '—';
+    gqEl.style.color = gq == null ? '' : (gq >= 60 ? '#7fffb0'
+                                        : gq >= 30 ? '#ffd27f' : '#ff8f8f');
+  }
   set('gps-lat',  g.lat  != null ? g.lat.toFixed(6)  : null);
   set('gps-lon',  g.lon  != null ? g.lon.toFixed(6)  : null);
   set('gps-alt',  g.alt  != null ? `${g.alt.toFixed(1)}m` : null);
