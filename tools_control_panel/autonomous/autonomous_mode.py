@@ -15,6 +15,13 @@ from .auto_nav_logger import create_session_logger
 PUBLISH_HZ      = 20.0          # cmd_vel publish rate
 WATCHDOG_TIMEOUT = 0.3          # zero vel if control loop silent for this long
 
+# Start-of-run heading nudge: drive straight forward so the GPS localizer can
+# confirm the absolute heading from travel (it locks after ~1 m). Done only on a
+# fresh RUN when the heading isn't established yet — never on Resume.
+HEADING_NUDGE_DIST  = 1.0       # m — stop the nudge once this far
+HEADING_NUDGE_TIME  = 2.0       # s — or after this long, whichever comes first
+HEADING_NUDGE_SPEED = 0.5       # m/s — ~1 m in ~2 s
+
 
 def _quat_to_yaw(x, y, z, w):
     return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y ** 2 + z ** 2))
@@ -22,13 +29,16 @@ def _quat_to_yaw(x, y, z, w):
 
 class AutonomousController(Node):
     def __init__(self, publisher, socketio, config,
-                 start_recording=None, stop_recording=None):
+                 start_recording=None, stop_recording=None, heading_check=None):
         super().__init__('autonomous_controller')
         self.pub      = publisher
         self.socketio = socketio
         self.config   = config
         self._start_recording = start_recording
         self._stop_recording  = stop_recording
+        # Returns True once the GPS heading is locked. Used to skip the
+        # start-of-run forward nudge when the direction is already established.
+        self._heading_check   = heading_check
 
         self._pose_lock    = threading.Lock()
         self._current_pose = None
@@ -204,6 +214,47 @@ class AutonomousController(Node):
         self._zero_vel()
         return True
 
+    def _establish_heading_nudge(self, logger):
+        """Drive straight forward (≤ HEADING_NUDGE_DIST or HEADING_NUDGE_TIME) so
+        the GPS localizer can confirm the absolute heading from travel. Stops early
+        if the heading locks first. Honours stop/pause like the main loop."""
+        start = self.get_current_pose()
+        deadline = time.time() + 3.0
+        while start is None and time.time() < deadline and not self._stop_event.is_set():
+            time.sleep(0.05)
+            start = self.get_current_pose()
+        sx, sy = (start['x'], start['y']) if start else (None, None)
+
+        self.get_logger().info('Heading nudge — driving forward to lock GPS heading')
+        logger.info('Heading nudge started (forward to establish GPS heading)')
+        self.socketio.emit('robot_status',
+                           {'status': 'Establishing heading — driving forward'},
+                           namespace='/')
+
+        t0 = time.time()
+        while not self._stop_event.is_set():
+            # Hold here if SafetyGuard paused us (back-away) — don't count the time.
+            while self._pause_event.is_set() and not self._stop_event.is_set():
+                self._zero_vel()
+                time.sleep(0.05)
+                t0 = time.time()   # restart the clock once we resume
+            if self._stop_event.is_set():
+                break
+            if self._heading_check and self._heading_check():
+                logger.info('Heading nudge: heading locked early')
+                break
+            if time.time() - t0 >= HEADING_NUDGE_TIME:
+                break
+            pose = self.get_current_pose()
+            if pose and sx is not None:
+                if math.hypot(pose['x'] - sx, pose['y'] - sy) >= HEADING_NUDGE_DIST:
+                    break
+            self._set_vel(HEADING_NUDGE_SPEED, 0.0)
+            time.sleep(autonomous_driving.CONTROL_DT)
+
+        self._zero_vel()
+        logger.info('Heading nudge complete')
+
     def _drive_loop(self, waypoints, resume=False, start_index=None):
         print(f'[drive_loop] started, {len(waypoints)} waypoints', flush=True)
         logger, log_path = create_session_logger()
@@ -235,6 +286,13 @@ class AutonomousController(Node):
             self.socketio.emit('robot_status',
                                {'status': f'Navigating — {len(waypoints)} waypoints'},
                                namespace='/')
+
+            # Heading nudge: only on a fresh RUN and only if not already locked.
+            # (Resume / "from pt" keep the heading already established earlier.)
+            if not resume:
+                established = self._heading_check() if self._heading_check else False
+                if not established:
+                    self._establish_heading_nudge(logger)
 
             for lap in range(max_laps):
                 if self._stop_event.is_set():

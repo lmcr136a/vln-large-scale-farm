@@ -404,7 +404,46 @@ socket.on('robot_telemetry', (data) => {
 
   // Safety checker
   if (data.safety_status) updateSafetyPanel(data.safety_status);
+
+  // Base (Scout) CAN link / fault — surfaced via telemetry, which travels over
+  // radio too, so this banner shows even when internet is down.
+  updateBaseAlert(data.base_status);
+
+  // System-ready badge above RUN.
+  updateReadyBadge(data);
 });
+
+// Sticky "Ready" / "OK" badge. Shows white "Ready" when every system is healthy
+// (all cameras, lidar/imu/gps, RTK Float-or-Fixed, Scout link) and "OK" while
+// driving. Driven only by telemetry we actually receive: when internet drops no
+// telemetry arrives, so the last state simply persists (never auto-cleared). It
+// only disappears when a telemetry update reports a system is NOT ready.
+function updateReadyBadge(data) {
+  const el = document.getElementById('ready-badge');
+  if (!el) return;
+  if (data.system_ready === undefined || data.system_ready === null) return; // sticky
+  if (data.system_ready) {
+    el.textContent = (data.mode === 'auto') ? 'OK' : 'Ready';
+    el.style.display = 'block';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+function updateBaseAlert(bs) {
+  const el = document.getElementById('base-alert');
+  if (!el) return;
+  // No base_status yet, or this Jetson build doesn't monitor the base → hide.
+  if (!bs || !bs.monitored) { el.style.display = 'none'; return; }
+  let msg = '';
+  if (!bs.comm) {
+    msg = '⚠ BASE NOT RESPONDING — CAN link down (robot may not move)';
+  } else if (bs.error_code) {
+    msg = '⚠ BASE FAULT — error code 0x' + Number(bs.error_code).toString(16).toUpperCase();
+  }
+  if (msg) { el.textContent = msg; el.style.display = 'block'; }
+  else     { el.style.display = 'none'; }
+}
 
 socket.on('waypoint_reached', (data) => {
   const idx = data.index;
@@ -412,7 +451,21 @@ socket.on('waypoint_reached', (data) => {
     pathNodes[idx].reached = true;
     redrawDynLayer();
   }
+  updateProgress();
 });
+
+// Waypoint completion shown above Recording, e.g. "3 / 30 (10%)".
+function updateProgress() {
+  const row = document.getElementById('run-progress');
+  const val = document.getElementById('run-progress-val');
+  if (!row || !val) return;
+  const total = pathNodes.length;
+  if (!total) { row.style.display = 'none'; return; }
+  const done = pathNodes.filter(n => n.reached).length;
+  const pct  = Math.round(done / total * 100);
+  val.textContent = `${done} / ${total} (${pct}%)`;
+  row.style.display = '';
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  Draw Dynamic Layer (robot + waypoints)
@@ -525,8 +578,42 @@ function runNow() {
     socket.emit('stop_autonomous');
     return;
   }
+  pathNodes.forEach(n => n.reached = false);   // fresh run → progress back to 0%
+  updateProgress();
+  redrawDynLayer();
+  startRunTimer();                              // 2h countdown, anchored to RUN
   setAutoButton(true);
   socket.emit('start_autonomous', { waypoints: _currentWaypoints() });
+}
+
+// ── 2-hour mission countdown ──────────────────────────────────────────────
+// Anchored to the RUN press only. Resume never restarts it (it just keeps
+// counting down from the original RUN), matching "처음 run 누른거 기준".
+const RUN_TIMER_SECONDS = 2 * 60 * 60;
+let _runTimerEnd      = 0;
+let _runTimerInterval = null;
+
+function startRunTimer() {
+  _runTimerEnd = Date.now() + RUN_TIMER_SECONDS * 1000;
+  if (_runTimerInterval) clearInterval(_runTimerInterval);
+  _tickRunTimer();
+  _runTimerInterval = setInterval(_tickRunTimer, 1000);
+}
+
+function _tickRunTimer() {
+  const el = document.getElementById('run-timer');
+  if (!el) return;
+  let rem = Math.round((_runTimerEnd - Date.now()) / 1000);
+  if (rem <= 0) {
+    rem = 0;
+    if (_runTimerInterval) { clearInterval(_runTimerInterval); _runTimerInterval = null; }
+  }
+  const hh = String(Math.floor(rem / 3600)).padStart(2, '0');
+  const mm = String(Math.floor((rem % 3600) / 60)).padStart(2, '0');
+  const ss = String(rem % 60).padStart(2, '0');
+  el.textContent = `${hh}:${mm}:${ss}`;
+  el.classList.toggle('run-timer-low', rem > 0 && rem < 300);
+  el.style.display = '';
 }
 
 // Resume button: continue from a specific point number (the "from pt" input,
@@ -594,6 +681,7 @@ async function loadMission() {
     if (data.isLoop && pathNodes.length > 1)
       pathNodes.push({ ...pathNodes[0] });
     redrawDynLayer();
+    updateProgress();
   } catch {}
 }
 

@@ -97,6 +97,19 @@ class GpsLocalizer(Node):
 
         self._origin_lat: float | None = None
         self._origin_lon: float | None = None
+        # Base-relative anchoring: the map (crop area + paths) is anchored to the
+        # RTK base, not to an absolute lat/lon. In survey-in mode the base's own
+        # reported absolute coordinate wanders 0.5-2 m day to day even when the
+        # antenna hasn't physically moved; that offset is inherited by every rover
+        # fix and would slide the whole map. We record the base coordinate that was
+        # in effect when the origin was calibrated (_base_ref_*) and, each session,
+        # shift the working origin by (base_now - base_ref) so the rover always
+        # lands in the same place relative to the crop/paths. With the base in
+        # FIXED mode base_now == base_ref, so this is a no-op safeguard.
+        self._base_ref_lat: float | None = None   # base coord when origin was set
+        self._base_ref_lon: float | None = None
+        self._base_now_lat: float | None = None   # base coord this session (rtk_status)
+        self._base_now_lon: float | None = None
         self._current_lat: float | None = None
         self._current_lon: float | None = None
         self._current_yaw: float = 0.0   # from IMU (fallback)
@@ -162,6 +175,21 @@ class GpsLocalizer(Node):
 
     # ── Callbacks ────────────────────────────────────────────────────────────
 
+    def _effective_origin(self):
+        """ENU origin to use for gps_to_enu, corrected for base-coordinate drift.
+
+        Must be called with self._lock held. Returns (lat, lon). When we have both
+        the reference base coord (from when the origin was calibrated) and the
+        current base coord, the origin is shifted by their difference so the rover
+        lands in the same ENU spot relative to the map regardless of how the base's
+        absolute coordinate drifted. Falls back to the raw origin otherwise."""
+        if self._origin_lat is None:
+            return None, None
+        if (self._base_ref_lat is not None and self._base_now_lat is not None):
+            return (self._origin_lat + (self._base_now_lat - self._base_ref_lat),
+                    self._origin_lon + (self._base_now_lon - self._base_ref_lon))
+        return self._origin_lat, self._origin_lon
+
     def _on_rtk_status(self, msg: String):
         try:
             d = json.loads(msg.data)
@@ -170,6 +198,21 @@ class GpsLocalizer(Node):
         with self._lock:
             self._rtk_fixed = bool(d.get('rtk_fixed', False)
                                    or (self._accept_float and d.get('rtk_float', False)))
+            blat, blon = d.get('base_lat'), d.get('base_lon')
+            if blat is not None and blon is not None:
+                self._base_now_lat = float(blat)
+                self._base_now_lon = float(blon)
+                # First time we ever see a base coordinate, adopt it as the
+                # reference (calibration baseline) and persist it alongside the
+                # origin. From then on only genuine base-coordinate changes shift
+                # the map.
+                if self._base_ref_lat is None and self._origin_lat is not None:
+                    self._base_ref_lat = self._base_now_lat
+                    self._base_ref_lon = self._base_now_lon
+                    self._save_origin()
+                    self.get_logger().info(
+                        f'[anchor] base reference set: '
+                        f'{self._base_ref_lat:.6f}, {self._base_ref_lon:.6f}')
 
     def _on_imu(self, msg: Imu):
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
@@ -207,7 +250,8 @@ class GpsLocalizer(Node):
                 self._origin_lon = lon
                 self._save_origin()
                 self.get_logger().info(f'GPS origin auto-set: {lat:.7f}, {lon:.7f}')
-            x_ant, y_ant = gps_to_enu(lat, lon, self._origin_lat, self._origin_lon)
+            eff_lat, eff_lon = self._effective_origin()
+            x_ant, y_ant = gps_to_enu(lat, lon, eff_lat, eff_lon)
 
             # Lever-arm correction: shift from the antenna's GPS fix to the
             # LiDAR/camera reference point, using the best heading estimate
@@ -327,9 +371,17 @@ class GpsLocalizer(Node):
     def enu_to_gps(self, x: float, y: float) -> tuple:
         """Local ENU → (lat, lon). Returns (None, None) if origin not set."""
         with self._lock:
-            if self._origin_lat is None:
+            eff_lat, eff_lon = self._effective_origin()
+            if eff_lat is None:
                 return None, None
-            return enu_to_gps(x, y, self._origin_lat, self._origin_lon)
+            return enu_to_gps(x, y, eff_lat, eff_lon)
+
+    def is_heading_established(self) -> bool:
+        """True once the absolute GPS heading has been confirmed from forward
+        travel (the ~1 m establishment). Used by the autonomous controller to skip
+        the start-of-run heading nudge when the direction is already locked."""
+        with self._lock:
+            return self._heading_established
 
     def is_heading_valid(self) -> bool:
         """True only while the pose is currently trustworthy for landmark placement.
@@ -405,8 +457,12 @@ class GpsLocalizer(Node):
         with self._lock:
             self._origin_lat = lat
             self._origin_lon = lon
+            # Re-anchor: the new origin is referenced to whatever the base reads now.
+            self._base_ref_lat = self._base_now_lat
+            self._base_ref_lon = self._base_now_lon
+            eff_lat, eff_lon = self._effective_origin()
             for p in self._gps_track:
-                p['x'], p['y'] = gps_to_enu(p['lat'], p['lon'], lat, lon)
+                p['x'], p['y'] = gps_to_enu(p['lat'], p['lon'], eff_lat, eff_lon)
         self._save_origin()
         self.get_logger().info(f'GPS origin manually set: {lat:.7f}, {lon:.7f}')
 
@@ -418,6 +474,9 @@ class GpsLocalizer(Node):
                 d = json.load(f)
             self._origin_lat = float(d['lat'])
             self._origin_lon = float(d['lon'])
+            if d.get('base_lat') is not None and d.get('base_lon') is not None:
+                self._base_ref_lat = float(d['base_lat'])
+                self._base_ref_lon = float(d['base_lon'])
         except FileNotFoundError:
             pass
         except Exception as e:
@@ -426,7 +485,9 @@ class GpsLocalizer(Node):
     def _save_origin(self):
         try:
             with open(self._origin_file, 'w') as f:
-                json.dump({'lat': self._origin_lat, 'lon': self._origin_lon}, f)
+                json.dump({'lat': self._origin_lat, 'lon': self._origin_lon,
+                           'base_lat': self._base_ref_lat,
+                           'base_lon': self._base_ref_lon}, f)
         except Exception as e:
             log.warning(f'GPS origin save failed: {e}')
 

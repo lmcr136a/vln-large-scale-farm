@@ -445,6 +445,8 @@ def main():
     telemetry = TelemetryNode(
         data_dir=cfg["paths"]["data_dir"],
         topics=cfg["ros2"]["topics"],
+        cameras=[c.get("name") for c in cfg.get("recording", {}).get("zed_cameras", [])
+                 if c.get("name")],
     )
     uploader  = StationUploader(cfg_path)
     radio     = RadioComm(port=cfg["radio"]["serial_port"], baud=cfg["radio"]["baud_rate"],
@@ -540,7 +542,8 @@ def main():
 
     auto_ctrl = AutonomousController(cmd_vel_pub, proxy, cfg,
                                       start_recording=start_rec_cb,
-                                      stop_recording=stop_rec_cb)
+                                      stop_recording=stop_rec_cb,
+                                      heading_check=gps_localizer.is_heading_established)
     commander = Commander(cmd_vel_pub, auto_ctrl, cfg_path)
 
     _restart_lock = threading.Lock()

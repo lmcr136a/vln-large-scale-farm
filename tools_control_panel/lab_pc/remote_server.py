@@ -483,6 +483,8 @@ class RemoteServer:
             "process_status":        proc,
             "process_status_detail": data.get("process_status_detail"),
             "net":                   data.get("net"),
+            "base_status":           data.get("base_status"),
+            "system_ready":          data.get("system_ready"),
         }, namespace="/")
 
     def _to_robot(self, cmd: dict):
