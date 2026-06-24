@@ -37,6 +37,22 @@ class SafetyGuard:
         self._held       = False
         self._recover_vr = 0.0   # reversed steering, captured when red first appears
         self._last_msg   = None
+        self._enabled    = True  # toggled from the panel; off → never intervenes
+
+    def set_enabled(self, enabled: bool):
+        """Enable/disable obstacle reaction. When disabled, any active back-away
+        override is cleared and the guard stops intervening until re-enabled."""
+        enabled = bool(enabled)
+        if enabled == self._enabled:
+            return
+        self._enabled = enabled
+        if not enabled and self._held:
+            self._commander.clear_safety_override()
+            self._held = False
+        self._announce('Safety checker ENABLED' if enabled else 'Safety checker DISABLED')
+
+    def is_enabled(self) -> bool:
+        return self._enabled
 
     def start(self):
         threading.Thread(target=self._loop, daemon=True, name='safety-guard').start()
@@ -52,6 +68,11 @@ class SafetyGuard:
                 log.error(f'SafetyGuard tick error: {e}')
 
     def _tick(self):
+        if not self._enabled:
+            if self._held:
+                self._commander.clear_safety_override()
+                self._held = False
+            return
         status    = self._get_status() or {}
         front_red = any(status.get(z) == 'red' for z in FRONT_ZONES)
         back_red  = any(status.get(z) == 'red' for z in BACK_ZONES)

@@ -36,10 +36,15 @@ class Commander:
         self._last_estop_warn = 0.0
         self._safety_vt = None   # None = no override; else forced linear.x (SafetyGuard)
         self._safety_vr = 0.0    # forced angular.z while override active
+        self._safety_guard = None  # set via set_safety_guard(); toggled from the panel
 
         threading.Thread(target=self._control_loop, daemon=True).start()
 
     # ── Safety override (highest priority — see sensor/safety_guard.py) ───────
+
+    def set_safety_guard(self, guard):
+        """Register the SafetyGuard so the panel toggle can enable/disable it."""
+        self._safety_guard = guard
 
     def set_safety_override(self, vt: float, vr: float = 0.0):
         """Force cmd_vel to (vt, vr), pre-empting estop/manual/autonomous.
@@ -129,6 +134,11 @@ class Commander:
             elif ctype == "new_path":
                 if not self._estopped and not self._manual:
                     self._auto.start(cmd.get("waypoints", []))
+
+            elif ctype == "set_safety_enabled":
+                if self._safety_guard is not None:
+                    self._safety_guard.set_enabled(bool(cmd.get("enabled", True)))
+                    log.info(f"Safety checker {'enabled' if cmd.get('enabled', True) else 'disabled'} from panel")
 
             elif ctype == "config_update":
                 self._apply_config(cmd.get("config", {}))

@@ -263,6 +263,12 @@ class RemoteServer:
             self._save_paths(self._path_nodes)
             sio.emit("path_saved", {"count": len(self._path_nodes)})
 
+        @sio.on("set_safety_enabled")
+        def on_set_safety_enabled(data):
+            enabled = bool(data.get("enabled", True)) if isinstance(data, dict) else bool(data)
+            self._to_robot({"cmd": "set_safety_enabled", "enabled": enabled})
+            log.info(f"set_safety_enabled → Jetson: {enabled}")
+
         @sio.on("set_quality")
         def on_set_quality(data):
             level = data.get("level", "low")

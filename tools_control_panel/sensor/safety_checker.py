@@ -26,6 +26,7 @@ Publishes: /safety_checker (std_msgs/String, JSON) at 5 Hz.
 import json
 import os
 import threading
+import time
 
 import numpy as np
 import rclpy
@@ -41,6 +42,11 @@ DEBUG_MAX_PTS  = 1_000
 DEBUG_OUT      = './safety_debug.png'
 
 PUBLISH_HZ = 5.0
+
+# An obstacle must be continuously present in a zone for at least this long
+# before it is reported. Filters out transient detections (noise, a passing
+# bird, dust) so the safety system only reacts to real, persistent obstacles.
+OBSTACLE_DEBOUNCE_S = 1.0
 
 # Geometry (metres)
 ROBOT_R = 0.5   # robot body radius
@@ -227,6 +233,9 @@ class SafetyChecker(Node):
         self._latest: dict = {z: None for z in ZONES}
         self._lock = threading.Lock()
         self._latest_pts: np.ndarray = np.empty((0, 3), dtype=np.float32)
+        # Per-zone timestamp of when the current continuous detection started
+        # (None = zone currently clear). Used for the >1 s debounce.
+        self._zone_since: dict = {z: None for z in ZONES}
 
         if PRINT_DEBUG:
             self.create_timer(DEBUG_INTERVAL, self._debug_cb)
@@ -260,7 +269,22 @@ class SafetyChecker(Node):
 
     def _publish(self):
         with self._lock:
-            data = dict(self._latest)
+            raw = dict(self._latest)
+        now = time.time()
+        # Debounce: only report a zone once its obstacle has persisted ≥1 s.
+        # A zone stays "present" while any band is detected (None clears it), so
+        # an obstacle that approaches green→yellow→red keeps its start time and
+        # its red shows immediately once the 1 s presence is already satisfied.
+        data = {}
+        for z in ZONES:
+            color = raw.get(z)
+            if color is None:
+                self._zone_since[z] = None
+                data[z] = None
+            else:
+                if self._zone_since[z] is None:
+                    self._zone_since[z] = now
+                data[z] = color if (now - self._zone_since[z]) >= OBSTACLE_DEBOUNCE_S else None
         msg = String()
         msg.data = json.dumps(data)
         self.pub.publish(msg)

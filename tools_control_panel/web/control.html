@@ -286,12 +286,16 @@
           <clipPath id="sc-clip"><circle cx="0" cy="0" r="0.95"/></clipPath>
         </defs>
         <g clip-path="url(#sc-clip)" id="sc-zones"></g>
-        <!-- Robot body square: ±0.30 of 1.0 unit = ±0.30 -->
-        <rect x="-0.30" y="-0.30" width="0.60" height="0.60"
-              fill="#888" stroke="rgba(255,255,255,0.5)" stroke-width="0.02"/>
-        <!-- Forward arrow -->
-        <polygon points="0,-0.18 0.08,-0.04 -0.08,-0.04"
-                 fill="white" opacity="0.9"/>
+        <!-- Robot body square = clickable safety on/off toggle (±0.30) -->
+        <g id="sc-toggle" style="cursor:pointer;" onclick="toggleSafety()">
+          <rect id="sc-body" x="-0.30" y="-0.30" width="0.60" height="0.60"
+                fill="#2e7d32" stroke="rgba(255,255,255,0.5)" stroke-width="0.02"/>
+          <!-- Forward arrow -->
+          <polygon points="0,-0.18 0.08,-0.04 -0.08,-0.04"
+                   fill="white" opacity="0.9"/>
+          <text id="sc-toggle-label" x="0" y="0.20" text-anchor="middle"
+                font-size="0.16" font-weight="700" fill="white" opacity="0.95">ON</text>
+        </g>
       </svg>
       </div>
 

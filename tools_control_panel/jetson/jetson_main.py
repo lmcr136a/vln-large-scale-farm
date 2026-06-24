@@ -636,6 +636,7 @@ def main():
     safety_guard = SafetyGuard(_safety_status_getter, commander, _recover_speed,
                                wait_sec=_safety_wait, notify=_safety_notify,
                                auto_ctrl=auto_ctrl)
+    commander.set_safety_guard(safety_guard)   # panel toggle → guard.set_enabled()
     safety_guard.start()
 
     def pointcloud_loop():

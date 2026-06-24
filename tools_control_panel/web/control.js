@@ -772,6 +772,23 @@ function updateSafetyPanel(s) {
   }
 }
 
+// ── Safety checker on/off toggle (center button of the circles) ──────────────
+let _safetyEnabled = true;
+function applySafetyToggleUI() {
+  const body  = document.getElementById('sc-body');
+  const label = document.getElementById('sc-toggle-label');
+  const svg   = document.getElementById('sc-svg');
+  if (body)  body.setAttribute('fill', _safetyEnabled ? '#2e7d32' : '#7a2222');
+  if (label) label.textContent = _safetyEnabled ? 'ON' : 'OFF';
+  if (svg)   svg.style.opacity = _safetyEnabled ? '1' : '0.45';
+}
+function toggleSafety() {
+  _safetyEnabled = !_safetyEnabled;
+  socket.emit('set_safety_enabled', { enabled: _safetyEnabled });
+  applySafetyToggleUI();
+}
+applySafetyToggleUI();
+
 function updateRadioScore(id, score) {
   const el = document.getElementById(id);
   if (!el) return;
