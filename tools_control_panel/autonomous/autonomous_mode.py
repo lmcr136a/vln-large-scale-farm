@@ -47,7 +47,6 @@ class AutonomousController(Node):
         self._rtk_check = rtk_check
         _ap = config.get('autonomous', {})
         self._require_rtk_fixed = bool(_ap.get('require_rtk_fixed', False))
-        self._rtk_wait_s  = float(_ap.get('rtk_fixed_wait_s', 60.0))
         self._rtk_grace_s = float(_ap.get('rtk_fixed_grace_s', 2.0))
         self._rtk_lost_t  = None   # when RTK Fixed was first lost (None = currently OK)
 
@@ -266,35 +265,35 @@ class AutonomousController(Node):
         self._zero_vel()
         logger.info('Heading nudge complete')
 
-    # ── RTK Fixed gating ────────────────────────────────────────────────────
+    # ── RTK accuracy gating ─────────────────────────────────────────────────
+    # "drivable" = RTK Fixed (cm) OR accurate RTK Float (hAcc ≤ limit). The run
+    # NEVER aborts on poor accuracy — it stays in autonomous mode and holds in
+    # place (zero velocity) until accuracy recovers, then continues.
     def _wait_initial_rtk(self, logger) -> bool:
-        """Before driving: block until RTK Fixed (up to rtk_fixed_wait_s).
-        Returns True if OK to drive, False if it should abort."""
+        """Before driving: hold until the GPS is drivable. Returns True when OK
+        to drive, False only if the user stopped the run while waiting. The run
+        stays active (no abort), so the panel keeps showing autonomous mode."""
         if not (self._require_rtk_fixed and self._rtk_check):
             return True
         if self._rtk_check():
             return True
-        logger.info('Waiting for RTK Fixed before start…')
+        logger.info('Holding for accurate RTK before start…')
         self.socketio.emit('robot_status',
-                           {'status': '⏳ Waiting for RTK Fixed…'}, namespace='/')
-        deadline = time.time() + self._rtk_wait_s
-        while time.time() < deadline:
+                           {'status': '⏳ Holding — waiting for accurate RTK'},
+                           namespace='/')
+        while not self._rtk_check():
             if self._stop_event.is_set():
                 return False
-            if self._rtk_check():
-                logger.info('RTK Fixed acquired — starting')
-                return True
+            self._zero_vel()
             time.sleep(0.2)
-        logger.info('RTK Fixed not acquired within timeout — aborting run')
-        self.socketio.emit('robot_status',
-                           {'status': '✗ RTK Fixed not acquired — run aborted'},
-                           namespace='/')
-        return False
+        logger.info('Accurate RTK acquired — starting')
+        return True
 
     def _rtk_hold_if_needed(self, logger):
-        """During driving: if RTK Fixed is lost past the grace period, zero
-        velocity and block until it returns (or stop/pause). Brief Float dips
-        within rtk_fixed_grace_s are tolerated so the robot doesn't stutter."""
+        """During driving: if GPS accuracy drops below drivable past the grace
+        period, zero velocity and hold (staying in autonomous mode) until it
+        recovers — or until stop/pause. Brief dips within rtk_fixed_grace_s are
+        tolerated so the robot doesn't stutter."""
         if not (self._require_rtk_fixed and self._rtk_check):
             return
         if self._rtk_check():
@@ -305,10 +304,10 @@ class AutonomousController(Node):
             self._rtk_lost_t = now
         if now - self._rtk_lost_t < self._rtk_grace_s:
             return                      # tolerate a momentary dip
-        logger.info('RTK Fixed lost — holding until restored')
+        logger.info('RTK accuracy lost — holding until restored')
         self._zero_vel()
         self.socketio.emit('robot_status',
-                           {'status': '⏸ Paused — waiting for RTK Fixed'},
+                           {'status': '⏸ Holding — waiting for accurate RTK'},
                            namespace='/')
         while (not self._rtk_check()
                and not self._stop_event.is_set()
@@ -317,9 +316,9 @@ class AutonomousController(Node):
             time.sleep(0.1)
         self._rtk_lost_t = None
         if self._rtk_check():
-            logger.info('RTK Fixed restored — resuming')
+            logger.info('RTK accuracy restored — resuming')
             self.socketio.emit('robot_status',
-                               {'status': 'RTK Fixed restored — resuming'},
+                               {'status': 'RTK restored — resuming'},
                                namespace='/')
 
     def _drive_loop(self, waypoints, resume=False, start_index=None):

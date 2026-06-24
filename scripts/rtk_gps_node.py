@@ -498,7 +498,10 @@ class RtkGpsNode(Node):
             color  = "\033[38;2;180;245;255m"
             suffix = "  ✓ FIXED PUBLISHING"
         elif s["rtk_float"]:
-            color  = "\033[38;2;160;150;0m"
+            if s['hAcc'] is not None and s['hAcc'] <= 0.10:
+                color = "\033[38;2;150;200;230m"   # gray-blue: accurate Float (≤10cm)
+            else:
+                color = "\033[38;2;160;150;0m"     # yellow: inaccurate Float (>10cm)
             suffix = "  ~ FLOAT PUBLISHING"
         else:
             color  = "\033[38;2;150;150;150m"

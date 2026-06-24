@@ -783,15 +783,25 @@ function updateRadioScore(id, score) {
 //  GPS Panel
 // ═══════════════════════════════════════════════════════════════
 function updateGpsPanel(g) {
+  // Accurate Float (hAcc ≤ 10 cm) is good enough to drive on; inaccurate Float
+  // (> 10 cm) wanders — flag it red. Must match gps.float_accuracy_limit_m.
+  const FLOAT_ACC_LIMIT = 0.10;
+  const floatAccurate = g.rtk_float && g.h_acc != null && g.h_acc <= FLOAT_ACC_LIMIT;
   const badge = document.getElementById('gps-mode-badge');
   if (badge) {
-    badge.textContent = g.rtk_mode || 'No Fix';
-    badge.className = 'gps-mode-badge ' + (
-      g.rtk_fixed                                         ? 'gps-fixed' :
-      g.rtk_float                                         ? 'gps-float' :
-      (g.rtk_mode === 'DGPS' || g.rtk_mode === '3D Fix') ? 'gps-dgps'  :
-                                                            'gps-nofix'
-    );
+    if (g.rtk_fixed) {
+      badge.textContent = g.rtk_mode || 'RTK Fixed';
+      badge.className = 'gps-mode-badge gps-fixed';
+    } else if (g.rtk_float) {
+      badge.textContent = floatAccurate ? 'RTK Float ✓' : 'RTK Float ⚠';
+      badge.className = 'gps-mode-badge ' + (floatAccurate ? 'gps-float' : 'gps-float-bad');
+    } else if (g.rtk_mode === 'DGPS' || g.rtk_mode === '3D Fix') {
+      badge.textContent = g.rtk_mode;
+      badge.className = 'gps-mode-badge gps-dgps';
+    } else {
+      badge.textContent = g.rtk_mode || 'No Fix';
+      badge.className = 'gps-mode-badge gps-nofix';
+    }
   }
 
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v ?? '—'; };

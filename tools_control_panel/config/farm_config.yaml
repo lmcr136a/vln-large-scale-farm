@@ -16,10 +16,12 @@ autonomous:
   steer_slew_rate: 1.5       # rad/s² — how fast vr may change (lower = smoother, less jerk)
   max_correction_deg: 50     # cap on how sharp a heading the line-pull may demand
   stop_rotate_threshold: 45  # deg — only beyond this does it stop & rotate in place
-  # ── RTK Fixed gating: refuse to drive on a wandering RTK Float solution ──
-  require_rtk_fixed: true     # true → only drive when RTK Fixed (needs accept_rtk_float:false to mean strict Fixed)
-  rtk_fixed_wait_s: 60        # s — wait this long for RTK Fixed at start before aborting the run
-  rtk_fixed_grace_s: 2        # s — tolerate brief Fixed→Float dips this long before holding
+  # ── RTK accuracy gating: hold (don't drive) on a wandering GPS solution ──
+  # Drivable = RTK Fixed (cm) OR accurate RTK Float (hAcc ≤ gps.float_accuracy_limit_m).
+  # On inaccurate Float / no-fix the run stays active and HOLDS in place until
+  # accuracy recovers — it never aborts, so the panel keeps showing auto mode.
+  require_rtk_fixed: true     # true → enable the accuracy hold gate
+  rtk_fixed_grace_s: 2        # s — tolerate brief accuracy dips this long before holding
   r1:
   - 0.2
   - 10
@@ -39,7 +41,8 @@ autonomous:
   - 0.4
   - 999
 gps:
-  accept_rtk_float: false  # false → only real RTK Fixed (cm) counts; Float (decimetre wander) is rejected for driving/landmarks
+  accept_rtk_float: false       # landmark/heading gating: false → only real RTK Fixed counts (driving uses the accuracy gate below)
+  float_accuracy_limit_m: 0.10  # m — RTK Float counts as drivable only when reported hAcc ≤ this (accurate Float < 10 cm)
 camera_extrinsics:
   back:
   - -0.1

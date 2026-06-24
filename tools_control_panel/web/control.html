@@ -116,7 +116,8 @@
       margin-top: 1px;
     }
     .gps-fixed { background: rgba(255,255,255,0.22);    color: #b0faf6; border: 1px solid rgba(164,255,243,0.4); }
-    .gps-float { background: rgba(160,150,0,0.18);    color: rgb(160,150,0); border: 1px solid rgba(160,150,0,0.5); }
+    .gps-float     { background: rgba(228,236,243,0.18); color: #6a91b6;       border: 1px solid rgba(60,160,255,0.4); }
+    .gps-float-bad { background: rgba(160,150,0,0.18);   color: rgb(160,150,0); border: 1px solid rgba(160,150,0,0.5); }
     .gps-dgps  { background: rgba(255,190,40,0.18);     color: #b8ae97; border: 1px solid rgba(224,216,197,0.4); }
     .gps-nofix { background: rgba(255,70,70,0.15);      color: #8d7676; border: 1px solid rgba(214,174,174,0.3); }
 
@@ -152,7 +153,6 @@
     .sc-wedge.sc-red    { fill: rgba(255,60,60,0.85); }
     .sc-wedge.sc-yellow { fill: rgba(255,200,0,0.85); }
     .sc-wedge.sc-green  { fill: rgba(50,200,50,0.85); }
-    #col-controls { min-width: 145px; gap: 7px; flex-shrink: 0; }
     .run-row { display: flex; gap: 6px; align-items: center; }
     .rec-row { display: flex; gap: 6px; align-items: center; }
 
@@ -374,22 +374,15 @@
         &nbsp;<span class="lbl">Alt </span><span id="gps-alt">—</span>
       </div>
 
-    </div>
-
-    <div class="col-divider"></div>
-
-    <!-- Column 2: Controls -->
-    <div class="panel-col" id="col-controls">
-
-      <!-- Waypoint completion progress (above Recording) -->
+      <!-- Progress + Recording (grouped with GPS) -->
+      <div class="sec-divider-hdr">── PROGRESS ──</div>
       <div class="rec-row" id="run-progress" style="display:none;">
         <span class="sysmon-label" style="font-size:11px;">Progress</span>
         <span id="run-progress-val"
               style="font-size:12px;color:rgba(255,255,255,0.9);font-weight:700;">0 / 0 (0%)</span>
       </div>
 
-      <div style="height:6px;"></div>
-
+      <div class="sec-divider-hdr">── RECORDING ──</div>
       <div class="rec-row">
         <span class="sysmon-label" style="font-size:11px;">Rec</span>
         <span id="recordingStatus" class="rec-status">Stopped</span>

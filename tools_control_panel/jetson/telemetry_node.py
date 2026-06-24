@@ -42,9 +42,13 @@ BEST_EFFORT = QoSProfile(
 
 
 class TelemetryNode(Node):
-    def __init__(self, data_dir: str, topics: dict, cameras: list | None = None):
+    def __init__(self, data_dir: str, topics: dict, cameras: list | None = None,
+                 float_acc_limit: float = 0.10):
         super().__init__("telemetry_node")
         self._data_dir = data_dir
+        # RTK Float counts as "ready" only when reported hAcc ≤ this (accurate
+        # Float). Inaccurate Float and DGPS do NOT count as ready.
+        self._float_acc_limit = float(float_acc_limit)
         # Camera names expected to be live for the system to count as "ready"
         # (e.g. ["front", "back", "left", "right"]). Each streams a frame →
         # touch("zed_<name>"), so its liveness is tracked in _last_ts.
@@ -180,7 +184,7 @@ class TelemetryNode(Node):
         # ── system_ready: every health condition met (internet NOT required) ──
         #   • all expected cameras streaming
         #   • lidar + imu + gps alive
-        #   • RTK Float or Fixed
+        #   • RTK Fixed, or accurate RTK Float (hAcc ≤ limit) — NOT DGPS / inaccurate Float
         #   • Scout base CAN link up
         # The panel shows "Ready"/"OK" off this; it deliberately omits internet so
         # a link drop never clears the badge (telemetry just stops arriving; the
@@ -189,7 +193,10 @@ class TelemetryNode(Node):
         cam_ok  = all(sensors.get(f"zed_{c}", False) for c in cams)
         core_ok = (sensors.get("lidar", False) and sensors.get("imu", False)
                    and sensors.get("gps", False))
-        rtk_ok  = bool(gps_status.get("rtk_fixed") or gps_status.get("rtk_float"))
+        _h_acc   = gps_status.get("h_acc")
+        _float_ok = bool(gps_status.get("rtk_float") and _h_acc is not None
+                         and _h_acc <= self._float_acc_limit)
+        rtk_ok  = bool(gps_status.get("rtk_fixed") or _float_ok)
         base_ok = bool(base_status.get("comm"))
         system_ready = bool(cam_ok and core_ok and rtk_ok and base_ok)
 

@@ -120,6 +120,9 @@ class GpsLocalizer(Node):
         # from RTK Float / DGPS (can be 0.1-several metres off) — both report the
         # same STATUS_GBAS_FIX value. /gps/rtk_status carries the real distinction.
         self._rtk_fixed: bool = False
+        self._raw_fixed: bool = False              # genuine RTK Fixed flag (cm)
+        self._raw_float: bool = False              # RTK Float flag
+        self._h_acc: float | None = None           # reported horizontal accuracy, m
         self._current_x: float | None = None
         self._current_y: float | None = None
         self._gps_window: deque = deque()  # (t, x, y) baseline samples for heading
@@ -152,6 +155,10 @@ class GpsLocalizer(Node):
         # RTK Float is often cm-accurate too; accept it as "fixed" for heading/
         # landmark gating when the base is solid. Toggle via gps.accept_rtk_float.
         self._accept_float = bool(config.get('gps', {}).get('accept_rtk_float', True))
+        # Float counts as "drivable" only when its reported horizontal accuracy
+        # is within this limit (accurate Float ≈ cm; inaccurate Float wanders).
+        self._float_acc_limit = float(
+            config.get('gps', {}).get('float_accuracy_limit_m', 0.10))
 
         topics = config.get('ros2', {}).get('topics', {})
         gps_topic       = topics.get('gps',        '/gps/fix')
@@ -196,8 +203,11 @@ class GpsLocalizer(Node):
         except Exception:
             return
         with self._lock:
-            self._rtk_fixed = bool(d.get('rtk_fixed', False)
-                                   or (self._accept_float and d.get('rtk_float', False)))
+            self._raw_fixed = bool(d.get('rtk_fixed', False))
+            self._raw_float = bool(d.get('rtk_float', False))
+            self._h_acc     = d.get('h_acc')
+            self._rtk_fixed = bool(self._raw_fixed
+                                   or (self._accept_float and self._raw_float))
             blat, blon = d.get('base_lat'), d.get('base_lon')
             if blat is not None and blon is not None:
                 self._base_now_lat = float(blat)
@@ -391,6 +401,20 @@ class GpsLocalizer(Node):
         with self._lock:
             return self._rtk_fixed
 
+    def is_drivable(self) -> bool:
+        """True when GPS accuracy is good enough to drive on:
+          • RTK Fixed (cm), or
+          • RTK Float whose reported horizontal accuracy ≤ float_accuracy_limit_m
+            (accurate Float, default ≤10 cm).
+        Inaccurate Float (>limit) and no-fix return False, so the controller
+        holds and waits instead of driving on a wandering solution."""
+        with self._lock:
+            if self._raw_fixed:
+                return True
+            if self._raw_float and self._h_acc is not None:
+                return self._h_acc <= self._float_acc_limit
+            return False
+
     def is_heading_valid(self) -> bool:
         """True only while the pose is currently trustworthy for landmark placement.
 
@@ -436,6 +460,9 @@ class GpsLocalizer(Node):
             self._last_imu_t     = None
             self._last_gyro_z    = 0.0
             self._rtk_fixed      = False
+            self._raw_fixed      = False
+            self._raw_float      = False
+            self._h_acc          = None
         if should_archive:
             self._archive_track_data(track_snapshot)
         log.info('GpsLocalizer: session reset for replay')

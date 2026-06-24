@@ -447,6 +447,7 @@ def main():
         topics=cfg["ros2"]["topics"],
         cameras=[c.get("name") for c in cfg.get("recording", {}).get("zed_cameras", [])
                  if c.get("name")],
+        float_acc_limit=cfg.get("gps", {}).get("float_accuracy_limit_m", 0.10),
     )
     uploader  = StationUploader(cfg_path)
     radio     = RadioComm(port=cfg["radio"]["serial_port"], baud=cfg["radio"]["baud_rate"],
@@ -544,7 +545,7 @@ def main():
                                       start_recording=start_rec_cb,
                                       stop_recording=stop_rec_cb,
                                       heading_check=gps_localizer.is_heading_established,
-                                      rtk_check=gps_localizer.is_rtk_fixed)
+                                      rtk_check=gps_localizer.is_drivable)
     commander = Commander(cmd_vel_pub, auto_ctrl, cfg_path)
 
     _restart_lock = threading.Lock()
