@@ -269,6 +269,11 @@ class RemoteServer:
             self._to_robot({"cmd": "set_safety_enabled", "enabled": enabled})
             log.info(f"set_safety_enabled → Jetson: {enabled}")
 
+        @sio.on("flip_heading")
+        def on_flip_heading():
+            self._to_robot({"cmd": "flip_heading"})
+            log.info("flip_heading → Jetson")
+
         @sio.on("set_quality")
         def on_set_quality(data):
             level = data.get("level", "low")

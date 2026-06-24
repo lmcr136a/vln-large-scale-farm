@@ -547,6 +547,7 @@ def main():
                                       heading_check=gps_localizer.is_heading_established,
                                       rtk_check=gps_localizer.is_drivable)
     commander = Commander(cmd_vel_pub, auto_ctrl, cfg_path)
+    commander.set_flip_heading(gps_localizer.flip_heading)   # panel N/S heading flip
 
     _restart_lock = threading.Lock()
 

@@ -133,6 +133,10 @@ class GpsLocalizer(Node):
         # Gyro-integrated yaw — confirmed once from GPS travel, then gyro-held.
         self._fused_yaw: float = 0.0
         self._fused_yaw_init: bool = False
+        # Manual North/South flip: a persistent 180° offset added when deriving
+        # heading from GPS travel, for when the robot body's forward is mounted
+        # opposite to its travel direction. Toggled from the panel.
+        self._heading_offset: float = 0.0
         self._last_imu_t: float | None = None
         self._last_gyro_z: float = 0.0   # latest yaw rate for straight-motion detection
         # Heading confirmation: start assuming North, lock to the GPS course once
@@ -284,7 +288,8 @@ class GpsLocalizer(Node):
             if not self._heading_established:
                 ox, oy = self._establish_origin
                 if math.hypot(x - ox, y - oy) >= HEADING_ESTABLISH_DIST:
-                    course = math.atan2(y - oy, x - ox)
+                    course = _angle_diff(math.atan2(y - oy, x - ox)
+                                         + self._heading_offset, 0.0)
                     self._fused_yaw           = course
                     self._gps_heading         = course
                     self._gps_heading_t       = t
@@ -307,7 +312,8 @@ class GpsLocalizer(Node):
                     t0, x0, y0 = self._gps_window[0]
                     dx, dy = x - x0, y - y0
                     if t - t0 >= HEADING_MIN_DT and math.hypot(dx, dy) >= HEADING_MIN_DIST:
-                        gps_yaw = math.atan2(dy, dx)
+                        gps_yaw = _angle_diff(math.atan2(dy, dx)
+                                              + self._heading_offset, 0.0)
                         # Lock the 180° ambiguity: if the travel course opposes the
                         # held heading, we're reversing → flip back to body-forward.
                         if abs(_angle_diff(gps_yaw, self._fused_yaw)) > math.pi / 2:
@@ -414,6 +420,18 @@ class GpsLocalizer(Node):
             if self._raw_float and self._h_acc is not None:
                 return self._h_acc <= self._float_acc_limit
             return False
+
+    def flip_heading(self):
+        """Flip the heading North↔South (add a persistent 180°). Use when the
+        displayed/used heading is reversed from the robot's true facing. Applies
+        immediately and persists across subsequent GPS-course updates."""
+        with self._lock:
+            self._heading_offset = _angle_diff(self._heading_offset + math.pi, 0.0)
+            self._fused_yaw      = _angle_diff(self._fused_yaw + math.pi, 0.0)
+            if self._gps_heading is not None:
+                self._gps_heading = _angle_diff(self._gps_heading + math.pi, 0.0)
+        self.get_logger().info(
+            f'[heading] flipped 180° (offset now {math.degrees(self._heading_offset):.0f}°)')
 
     def is_heading_valid(self) -> bool:
         """True only while the pose is currently trustworthy for landmark placement.

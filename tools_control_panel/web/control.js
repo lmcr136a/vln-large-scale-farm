@@ -789,6 +789,11 @@ function toggleSafety() {
 }
 applySafetyToggleUI();
 
+// Flip the GPS heading North↔South (robot mounted opposite to travel).
+function flipHeading() {
+  socket.emit('flip_heading');
+}
+
 function updateRadioScore(id, score) {
   const el = document.getElementById(id);
   if (!el) return;

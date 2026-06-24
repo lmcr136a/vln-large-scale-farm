@@ -37,6 +37,7 @@ class Commander:
         self._safety_vt = None   # None = no override; else forced linear.x (SafetyGuard)
         self._safety_vr = 0.0    # forced angular.z while override active
         self._safety_guard = None  # set via set_safety_guard(); toggled from the panel
+        self._flip_heading = None  # set via set_flip_heading(); panel North/South flip
 
         threading.Thread(target=self._control_loop, daemon=True).start()
 
@@ -45,6 +46,10 @@ class Commander:
     def set_safety_guard(self, guard):
         """Register the SafetyGuard so the panel toggle can enable/disable it."""
         self._safety_guard = guard
+
+    def set_flip_heading(self, fn):
+        """Register the GPS localizer's flip_heading() for the panel N/S flip."""
+        self._flip_heading = fn
 
     def set_safety_override(self, vt: float, vr: float = 0.0):
         """Force cmd_vel to (vt, vr), pre-empting estop/manual/autonomous.
@@ -139,6 +144,11 @@ class Commander:
                 if self._safety_guard is not None:
                     self._safety_guard.set_enabled(bool(cmd.get("enabled", True)))
                     log.info(f"Safety checker {'enabled' if cmd.get('enabled', True) else 'disabled'} from panel")
+
+            elif ctype == "flip_heading":
+                if self._flip_heading is not None:
+                    self._flip_heading()
+                    log.info("GPS heading flipped (N/S) from panel")
 
             elif ctype == "config_update":
                 self._apply_config(cmd.get("config", {}))

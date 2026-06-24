@@ -356,6 +356,28 @@
         <span style="font-size:9pt;color:rgba(255,255,255,0.5);" id="radio-delay">—</span>
       </div>
 
+      <!-- Progress + Recording -->
+      <div class="rec-row" id="run-progress" style="display:none;">
+        <span class="sysmon-label" style="font-size:11px;">Progress</span>
+        <span id="run-progress-val"
+              style="font-size:12px;color:rgba(255,255,255,0.9);font-weight:700;">0 / 0 (0%)</span>
+      </div>
+
+      <div style="height:6px;"></div>
+
+      <div class="rec-row">
+        <span class="sysmon-label" style="font-size:11px;">Rec</span>
+        <span id="recordingStatus" class="rec-status">Stopped</span>
+      </div>
+      <div class="rec-row">
+        <input id="dirnameInput" type="text" placeholder="directory name" style="font-size:11px;" />
+        <span id="dirnameDisplay" style="display:none;font-size:12px;color:rgba(255,255,255,0.85);"></span>
+      </div>
+      <div class="rec-row">
+        <button id="btn-rec-start" onclick="startRecording()">Start</button>
+        <button id="btn-rec-stop"  onclick="stopRecording()" style="display:none;">Stop</button>
+      </div>
+
     </div>
 
     <div class="col-divider"></div>
@@ -385,27 +407,8 @@
         &nbsp;<span class="lbl">Alt </span><span id="gps-alt">—</span>
       </div>
 
-      <!-- Progress + Recording (grouped with GPS) -->
-      <div class="rec-row" id="run-progress" style="display:none;">
-        <span class="sysmon-label" style="font-size:11px;">Progress</span>
-        <span id="run-progress-val"
-              style="font-size:12px;color:rgba(255,255,255,0.9);font-weight:700;">0 / 0 (0%)</span>
-      </div>
-
-      <div style="height:6px;"></div>
-
-      <div class="rec-row">
-        <span class="sysmon-label" style="font-size:11px;">Rec</span>
-        <span id="recordingStatus" class="rec-status">Stopped</span>
-      </div>
-      <div class="rec-row">
-        <input id="dirnameInput" type="text" placeholder="directory name" style="font-size:11px;" />
-        <span id="dirnameDisplay" style="display:none;font-size:12px;color:rgba(255,255,255,0.85);"></span>
-      </div>
-      <div class="rec-row">
-        <button id="btn-rec-start" onclick="startRecording()">Start</button>
-        <button id="btn-rec-stop"  onclick="stopRecording()" style="display:none;">Stop</button>
-      </div>
+      <button id="btn-flip-heading" onclick="flipHeading()"
+              style="margin-top:6px;font-size:11px;">⇅ Flip N/S</button>
 
     </div>
 
