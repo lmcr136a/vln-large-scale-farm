@@ -43,6 +43,10 @@ class RemoteServer:
         self._inet_connected    = False
         self._inet_sid          = None
         self._latest_landmarks: dict = {"landmarks": []}
+        # Autonomous run state, so a panel that reconnects (e.g. browser refresh)
+        # can be told the run is still going instead of reverting to ▶ RUN. The
+        # Jetson keeps driving/holding across a refresh; only the panel forgot.
+        self._auto_running      = False
         # On a fresh server start the on-disk saved_map.png is from a PREVIOUS
         # session, so don't push it to clients — wait for this session's first
         # live map_frame. Avoids the old SLAM map flashing before the real one.
@@ -158,6 +162,9 @@ class RemoteServer:
             self._send_map_to_client(request.sid)
             if self._latest_landmarks.get("landmarks"):
                 sio.emit("landmarks_updated", self._latest_landmarks, to=request.sid)
+            # Replay autonomous run state so a refreshed panel shows ⏹ STOP (and
+            # doesn't imply the run stopped). The Jetson is still driving/holding.
+            sio.emit("auto_state", {"running": self._auto_running}, to=request.sid)
 
         @sio.on("disconnect")
         def on_disconnect():
@@ -214,6 +221,7 @@ class RemoteServer:
                 log.warning("start_autonomous: no waypoints available, ignoring")
                 return
             # resume=False → drive the whole path from the first waypoint.
+            self._auto_running = True
             self._to_robot({"cmd": "continue", "waypoints": waypoints, "resume": False})
 
         @sio.on("resume_autonomous")
@@ -227,10 +235,12 @@ class RemoteServer:
             msg = {"cmd": "continue", "waypoints": waypoints, "resume": True}
             if isinstance(data, dict) and data.get("start_index") is not None:
                 msg["start_index"] = int(data["start_index"])
+            self._auto_running = True
             self._to_robot(msg)
 
         @sio.on("stop_autonomous")
         def on_stop():
+            self._auto_running = False
             self._to_robot({"cmd": "stop_auto"})
 
         @sio.on("start_recording")
@@ -346,6 +356,10 @@ class RemoteServer:
             payload = data.get("data", {})
             if event == "landmarks_updated":
                 self._latest_landmarks = payload
+            elif event == "auto_mode_completed":
+                # Mission finished on the robot — a reconnecting panel should now
+                # see ▶ RUN, not ⏹ STOP.
+                self._auto_running = False
             sio.emit(event, payload, namespace="/")
 
         @sio.on("rgb_frame")

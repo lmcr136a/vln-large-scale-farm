@@ -334,6 +334,9 @@ socket.on('sysmon', (data) => {
 
 // Path finished — return the button to idle (no auto-restart; Run is manual).
 socket.on('auto_mode_completed', () => { setAutoButton(false); });
+// Sent by the server on (re)connect so a refreshed panel reflects the run that
+// is still going on the robot, instead of reverting the button to ▶ RUN.
+socket.on('auto_state', (data) => { setAutoButton(!!data?.running); });
 
 socket.on('robot_status', (data) => {
   const div = document.getElementById('robot-status');
