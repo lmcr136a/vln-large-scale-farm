@@ -1,9 +1,10 @@
 autonomous:
   angular_speed: 0.3
   cross_track_limit: 0.3
-  cross_track_gain: 1.0            # higher → cuts back to the line harder
-  cross_track_softening: 0.4       # m — steering correction reaches ~45° at this offset
-  cross_track_damping: 0.8         # damps the approach so it eases onto the line (kills zigzag); higher = more
+  cross_track_gain: 1.6            # higher → cuts back to the line harder
+  cross_track_softening: 0.3       # m — steering correction reaches ~45° at this offset (smaller = sharper)
+  cross_track_damping: 0.4         # damps the approach so it eases onto the line (kills zigzag); higher = more.
+                                   # return time constant ≈ damping/gain (now ~0.25s, was 0.8s → too slow)
   direction_correction_gain: 1.0   # heading-correction strength (1.0 = plain, 2.0 = twice as strong)
   linear_speed: 0.7
   max_repeat_num: 1
