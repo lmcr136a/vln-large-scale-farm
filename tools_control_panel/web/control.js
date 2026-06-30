@@ -363,6 +363,7 @@ socket.on('robot_telemetry', (data) => {
     const s = document.getElementById('info-sensors');
     if (s) s.textContent = Object.entries(data.sensors)
       .map(([k, v]) => `${k}:${v ? '✓' : '✗'}`).join('  ');
+    updateCameraAlert(data.sensors);
   }
 
   // WiFi name + internet quality %
@@ -446,6 +447,28 @@ function updateBaseAlert(bs) {
   }
   if (msg) { el.textContent = msg; el.style.display = 'block'; }
   else     { el.style.display = 'none'; }
+}
+
+// Red blinking banner when any expected camera stops streaming. A camera that
+// fails to open (including Argus errors) never publishes frames, so its
+// telemetry flag (sensors.zed_<name>) goes false — that's what we surface here.
+const _CAM_ORDER = ['front', 'right', 'back', 'left'];
+function updateCameraAlert(sensors) {
+  const el = document.getElementById('camera-alert');
+  if (!el) return;
+  // Collect every zed_<name> the Jetson reports; expected cameras are seeded
+  // there even before they stream, so a never-opened camera shows as down too.
+  const down = Object.keys(sensors)
+    .filter(k => k.startsWith('zed_') && !sensors[k])
+    .map(k => k.slice(4));
+  if (down.length === 0) { el.style.display = 'none'; return; }
+  down.sort((a, b) => {
+    const ia = _CAM_ORDER.indexOf(a), ib = _CAM_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+  const names = down.map(n => n.toUpperCase()).join(', ');
+  el.textContent = `⚠ CAMERA DOWN — ${names} (no stream / Argus failure)`;
+  el.style.display = 'block';
 }
 
 socket.on('waypoint_reached', (data) => {

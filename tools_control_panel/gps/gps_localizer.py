@@ -433,6 +433,19 @@ class GpsLocalizer(Node):
         self.get_logger().info(
             f'[heading] flipped 180° (offset now {math.degrees(self._heading_offset):.0f}°)')
 
+    def reset_heading(self):
+        """Force the absolute heading to be re-confirmed from the next stretch of
+        travel (same ~1 m establishment used at startup). The autonomous
+        controller calls this during stuck-recovery: when the N/S heading was
+        lost or flipped and the follower deadlocked, a fresh forward nudge
+        re-locks the course with no stale/flipped heading to fight against.
+        Position and the persistent North/South mounting offset are preserved."""
+        with self._lock:
+            self._heading_established = False
+            self._establish_origin    = None
+            self._gps_window.clear()
+        self.get_logger().info('[heading] reset — re-confirming from next ~1 m of travel')
+
     def is_heading_valid(self) -> bool:
         """True only while the pose is currently trustworthy for landmark placement.
 

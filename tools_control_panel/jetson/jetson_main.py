@@ -545,6 +545,7 @@ def main():
                                       start_recording=start_rec_cb,
                                       stop_recording=stop_rec_cb,
                                       heading_check=gps_localizer.is_heading_established,
+                                      heading_reset=gps_localizer.reset_heading,
                                       rtk_check=gps_localizer.is_drivable)
     commander = Commander(cmd_vel_pub, auto_ctrl, cfg_path)
     commander.set_flip_heading(gps_localizer.flip_heading)   # panel N/S heading flip

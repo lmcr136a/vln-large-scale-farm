@@ -1,0 +1,4 @@
+# Allow the boot autostart (and tmux-window restarts) to bring up the CAN bus
+# without a password prompt. Used by launch_files/control_panel_jetson.sh.
+# Install to /etc/sudoers.d/vln-can  (mode 0440, root:root).
+nahyeon ALL=(root) NOPASSWD: /usr/sbin/ip link set can0 *, /usr/bin/ip link set can0 *

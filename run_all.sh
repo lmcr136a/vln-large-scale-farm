@@ -32,9 +32,9 @@ tmux send-keys -t $SESSION:1 "claude -c" C-m
 tmux new-window -t $SESSION:2 -n "Main"
 tmux send-keys -t $SESSION:2 "bash $SCRIPT_DIR/control_panel_jetson.sh" C-m
 
-# Window 5: Obstacle Detection
-tmux new-window -t $SESSION:3 -n "---"
-tmux send-keys -t $SESSION:3 "echo ''" C-m
+# Window 3: Box Uploader (waits for WiFi, uploads data/, deletes after verify)
+tmux new-window -t $SESSION:3 -n "Uploader"
+tmux send-keys -t $SESSION:3 "python3 scripts/uploader.py" C-m
 
 # Window 6: Status Info
 tmux new-window -t "$SESSION:4" -n "---"
@@ -48,6 +48,7 @@ tmux send-keys -t "$SESSION:4" "clear; printf '%s\n' \
 '  0: Sensors (LiDAR | Xsens IMU | GPS)' \
 '  1: Claude' \
 '  2: Main' \
+'  3: Uploader' \
 '' \
 'Control Panel:' \
 '  http://localhost:8000/control.html' \
@@ -58,4 +59,11 @@ tmux send-keys -t "$SESSION:4" "clear; printf '%s\n' \
 '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
 ''" C-m
 
-tmux attach-session -t "$SESSION"
+# Attach only when launched from an interactive terminal. At boot (systemd) there
+# is no TTY, so just leave the session running detached — attach later with:
+#   tmux attach -t vln
+if [ -t 0 ] && [ -t 1 ]; then
+    tmux attach-session -t "$SESSION"
+else
+    echo "tmux session '$SESSION' started (detached). Attach with: tmux attach -t $SESSION"
+fi

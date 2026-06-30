@@ -264,12 +264,26 @@
       animation: base-alert-pulse 1.1s ease-in-out infinite;
     }
     @keyframes base-alert-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+    /* Camera-down alert — same hard-to-miss red pulse as the base alert, stacked
+       just beneath it so both can show at once (e.g. CAN down + Argus failure). */
+    #camera-alert {
+      position: fixed; top: 0; left: 50%; transform: translateX(-50%);
+      z-index: 9999; margin-top: 48px; padding: 8px 18px; border-radius: 8px;
+      font-size: 13pt; font-weight: 700; color: #fff; background: #c0202a;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.5); border: 1px solid #ff6b6b;
+      animation: base-alert-pulse 1.1s ease-in-out infinite;
+    }
   </style>
 </head>
 <body>
 
   <!-- Base CAN / fault banner — shown over radio too, so it appears even with no internet -->
   <div id="base-alert" style="display:none;"></div>
+
+  <!-- Camera-down banner — red blinking when any expected camera stops streaming
+       (no frames / Argus failure). Travels over radio telemetry like the base alert. -->
+  <div id="camera-alert" style="display:none;"></div>
 
   <div id="map-konva-container"></div>
 

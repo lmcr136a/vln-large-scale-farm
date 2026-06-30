@@ -1,0 +1,21 @@
+[Unit]
+Description=VLN farm navigation system (tmux session 'vln')
+# Wait for the network so tailscale / uploads work; CAN (can0) is brought up by
+# control_panel_jetson.sh itself.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=nahyeon
+Group=nahyeon
+WorkingDirectory=/home/nahyeon/box/vln-large-scale-farm
+Environment=HOME=/home/nahyeon
+# run_all.sh creates the detached tmux session and returns (no attach without a
+# TTY). The tmux server keeps running after this oneshot exits.
+ExecStart=/home/nahyeon/box/vln-large-scale-farm/run_all.sh real
+ExecStop=/usr/bin/tmux kill-session -t vln
+
+[Install]
+WantedBy=multi-user.target

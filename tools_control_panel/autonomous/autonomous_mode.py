@@ -22,6 +22,18 @@ HEADING_NUDGE_DIST  = 1.0       # m — stop the nudge once this far
 HEADING_NUDGE_TIME  = 2.0       # s — or after this long, whichever comes first
 HEADING_NUDGE_SPEED = 0.5       # m/s — ~1 m in ~2 s
 
+# Stuck recovery: if the robot makes no real progress for STUCK_TIMEOUT_S while it
+# is actively trying to drive (not safety-paused, not RTK-holding), the GPS N/S
+# heading was almost certainly lost or flipped and the follower has deadlocked
+# (endless stop-and-rotate, or a cross-track hold). Instead of sitting there until
+# someone presses Resume, re-confirm the heading by nudging a short distance so the
+# GPS course re-locks, biased to the N/S (row) direction, then carry on driving.
+STUCK_TIMEOUT_S     = 20.0      # s — no progress this long ⇒ recover (never just stop)
+STUCK_MOVE_EPS      = 0.2       # m — movement under this over the window counts as stuck
+RECOVER_NUDGE_DIST  = 0.5       # m — how far to nudge to re-acquire the heading
+RECOVER_NUDGE_TIME  = 4.0       # s — time cap for the recovery nudge
+RECOVER_NUDGE_SPEED = 0.3       # m/s — gentle
+
 
 def _quat_to_yaw(x, y, z, w):
     return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y ** 2 + z ** 2))
@@ -30,7 +42,7 @@ def _quat_to_yaw(x, y, z, w):
 class AutonomousController(Node):
     def __init__(self, publisher, socketio, config,
                  start_recording=None, stop_recording=None, heading_check=None,
-                 rtk_check=None):
+                 rtk_check=None, heading_reset=None):
         super().__init__('autonomous_controller')
         self.pub      = publisher
         self.socketio = socketio
@@ -40,6 +52,9 @@ class AutonomousController(Node):
         # Returns True once the GPS heading is locked. Used to skip the
         # start-of-run forward nudge when the direction is already established.
         self._heading_check   = heading_check
+        # Forces the GPS heading to re-confirm from fresh travel. Called by the
+        # stuck-recovery nudge when the N/S heading was lost/flipped.
+        self._heading_reset   = heading_reset
 
         # Returns True when the GPS solution is good enough to drive on. With
         # require_rtk_fixed, the run won't start (and holds mid-drive) unless
@@ -265,6 +280,57 @@ class AutonomousController(Node):
         self._zero_vel()
         logger.info('Heading nudge complete')
 
+    def _recover_heading_nudge(self, logger, waypoints):
+        """Break a heading-loss deadlock without ending the run: re-confirm the
+        GPS heading by translating a short distance so the localizer re-locks the
+        course. Biased toward the N/S (row) direction of the nearest upcoming
+        waypoint — "as close to N/S as we can estimate". Honours stop/pause."""
+        self.get_logger().warn('No progress — recovering heading with a short N/S nudge')
+        logger.info('Stuck > %.0fs — heading-recovery nudge (re-acquiring N/S)' % STUCK_TIMEOUT_S)
+        self.socketio.emit('robot_status',
+                           {'status': '⟳ Recovering heading — nudging to re-acquire N/S'},
+                           namespace='/')
+        # Re-confirm heading from the upcoming travel instead of the stale/flipped
+        # estimate the follower was deadlocked on.
+        if self._heading_reset:
+            self._heading_reset()
+
+        start = self.get_current_pose()
+        # Choose forward vs reverse so the nudge's N/S (world-Y) component heads
+        # toward the nearest upcoming waypoint. If pose/heading is unknown, just
+        # go forward — any straight translation re-locks the GPS course.
+        sign = 1.0
+        sx = sy = None
+        if start is not None:
+            sx, sy = start['x'], start['y']
+            idx = self._nearest_waypoint_index(waypoints)
+            tgt = waypoints[max(0, min(idx, len(waypoints) - 1))]
+            desired_dy = tgt['y'] - sy            # +north / -south along the row
+            fwd_dy     = math.sin(start['yaw'])   # robot-forward's N/S component
+            if desired_dy * fwd_dy < 0:           # forward would go the wrong N/S way
+                sign = -1.0
+
+        t0 = time.time()
+        while not self._stop_event.is_set():
+            # Yield to SafetyGuard back-away; don't count that time as the nudge.
+            while self._pause_event.is_set() and not self._stop_event.is_set():
+                self._zero_vel()
+                time.sleep(0.05)
+                t0 = time.time()
+            if self._stop_event.is_set():
+                break
+            if time.time() - t0 >= RECOVER_NUDGE_TIME:
+                break
+            pose = self.get_current_pose()
+            if pose and sx is not None and \
+               math.hypot(pose['x'] - sx, pose['y'] - sy) >= RECOVER_NUDGE_DIST:
+                break
+            self._set_vel(sign * RECOVER_NUDGE_SPEED, 0.0)
+            time.sleep(autonomous_driving.CONTROL_DT)
+
+        self._zero_vel()
+        logger.info('Heading-recovery nudge complete — resuming path following')
+
     # ── RTK accuracy gating ─────────────────────────────────────────────────
     # "drivable" = RTK Fixed (cm) OR accurate RTK Float (hAcc ≤ limit). The run
     # NEVER aborts on poor accuracy — it stays in autonomous mode and holds in
@@ -365,6 +431,12 @@ class AutonomousController(Node):
                 if not established:
                     self._establish_heading_nudge(logger)
 
+            # Stuck watchdog state: last position where real progress was seen,
+            # and when. Only "active driving" time counts — safety pauses and RTK
+            # holds reset it so a legitimate wait is never mistaken for a stall.
+            last_progress_xy = None
+            last_progress_t  = time.time()
+
             for lap in range(max_laps):
                 if self._stop_event.is_set():
                     break
@@ -379,16 +451,39 @@ class AutonomousController(Node):
                     # Hold here while paused (SafetyGuard backing away). The
                     # generator is NOT advanced, so when we resume it recomputes
                     # from the robot's current pose toward the same next waypoint.
-                    while self._pause_event.is_set() and not self._stop_event.is_set():
-                        time.sleep(0.05)
+                    if self._pause_event.is_set():
+                        while self._pause_event.is_set() and not self._stop_event.is_set():
+                            time.sleep(0.05)
+                        last_progress_t = time.time()   # paused time isn't "stuck"
                     if self._stop_event.is_set():
                         logger.info('Interrupted by stop signal')
                         return
                     # Hold here if RTK Fixed drops out mid-drive.
+                    _t_before_rtk = time.time()
                     self._rtk_hold_if_needed(logger)
+                    if time.time() - _t_before_rtk > 0.5:
+                        last_progress_t = time.time()   # RTK-hold time isn't "stuck"
                     if self._stop_event.is_set():
                         logger.info('Interrupted by stop signal')
                         return
+
+                    # ── Stuck watchdog ────────────────────────────────────────
+                    # No real movement for STUCK_TIMEOUT_S while actively driving ⇒
+                    # heading was lost/flipped and the follower deadlocked. Nudge to
+                    # re-acquire the N/S heading instead of sitting until Resume.
+                    pose_now = self.get_current_pose()
+                    if pose_now is not None:
+                        if (last_progress_xy is None or
+                                math.hypot(pose_now['x'] - last_progress_xy[0],
+                                           pose_now['y'] - last_progress_xy[1]) > STUCK_MOVE_EPS):
+                            last_progress_xy = (pose_now['x'], pose_now['y'])
+                            last_progress_t  = time.time()
+                        elif time.time() - last_progress_t > STUCK_TIMEOUT_S:
+                            self._recover_heading_nudge(logger, waypoints)
+                            last_progress_xy = None
+                            last_progress_t  = time.time()
+                            continue   # recompute from the new pose
+
                     try:
                         cmd = next(gen)
                     except StopIteration:

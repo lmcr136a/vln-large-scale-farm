@@ -4,6 +4,7 @@ import re
 import sys
 import time
 import queue
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -26,6 +27,8 @@ upload_q     = queue.Queue()   # sessions confirmed to need uploading
 queued_keys  = set()           # keys in upload_q or being uploaded
 check_q      = queue.Queue()   # sessions needing a size check
 checking_keys = set()          # keys in check_q or being checked
+delete_q     = queue.Queue()   # uploaded+size-matched sessions awaiting verify+delete
+deleting_keys = set()          # keys in delete_q or being verified/deleted
 
 
 def log(msg):
@@ -89,7 +92,11 @@ def parse_rclone_size(output: str):
 def rclone_size_bytes(target: str) -> int:
     try:
         out = subprocess.check_output(
-            ["rclone", "size", target], text=True, stderr=subprocess.STDOUT
+            # Bound the call so the "verifying" stage can never hang forever on a
+            # slow/saturated link: rclone's own net timeout + a hard subprocess cap.
+            ["rclone", "size", target,
+             "--timeout", "60s", "--contimeout", "30s", "--low-level-retries", "3"],
+            text=True, stderr=subprocess.STDOUT, timeout=120,
         )
         b = parse_rclone_size(out)
         return b if b is not None else -1
@@ -98,8 +105,72 @@ def rclone_size_bytes(target: str) -> int:
         if "directory not found" in (e.output or "").lower():
             return 0
         return -1
+    except subprocess.TimeoutExpired:
+        # Timed out (e.g. bandwidth taken by an active upload). Treat as unknown
+        # (-1) so the session is simply re-checked next pass — never stuck.
+        return -1
     except Exception:
         return -1
+
+
+# ── verified delete ───────────────────────────────────────────────────────────
+def verify_and_delete(key, local_target, remote_target) -> bool:
+    """Definitive confirmation before removing local files: rclone check compares
+    every file's hash/size (rc==0 means identical). Only then delete the local
+    session folder. A partial/failed upload never reaches here with rc==0."""
+    try:
+        rc = subprocess.call(
+            ["rclone", "check", local_target, remote_target,
+             "--timeout", "120s", "--contimeout", "60s", "--low-level-retries", "10"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception as e:
+        log(f"[{key}] rclone check EXCEPTION {e}")
+        return False
+    if rc != 0:
+        log(f"[{key}] rclone check MISMATCH rc={rc} — keeping files")
+        return False
+    try:
+        shutil.rmtree(local_target)
+        log(f"[{key}] verified by rclone check — local DELETED")
+        return True
+    except Exception as e:
+        log(f"[{key}] delete FAILED {e}")
+        return False
+
+
+def _queue_delete(site, session, key):
+    """Hand a confirmed-uploaded session off to the delete worker. Verification
+    (rclone check) + deletion then run OFF the upload path, so a big session's
+    re-hash never blocks the next upload (which left everything stuck at queued)."""
+    with lock:
+        if key in deleting_keys:
+            return
+        deleting_keys.add(key)
+        status.setdefault(key, {})["state"] = "done"
+    delete_q.put((site, session))
+
+
+# ── delete worker: verify (rclone check) then remove local, off the upload path ─
+def delete_worker():
+    while True:
+        site, session = delete_q.get()
+        key = f"{site}/{session.name}"
+        local_target  = str(session)
+        remote_target = f"{REMOTE_BASE}/{site}/{session.name}"
+        try:
+            if verify_and_delete(key, local_target, remote_target):
+                set_state(key, "deleted")
+            else:
+                # verify failed → re-check next pass (may re-upload if incomplete)
+                set_state(key, "failed")
+        except Exception as e:
+            set_state(key, "failed")
+            log(f"[{key}] DELETE WORKER EXCEPTION {e}")
+        finally:
+            with lock:
+                deleting_keys.discard(key)
+            delete_q.task_done()
 
 
 # ── scan ──────────────────────────────────────────────────────────────────────
@@ -130,8 +201,8 @@ def check_worker():
             update(key, local_b=local_b, remote_b=remote_b, checked_at=time.time())
             log(f"[{key}] check local={local_b} remote={remote_b}")
             if local_b >= 0 and local_b == remote_b:
-                set_state(key, "done")
-                log(f"[{key}] DONE (size match)")
+                log(f"[{key}] DONE (size match) — queued for verify+delete")
+                _queue_delete(site, session, key)
             else:
                 # needs uploading -> hand off to upload queue
                 with lock:
@@ -167,8 +238,8 @@ def upload_worker():
             remote_b = rclone_size_bytes(remote_target)
             update(key, local_b=local_b, remote_b=remote_b, checked_at=time.time())
             if local_b >= 0 and local_b == remote_b:
-                set_state(key, "done")
-                log(f"[{key}] DONE after upload")
+                log(f"[{key}] DONE after upload — queued for verify+delete")
+                _queue_delete(site, session, key)
             else:
                 set_state(key, "failed")
                 log(f"[{key}] FAILED verify local={local_b} remote={remote_b}")
@@ -184,16 +255,31 @@ def upload_worker():
 def do_upload(key, local_target, remote_target) -> int:
     cmd = [
         "rclone", "copy", local_target, remote_target,
-        "--stats=2s", "--stats-one-line", "--stats-log-level", "NOTICE",
+        "--stats=5s", "--stats-one-line", "--stats-log-level", "NOTICE",
+        # Throughput: upload several files at once (Box is slow per-connection).
+        "--transfers", "4", "--checkers", "8",
+        # Resilience: never hang forever on a flaky link — time out an idle
+        # connection and retry instead of blocking the whole queue indefinitely.
+        "--timeout", "120s", "--contimeout", "60s",
+        "--retries", "5", "--low-level-retries", "20",
     ]
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1
     )
+    last_log = 0.0
     for line in proc.stdout:
         info = parse_progress_line(line)
         if info:
             update(key, **info)
+            # Write progress to the log file periodically so it's visibly moving
+            # (a single big file can take many minutes with no other output).
+            now = time.time()
+            if now - last_log >= 30:
+                last_log = now
+                log(f"[{key}] uploading {info.get('pct','?')}%  "
+                    f"{info.get('xfr','?')}/{info.get('tot','?')}  "
+                    f"{info.get('speed','?')}  ETA {info.get('eta','?')}")
     proc.wait()
     return proc.returncode
 
@@ -261,7 +347,10 @@ def render(session_map, wifi_ok, iface):
             state = st.get("state", "pending")
             lb = fmt_gb(st.get("local_b"))
 
-            if state == "done":
+            if state == "deleted":
+                done_ct += 1
+                tag = green(f"✓ uploaded — local deleted")
+            elif state == "done":
                 done_ct += 1
                 tag = green(f"✓ done  {dim(lb)}")
             elif state == "checking":
@@ -309,6 +398,9 @@ def main():
 
     log("=== monitor started ===")
     threading.Thread(target=upload_worker, daemon=True).start()
+    # Verify+delete runs on its own worker so a big session's rclone check never
+    # blocks the next upload (that was leaving everything stuck at "queued").
+    threading.Thread(target=delete_worker, daemon=True).start()
     # a couple of check workers so the initial scan finishes fast
     for _ in range(3):
         threading.Thread(target=check_worker, daemon=True).start()
@@ -331,10 +423,12 @@ def main():
                     with lock:
                         in_upload_q  = key in queued_keys
                         in_check_q   = key in checking_keys
+                        in_delete_q  = key in deleting_keys
 
                     # don't re-dispatch anything already moving through the pipeline
-                    if (state in ("checking", "uploading", "queued", "done")
-                            or in_upload_q or in_check_q):
+                    # ("deleted" = uploaded & removed; folder vanishes next scan)
+                    if (state in ("checking", "uploading", "queued", "done", "deleted")
+                            or in_upload_q or in_check_q or in_delete_q):
                         continue
 
                     last_dispatch = dispatched_check.get(key, 0)
