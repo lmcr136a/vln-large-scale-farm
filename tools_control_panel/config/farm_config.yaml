@@ -43,7 +43,7 @@ autonomous:
   - 999
 gps:
   accept_rtk_float: false       # landmark/heading gating: false → only real RTK Fixed counts (driving uses the accuracy gate below)
-  float_accuracy_limit_m: 0.10  # m — RTK Float counts as drivable only when reported hAcc ≤ this (accurate Float < 10 cm)
+  float_accuracy_limit_m: 0.15  # m — RTK Float counts as drivable only when reported hAcc ≤ this (accurate Float < 15 cm)
 camera_extrinsics:
   back:
   - -0.1

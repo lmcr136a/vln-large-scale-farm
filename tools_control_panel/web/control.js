@@ -137,8 +137,9 @@ window.addEventListener('keydown', (e) => {
   if (keyState[key]) return;  // already held
   keyState[key] = true;
   socket.emit('keydown', key);
-  // Repeat every 150ms so commander KB_DECAY doesn't expire while key is held
-  _keyTimers[key] = setInterval(() => socket.emit('keydown', key), 150);
+  // Repeat often (100ms) so a few dropped/late packets over a jittery link don't
+  // let the commander's KB_DECAY watchdog expire and cut manual driving.
+  _keyTimers[key] = setInterval(() => socket.emit('keydown', key), 100);
 });
 window.addEventListener('keyup', (e) => {
   if (document.activeElement.tagName === 'INPUT') return;
@@ -434,15 +435,22 @@ function updateReadyBadge(data) {
   }
 }
 
+// AgileX Scout error_code is a bitfield. Bit 0x04 = handheld RC transmitter not
+// connected, which is the NORMAL state when driving from the panel / autonomously
+// (the RC is off). It's not a base fault, so mask it out of the red banner —
+// genuine faults (under-voltage 0x01/0x02, motor-driver comm 0x08/0x10/0x20/0x40,
+// etc.) still raise it.
+const BASE_BENIGN_ERROR_BITS = 0x04;   // RC transmitter disconnected
 function updateBaseAlert(bs) {
   const el = document.getElementById('base-alert');
   if (!el) return;
   // No base_status yet, or this Jetson build doesn't monitor the base → hide.
   if (!bs || !bs.monitored) { el.style.display = 'none'; return; }
   let msg = '';
+  const realFault = (bs.error_code || 0) & ~BASE_BENIGN_ERROR_BITS;
   if (!bs.comm) {
     msg = '⚠ BASE NOT RESPONDING — CAN link down (robot may not move)';
-  } else if (bs.error_code) {
+  } else if (realFault) {
     msg = '⚠ BASE FAULT — error code 0x' + Number(bs.error_code).toString(16).toUpperCase();
   }
   if (msg) { el.textContent = msg; el.style.display = 'block'; }

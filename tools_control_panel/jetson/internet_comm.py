@@ -121,12 +121,20 @@ class InternetComm:
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _emit(self, event: str, data):
-        if not self._connected:
+        # Skip when our connect flag is down OR the client's namespace isn't
+        # actually connected. During a reconnect the '/' namespace briefly drops
+        # before on_disconnect updates our flag, so emitting then raised
+        # BadNamespaceError ("/ is not a connected namespace") for every pose /
+        # rgb_frame / telemetry — pure log spam. Checking the client's own state
+        # avoids the attempt; the transient self-heals on reconnect.
+        if not self._connected or not getattr(self._sio, "connected", False):
             return
         try:
             self._sio.emit(event, data, namespace="/")
         except Exception as e:
-            log.error(f"emit {event}: {e}")
+            # Expected transient while the namespace is re-establishing — don't
+            # spam ERROR (connect/disconnect are already logged separately).
+            log.debug(f"emit {event} skipped (transient): {e}")
 
     def _setup_events(self):
         sio = self._sio

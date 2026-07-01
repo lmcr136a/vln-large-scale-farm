@@ -8,7 +8,9 @@ from geometry_msgs.msg import Twist
 
 log = logging.getLogger(__name__)
 
-KB_DECAY   = 0.5    # seconds — stop if no manual command arrives within this window
+KB_DECAY   = 0.8    # seconds — stop if no manual command arrives within this window
+                    # (wide enough to ride out brief link jitter; keydown repeats
+                    #  every 100ms from the panel, so this tolerates ~7 lost packets)
 PUBLISH_HZ = 20.0   # steady cmd_vel rate for manual driving (decoupled from link jitter)
 
 
@@ -85,7 +87,11 @@ class Commander:
     def handle(self, cmd: dict):
         ctype = cmd.get("cmd")
         with self._lock:
-            if self._safety_vt is not None and ctype in ("velocity", "continue", "new_path"):
+            # An active SafetyGuard back-away pre-empts AUTONOMOUS commands only.
+            # Manual velocity (operator teleop) is NEVER blocked — the operator is
+            # in direct control and must always be able to drive out of a stuck
+            # safety override (the velocity branch clears it below).
+            if self._safety_vt is not None and ctype in ("continue", "new_path"):
                 log.warning(f"'{ctype}' ignored — safety override active")
                 return
             if ctype == "stop_auto":
@@ -117,6 +123,14 @@ class Commander:
                     return
                 if self._auto.is_active():
                     self._auto.stop()
+                # Operator takes over: cancel any active safety back-away so manual
+                # drives immediately. Set inline (we already hold self._lock — do
+                # NOT call clear_safety_override(), which re-locks → deadlock). The
+                # SafetyGuard also steps aside while is_manual(), so it won't
+                # immediately re-engage.
+                if self._safety_vt is not None:
+                    self._safety_vt = None
+                    self._safety_vr = 0.0
                 if not self._manual:
                     log.info(f"Manual driving engaged (vx={cmd.get('vx')} vz={cmd.get('vz')})")
                 self._manual = True

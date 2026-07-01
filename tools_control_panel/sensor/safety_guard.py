@@ -73,6 +73,14 @@ class SafetyGuard:
                 self._commander.clear_safety_override()
                 self._held = False
             return
+        # Manual teleop has priority: while the operator is actively driving, the
+        # guard steps aside (and drops any held override) so manual is never
+        # blocked. It resumes protecting once manual goes idle / autonomous runs.
+        if self._commander.is_manual():
+            if self._held:
+                self._commander.clear_safety_override()
+                self._held = False
+            return
         status    = self._get_status() or {}
         front_red = any(status.get(z) == 'red' for z in FRONT_ZONES)
         back_red  = any(status.get(z) == 'red' for z in BACK_ZONES)
