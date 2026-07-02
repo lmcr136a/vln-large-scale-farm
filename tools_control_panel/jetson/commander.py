@@ -29,7 +29,11 @@ class Commander:
         self._pub = cmd_vel_pub
         self._auto = auto_controller
         self._cfg_path = os.path.expanduser(config_path)
-        self._lock = threading.Lock()
+        # Reentrant: handle() runs under this lock and can reach back into the
+        # Commander (e.g. set_safety_enabled → SafetyGuard.set_enabled →
+        # clear_safety_override, which re-locks). A plain Lock deadlocks there and
+        # freezes _control_loop → no cmd_vel → robot stops dead.
+        self._lock = threading.RLock()
         self._estopped = False
         self._manual = False
         self._last_kb = 0.0

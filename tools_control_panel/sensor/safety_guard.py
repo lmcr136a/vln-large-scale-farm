@@ -20,8 +20,12 @@ log = logging.getLogger(__name__)
 
 POLL_HZ = 5.0   # matches safety_checker publish rate
 
-FRONT_ZONES = ('front', 'front_left', 'front_right')
-BACK_ZONES  = ('back', 'back_left', 'back_right')
+# Only the straight-ahead and straight-behind zones matter. Side zones
+# ('left'/'right') AND corner zones ('front_left'/'front_right'/'back_left'/
+# 'back_right') are ignored entirely — the robot only reacts to something
+# directly in front or directly behind.
+FRONT_ZONES = ('front',)
+BACK_ZONES  = ('back',)
 
 
 class SafetyGuard:
@@ -107,15 +111,14 @@ class SafetyGuard:
                     vr_last = 0.0
             self._recover_vr = -vr_last   # reverse the steering direction
 
-        # Back away immediately by reversing the last motion. The back-away is
-        # never withheld — only forward path-following into the zone is paused.
-        if front_red and back_red:
-            self._commander.set_safety_override(0.0, 0.0)
-            self._announce('Obstacle on both sides — holding position')
-        elif front_red:
+        # Back away immediately by reversing the last motion — no "holding
+        # position" state. Front obstacle takes priority: reverse out. Otherwise
+        # something is behind → drive forward. (If both are red, front wins and
+        # we still back off rather than freezing in place.)
+        if front_red:
             self._commander.set_safety_override(-self._recover_speed, self._recover_vr)
             self._announce('Obstacle ahead — backing away')
-        elif back_red:
+        else:  # back_red
             self._commander.set_safety_override(self._recover_speed, self._recover_vr)
             self._announce('Obstacle behind — moving forward')
 
