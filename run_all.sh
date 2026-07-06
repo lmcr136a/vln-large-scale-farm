@@ -30,7 +30,7 @@ tmux send-keys -t $SESSION:1 "claude -c" C-m
 
 # Window 2: Control Panel
 tmux new-window -t $SESSION:2 -n "Main"
-tmux send-keys -t $SESSION:2 "bash $SCRIPT_DIR/control_panel_jetson.sh" C-m
+tmux send-keys -t $SESSION:2 "sleep 60 && bash $SCRIPT_DIR/control_panel_jetson.sh" C-m
 
 # Window 3: Box Uploader (waits for WiFi, uploads data/, deletes after verify)
 tmux new-window -t $SESSION:3 -n "Uploader"
