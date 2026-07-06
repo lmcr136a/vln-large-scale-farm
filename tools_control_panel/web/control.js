@@ -17,6 +17,7 @@ let pathNodes      = [];
 let currentMapMeta = null;
 let isFirstMap     = true;
 let robotPose      = null;
+let currentMode    = 'idle';
 
 // ── Konva Stage / Layer Initialization ───────────────────────
 let stage, mapLayer, dynLayer, mapImage;
@@ -305,6 +306,8 @@ socket.on('map_updated', (data) => {
 });
 
 socket.on('robot_pose', (data) => {
+  // Freeze pose when idle (waiting for RTK etc.) — only update while driving
+  if (robotPose !== null && currentMode === 'idle') return;
   const isFirst = robotPose === null;
   if (data.t != null) {
     // Replay: buffer the timestamped pose; the matching RGB frame drives the
@@ -350,6 +353,7 @@ socket.on('robot_telemetry', (data) => {
 
   set('info-battery', data.battery >= 0 ? `${data.battery.toFixed(1)}%` : null);
   set('info-mode',    data.mode);
+  if (data.mode) currentMode = data.mode;
   set('info-jetson-disk', data.storage_pct >= 0 ? `${data.storage_pct.toFixed(1)}%` : null);
 
   // Sync the auto-mode button to the robot's real state. If the robot is not in
@@ -877,12 +881,8 @@ function updateGpsPanel(g) {
 
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v ?? '—'; };
 
-  set('gps-sv',   g.sv);
-  set('gps-hdop', g.hdop != null ? g.hdop.toFixed(1) : null);
+  set('gps-sv', g.sv);
 
-  // RTK fix-quality diagnostics — explains why the receiver is Float vs Fixed.
-  // hAcc: Fixed ~0.01-0.03m, Float ~0.2-1m+ | carr: None/Float/Fixed
-  // cr (carrier-range used) & L2 (dual-band) drive ambiguity fixing.
   const hAcc = g.h_acc;
   const haccEl = document.getElementById('gps-hacc');
   if (haccEl) {
@@ -890,19 +890,11 @@ function updateGpsPanel(g) {
     haccEl.style.color = hAcc == null ? '' : (hAcc <= 0.05 ? '#7fffb0'
                                             : hAcc <= 0.30 ? '#ffd27f' : '#ff8f8f');
   }
-  set('gps-strong', g.strong_sv);
   const carrEl = document.getElementById('gps-carr');
   if (carrEl) {
     carrEl.textContent = g.carr_soln || '—';
     carrEl.style.color = g.carr_soln === 'Fixed' ? '#7fffb0'
                        : g.carr_soln === 'Float' ? '#ffd27f' : '';
-  }
-  set('gps-cruse', g.cr_used);
-  const l2El = document.getElementById('gps-l2cr');
-  if (l2El) {
-    l2El.textContent = g.l2_cr ?? '—';
-    // 0 L2 signals → fixing is slow/unlikely; flag it.
-    l2El.style.color = (g.l2_cr === 0) ? '#ff8f8f' : '';
   }
   set('gps-baseline', g.baseline_m != null ? `${g.baseline_m}m` : null);
   set('gps-rtcm', g.rtcm_count != null
@@ -914,22 +906,10 @@ function updateGpsPanel(g) {
     gqEl.style.color = gq == null ? '' : (gq >= 60 ? '#7fffb0'
                                         : gq >= 30 ? '#ffd27f' : '#ff8f8f');
   }
-  set('gps-lat',  g.lat  != null ? g.lat.toFixed(6)  : null);
-  set('gps-lon',  g.lon  != null ? g.lon.toFixed(6)  : null);
-  set('gps-alt',  g.alt  != null ? `${g.alt.toFixed(1)}m` : null);
 
   const baseLine = document.getElementById('gps-base-line');
   if (baseLine) {
-    if (g.base_lat != null) {
-      baseLine.innerHTML =
-        `Base Fixed<br>` +
-        `<span class="lbl">Lat </span><span class="gps-coord">${g.base_lat.toFixed(6)}</span> ` +
-        `<span class="lbl">Lon </span><span class="gps-coord">${g.base_lon.toFixed(6)}</span> ` +
-        `<span class="lbl">Alt </span><span class="gps-coord">${g.base_alt != null ? g.base_alt.toFixed(1) + 'm' : '—'}</span>`;
-    } else {
-      // "Base not fixed" at inherited 10pt (no small class)
-      baseLine.textContent = 'Base not fixed';
-    }
+    baseLine.textContent = g.base_lat != null ? 'Base Fixed' : 'Base not fixed';
   }
 }
 
@@ -968,6 +948,16 @@ function restartWindow(key) {
 function reconnectNetwork() {
   if (!confirm('Tell the Jetson to reconnect its network (wifi + tailscale)?')) return;
   socket.emit('command', { cmd: 'network_reconnect' });
+}
+
+function restartMain() {
+  if (!confirm('Restart jetson_main.py (Main window)?')) return;
+  socket.emit('command', { cmd: 'restart_window', window: 'jetson_agent' });
+}
+
+function rebootJetson() {
+  if (!confirm('Reboot the Jetson? Robot will stop for ~1 minute.')) return;
+  socket.emit('command', { cmd: 'reboot' });
 }
 
 function sendJetsonCmd() {

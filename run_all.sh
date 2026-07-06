@@ -34,7 +34,7 @@ tmux send-keys -t $SESSION:2 "bash $SCRIPT_DIR/control_panel_jetson.sh" C-m
 
 # Window 3: Box Uploader (waits for WiFi, uploads data/, deletes after verify)
 tmux new-window -t $SESSION:3 -n "Uploader"
-tmux send-keys -t $SESSION:3 "python3 scripts/uploader.py" C-m
+tmux send-keys -t $SESSION:3 "while true; do python3 scripts/uploader.py; echo '[uploader] crashed, restarting in 5s...'; sleep 5; done" C-m
 
 # Window 6: Status Info
 tmux new-window -t "$SESSION:4" -n "---"

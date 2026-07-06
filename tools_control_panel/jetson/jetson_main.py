@@ -585,6 +585,9 @@ def main():
             _run_shell(cmd.get("command", ""))
         elif ctype == "network_reconnect":
             _run_shell(_net_reconnect_cmd)
+        elif ctype == "reboot":
+            log.warning("Reboot requested from control panel")
+            _run_shell("sudo /usr/sbin/reboot")
         elif ctype == "restart_window":
             key = cmd.get("window", "")
             if key == "jetson_agent":

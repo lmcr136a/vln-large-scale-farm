@@ -406,11 +406,16 @@ def main():
         threading.Thread(target=check_worker, daemon=True).start()
 
     dispatched_check = {}  # key -> last time we sent it to check_q
+    last_wifi_log    = 0.0
 
     while True:
         iface   = WIFI_CHECK_IFACE or get_wifi_iface()
         wifi_ok = is_wifi_up(iface)
         session_map = get_session_folders()
+
+        if not wifi_ok and time.time() - last_wifi_log > 300:
+            log(f"waiting for WiFi (iface={iface})...")
+            last_wifi_log = time.time()
 
         if wifi_ok:
             for site, sessions in session_map.items():

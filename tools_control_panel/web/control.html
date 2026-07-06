@@ -405,24 +405,13 @@
       <div class="sec-divider-hdr">── GPS ──</div>
       <span id="gps-mode-badge" class="gps-mode-badge gps-nofix">No Fix</span>
       <div id="gps-base-line">Base —</div>
-      <div style="color:rgba(255,255,255,0.65);line-height:1.5;">
-        SV: <span id="gps-sv">—</span>&nbsp;&nbsp;HDOP: <span id="gps-hdop">—</span>
-      </div>
-      <!-- RTK fix-quality diagnostics: why Float vs Fixed -->
       <div id="gps-rtk-diag" style="color:rgba(255,255,255,0.55);line-height:1.5;font-size:11px;">
+        <span class="lbl">SV </span><span id="gps-sv">—</span><br>
         <span class="lbl">hAcc </span><span id="gps-hacc">—</span>
-        &nbsp;<span class="lbl">strong </span><span id="gps-strong">—</span>
         &nbsp;<span class="lbl">carr </span><span id="gps-carr">—</span><br>
-        <span class="lbl">cr </span><span id="gps-cruse">—</span>
-        &nbsp;<span class="lbl">L2 </span><span id="gps-l2cr">—</span>
-        &nbsp;<span class="lbl">base </span><span id="gps-baseline">—</span><br>
+        <span class="lbl">base </span><span id="gps-baseline">—</span><br>
         <span class="lbl">RTCM </span><span id="gps-rtcm">—</span>
         &nbsp;<span class="lbl">link </span><span id="gps-gnssq">—</span>
-      </div>
-      <div class="gps-coord">
-        <span class="lbl">Lat </span><span id="gps-lat">—</span>
-        &nbsp;<span class="lbl">Lon </span><span id="gps-lon">—</span>
-        &nbsp;<span class="lbl">Alt </span><span id="gps-alt">—</span>
       </div>
 
       <button id="btn-flip-heading" onclick="flipHeading()"
@@ -458,6 +447,10 @@
       <div id="net-recovery">
         <button class="tmux-btn" id="net-reconnect-btn" onclick="reconnectNetwork()"
                 style="width:100%;">↻ Reconnect Network</button>
+        <button class="tmux-btn" onclick="restartMain()"
+                style="width:100%; margin-top:3px;">↺ Restart Main</button>
+        <button class="tmux-btn" onclick="rebootJetson()"
+                style="width:100%; margin-top:3px; color:#ff7070;">⏻ Reboot Jetson</button>
         <div style="display:flex; gap:3px; margin-top:3px;">
           <input id="jetson-cmd-input" type="text" placeholder="shell cmd on jetson…"
                  style="flex:1; min-width:0; font-size:10px;"
