@@ -70,7 +70,11 @@ def run(waypoints, get_robot_pose, params=None, start_index=0):
     # eases the correction off (and reverses it early) once the robot is already
     # cutting back toward the line, so it settles onto the line parallel, no
     # zigzag. Higher = more anticipation/damping. seconds.
-    cte_damp   = p.get('cross_track_damping', 0.8)
+    # Nudged 0.8 → 1.0: a touch more anticipation so the robot eases onto the
+    # line a bit earlier, trimming the small overshoot/counter-steer (zigzag)
+    # seen on the return leg. Small, stabilizing change — override in config
+    # via autonomous.cross_track_damping if you want to tune further.
+    cte_damp   = p.get('cross_track_damping', 1.0)
     # Cap how sharp a heading the line-correction may demand. Keeps the robot
     # "strongly following the line" without ever asking for a violent turn.
     max_corr_r = math.radians(p.get('max_correction_deg', 50))

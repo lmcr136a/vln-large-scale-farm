@@ -910,6 +910,7 @@ def main():
                 "idle"
             )
             snap["estop"]            = commander.is_estopped()
+            snap["safety_enabled"]   = safety_guard.is_enabled()
             snap["internet"]         = internet.connected
             snap["radio_quality"]    = radio.get_quality()
             snap["radio_rtt_ms"]     = radio.get_rtt_ms()

@@ -497,6 +497,7 @@ class RemoteServer:
             "storage_pct":           data.get("storage_pct", -1),
             "mode":                  data.get("mode", "idle"),
             "estop":                 data.get("estop", False),
+            "safety_enabled":        data.get("safety_enabled"),
             "wifi":                  data.get("wifi", "—"),
             "internet":              data.get("internet", False),
             "radio_quality":         data.get("radio_quality"),

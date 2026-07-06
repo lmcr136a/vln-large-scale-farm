@@ -350,6 +350,21 @@ socket.on('robot_telemetry', (data) => {
 
   set('info-battery', data.battery >= 0 ? `${data.battery.toFixed(1)}%` : null);
   set('info-mode',    data.mode);
+  set('info-jetson-disk', data.storage_pct >= 0 ? `${data.storage_pct.toFixed(1)}%` : null);
+
+  // Sync the auto-mode button to the robot's real state. If the robot is not in
+  // auto (idle/manual) but the panel still thinks it is, un-stick it — otherwise
+  // keyboard manual driving stays disabled (see keydown handler).
+  if (data.mode && data.mode !== 'auto' && isAutoMode) {
+    setAutoButton(false);
+  }
+
+  // Reflect the robot's actual safety-checker enabled state so a page refresh
+  // (which resets the local flag) doesn't wrongly show ENABLED when it's off.
+  if (typeof data.safety_enabled === 'boolean' && data.safety_enabled !== _safetyEnabled) {
+    _safetyEnabled = data.safety_enabled;
+    applySafetyToggleUI();
+  }
 
   // RGB streaming bar is only meaningful when internet is up
   setRgbBarVisible(!!data.internet);
