@@ -211,14 +211,19 @@ def run(waypoints, get_robot_pose, params=None, start_index=0):
                 # dropping under the motor deadband and stalling the robot. Steering
                 # (vr) alone corrects heading and cross-track error. Hard-stop only
                 # if the robot actually reaches the cross-track limit.
-                if cte_max > 0 and cte >= cte_max:
+                cte_too_large = cte_max > 0 and cte >= cte_max
+                if cte_too_large:
                     vt = 0.0
 
                 cte_str = f'  cte={cte:.2f}m' if cte > 0.05 else ''
+                if cte_too_large:
+                    status_str = f'Off-path: cte={cte:.2f}m (limit {cte_max}m) -- aligning'
+                else:
+                    status_str = (f'Moving: {dist:.2f}m  err={math.degrees(abs_err):.1f}°'
+                                  f'{cte_str}  Speed={stage}')
                 yield {'vt': vt, 'vr': vr, 'dt': CONTROL_DT,
                        'completed': False,
-                       'status': (f'Moving: {dist:.2f}m  err={math.degrees(abs_err):.1f}°'
-                                  f'{cte_str}  Speed={stage}')}
+                       'status': status_str}
 
     # Final orientation — rotate to target yaw if last waypoint has one
     last_wp = waypoints[-1] if waypoints else None

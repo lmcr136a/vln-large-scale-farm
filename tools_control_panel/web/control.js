@@ -576,8 +576,8 @@ function redrawDynLayer() {
     const p = worldToStagePixel(robotPose.x, robotPose.y);
     if (p) {
       const res      = currentMapMeta.resolution;   // m/px from map_state.json
-      const r_px     = 0.3  / res;                  // ROBOT_HALF_M = 0.3m (60x60cm footprint)
-      const arrow_px = 0.46 / res;                  // ROBOT_ARROW_LEN_M = 0.46m
+      const r_px     = 0.6  / res;                  // ROBOT_HALF_M = 0.6m (2x display size)
+      const arrow_px = 0.92 / res;                  // ROBOT_ARROW_LEN_M = 0.92m (2x display size)
       const lw       = Math.max(1, r_px * 0.25);
 
       const yawRad = robotPose.yaw - currentMapMeta.rot_angle;
