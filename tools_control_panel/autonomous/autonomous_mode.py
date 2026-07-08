@@ -17,10 +17,10 @@ WATCHDOG_TIMEOUT = 0.3          # zero vel if control loop silent for this long
 
 # Start-of-run heading nudge: drive straight forward so the GPS localizer can
 # confirm the absolute heading from travel (it locks after ~1 m). Done only on a
-# fresh RUN when the heading isn't established yet — never on Resume.
-HEADING_NUDGE_DIST  = 1.0       # m — stop the nudge once this far
-HEADING_NUDGE_TIME  = 2.0       # s — or after this long, whichever comes first
-HEADING_NUDGE_SPEED = 0.5       # m/s — ~1 m in ~2 s
+# fresh RUN when the heading isn't established yet -- never on Resume.
+HEADING_NUDGE_DIST  = 1.0       # m -- stop the nudge once this far
+HEADING_NUDGE_TIME  = 2.0       # s -- or after this long, whichever comes first
+HEADING_NUDGE_SPEED = 0.5       # m/s -- ~1 m in ~2 s
 
 # Stuck recovery: if the robot makes no real progress for STUCK_TIMEOUT_S while it
 # is actively trying to drive (not safety-paused, not RTK-holding), the GPS N/S
@@ -28,11 +28,11 @@ HEADING_NUDGE_SPEED = 0.5       # m/s — ~1 m in ~2 s
 # (endless stop-and-rotate, or a cross-track hold). Instead of sitting there until
 # someone presses Resume, re-confirm the heading by nudging a short distance so the
 # GPS course re-locks, biased to the N/S (row) direction, then carry on driving.
-STUCK_TIMEOUT_S     = 20.0      # s — no progress this long ⇒ recover (never just stop)
-STUCK_MOVE_EPS      = 0.2       # m — movement under this over the window counts as stuck
-RECOVER_NUDGE_DIST  = 0.5       # m — how far to nudge to re-acquire the heading
-RECOVER_NUDGE_TIME  = 4.0       # s — time cap for the recovery nudge
-RECOVER_NUDGE_SPEED = 0.3       # m/s — gentle
+STUCK_TIMEOUT_S     = 20.0      # s -- no progress this long ⇒ recover (never just stop)
+STUCK_MOVE_EPS      = 0.2       # m -- movement under this over the window counts as stuck
+RECOVER_NUDGE_DIST  = 0.5       # m -- how far to nudge to re-acquire the heading
+RECOVER_NUDGE_TIME  = 4.0       # s -- time cap for the recovery nudge
+RECOVER_NUDGE_SPEED = 0.3       # m/s -- gentle
 
 
 def _quat_to_yaw(x, y, z, w):
@@ -58,7 +58,7 @@ class AutonomousController(Node):
 
         # Returns True when the GPS solution is good enough to drive on. With
         # require_rtk_fixed, the run won't start (and holds mid-drive) unless
-        # this is True — i.e. RTK Fixed (cm), not Float (decimetres of wander).
+        # this is True -- i.e. RTK Fixed (cm), not Float (decimetres of wander).
         self._rtk_check = rtk_check
         _ap = config.get('autonomous', {})
         self._require_rtk_fixed = bool(_ap.get('require_rtk_fixed', False))
@@ -80,7 +80,7 @@ class AutonomousController(Node):
         self._target_vt     = 0.0
         self._target_vr     = 0.0
         self._vel_updated_at = 0.0   # timestamp of last control-loop update
-        # Last velocity actually commanded by the drive loop — read by SafetyGuard
+        # Last velocity actually commanded by the drive loop -- read by SafetyGuard
         # to reverse the motion (e.g. was turning left → turn right back).
         self._last_cmd_vt   = 0.0
         self._last_cmd_vr   = 0.0
@@ -91,7 +91,7 @@ class AutonomousController(Node):
 
         pose_topic = self.config['ros2']['topics'].get('pose', '/corrected_pose')
         self.create_subscription(PoseStamped, pose_topic, self._pose_callback, qos)
-        self.get_logger().info(f'AutonomousController ready — listening on {pose_topic}')
+        self.get_logger().info(f'AutonomousController ready -- listening on {pose_topic}')
 
         # publisher thread runs always; only sends non-zero when active
         self._pub_thread = threading.Thread(target=self._publish_loop, daemon=True)
@@ -131,9 +131,9 @@ class AutonomousController(Node):
                 if age < WATCHDOG_TIMEOUT:
                     twist.linear.x  = tgt_vt
                     twist.angular.z = tgt_vr
-                # else zero twist — watchdog expired, stop robot
+                # else zero twist -- watchdog expired, stop robot
                 self.pub.publish(twist)
-            # inactive: publish nothing — commander handles manual cmd_vel
+            # inactive: publish nothing -- commander handles manual cmd_vel
 
             time.sleep(interval)
 
@@ -165,7 +165,7 @@ class AutonomousController(Node):
         if self._active and not self._pause_event.is_set():
             self._pause_event.set()
             self._zero_vel()
-            self.get_logger().info('Autonomous paused (safety) — mission still active')
+            self.get_logger().info('Autonomous paused (safety) -- mission still active')
 
     def resume(self):
         """Resume path following after a pause. Idempotent."""
@@ -189,7 +189,7 @@ class AutonomousController(Node):
             self.get_logger().warn(f'Need >= {min_wp} waypoints (got {len(waypoints)})')
             return False
         self.get_logger().info(
-            f'{"Resuming" if resume else "Starting"} — {len(waypoints)} waypoints')
+            f'{"Resuming" if resume else "Starting"} -- {len(waypoints)} waypoints')
         self._active = True
         self._stop_event.clear()
         self._pause_event.clear()
@@ -199,7 +199,7 @@ class AutonomousController(Node):
         return True
 
     def _nearest_waypoint_index(self, waypoints) -> int:
-        """Index of the closest *upcoming* waypoint — used by Resume so we head to
+        """Index of the closest *upcoming* waypoint -- used by Resume so we head to
         the next point ahead, never one the robot has already driven past.
 
         We take the nearest waypoint, then if the robot has already passed it
@@ -250,15 +250,15 @@ class AutonomousController(Node):
             start = self.get_current_pose()
         sx, sy = (start['x'], start['y']) if start else (None, None)
 
-        self.get_logger().info('Heading nudge — driving forward to lock GPS heading')
+        self.get_logger().info('Heading nudge -- driving forward to lock GPS heading')
         logger.info('Heading nudge started (forward to establish GPS heading)')
         self.socketio.emit('robot_status',
-                           {'status': 'Establishing heading — driving forward'},
+                           {'status': 'Establishing heading -- driving forward'},
                            namespace='/')
 
         t0 = time.time()
         while not self._stop_event.is_set():
-            # Hold here if SafetyGuard paused us (back-away) — don't count the time.
+            # Hold here if SafetyGuard paused us (back-away) -- don't count the time.
             while self._pause_event.is_set() and not self._stop_event.is_set():
                 self._zero_vel()
                 time.sleep(0.05)
@@ -284,11 +284,11 @@ class AutonomousController(Node):
         """Break a heading-loss deadlock without ending the run: re-confirm the
         GPS heading by translating a short distance so the localizer re-locks the
         course. Biased toward the N/S (row) direction of the nearest upcoming
-        waypoint — "as close to N/S as we can estimate". Honours stop/pause."""
-        self.get_logger().warn('No progress — recovering heading with a short N/S nudge')
-        logger.info('Stuck > %.0fs — heading-recovery nudge (re-acquiring N/S)' % STUCK_TIMEOUT_S)
+        waypoint -- "as close to N/S as we can estimate". Honours stop/pause."""
+        self.get_logger().warn('No progress -- recovering heading with a short N/S nudge')
+        logger.info('Stuck > %.0fs -- heading-recovery nudge (re-acquiring N/S)' % STUCK_TIMEOUT_S)
         self.socketio.emit('robot_status',
-                           {'status': '⟳ Recovering heading — nudging to re-acquire N/S'},
+                           {'status': '⟳ Recovering heading -- nudging to re-acquire N/S'},
                            namespace='/')
         # Re-confirm heading from the upcoming travel instead of the stale/flipped
         # estimate the follower was deadlocked on.
@@ -298,7 +298,7 @@ class AutonomousController(Node):
         start = self.get_current_pose()
         # Choose forward vs reverse so the nudge's N/S (world-Y) component heads
         # toward the nearest upcoming waypoint. If pose/heading is unknown, just
-        # go forward — any straight translation re-locks the GPS course.
+        # go forward -- any straight translation re-locks the GPS course.
         sign = 1.0
         sx = sy = None
         if start is not None:
@@ -329,11 +329,11 @@ class AutonomousController(Node):
             time.sleep(autonomous_driving.CONTROL_DT)
 
         self._zero_vel()
-        logger.info('Heading-recovery nudge complete — resuming path following')
+        logger.info('Heading-recovery nudge complete -- resuming path following')
 
     # ── RTK accuracy gating ─────────────────────────────────────────────────
     # "drivable" = RTK Fixed (cm) OR accurate RTK Float (hAcc ≤ limit). The run
-    # NEVER aborts on poor accuracy — it stays in autonomous mode and holds in
+    # NEVER aborts on poor accuracy -- it stays in autonomous mode and holds in
     # place (zero velocity) until accuracy recovers, then continues.
     def _wait_initial_rtk(self, logger) -> bool:
         """Before driving: hold until the GPS is drivable. Returns True when OK
@@ -345,20 +345,20 @@ class AutonomousController(Node):
             return True
         logger.info('Holding for accurate RTK before start…')
         self.socketio.emit('robot_status',
-                           {'status': '⏳ Holding — waiting for accurate RTK'},
+                           {'status': '⏳ Holding -- waiting for accurate RTK'},
                            namespace='/')
         while not self._rtk_check():
             if self._stop_event.is_set():
                 return False
             self._zero_vel()
             time.sleep(0.2)
-        logger.info('Accurate RTK acquired — starting')
+        logger.info('Accurate RTK acquired -- starting')
         return True
 
     def _rtk_hold_if_needed(self, logger):
         """During driving: if GPS accuracy drops below drivable past the grace
         period, zero velocity and hold (staying in autonomous mode) until it
-        recovers — or until stop/pause. Brief dips within rtk_fixed_grace_s are
+        recovers -- or until stop/pause. Brief dips within rtk_fixed_grace_s are
         tolerated so the robot doesn't stutter."""
         if not (self._require_rtk_fixed and self._rtk_check):
             return
@@ -370,10 +370,10 @@ class AutonomousController(Node):
             self._rtk_lost_t = now
         if now - self._rtk_lost_t < self._rtk_grace_s:
             return                      # tolerate a momentary dip
-        logger.info('RTK accuracy lost — holding until restored')
+        logger.info('RTK accuracy lost -- holding until restored')
         self._zero_vel()
         self.socketio.emit('robot_status',
-                           {'status': '⏸ Holding — waiting for accurate RTK'},
+                           {'status': '⏸ Holding -- waiting for accurate RTK'},
                            namespace='/')
         while (not self._rtk_check()
                and not self._stop_event.is_set()
@@ -382,15 +382,15 @@ class AutonomousController(Node):
             time.sleep(0.1)
         self._rtk_lost_t = None
         if self._rtk_check():
-            logger.info('RTK accuracy restored — resuming')
+            logger.info('RTK accuracy restored -- resuming')
             self.socketio.emit('robot_status',
-                               {'status': 'RTK restored — resuming'},
+                               {'status': 'RTK restored -- resuming'},
                                namespace='/')
 
     def _drive_loop(self, waypoints, resume=False, start_index=None):
         print(f'[drive_loop] started, {len(waypoints)} waypoints', flush=True)
         logger, log_path = create_session_logger()
-        logger.info(f'Session started — {len(waypoints)} waypoints (resume={resume})')
+        logger.info(f'Session started -- {len(waypoints)} waypoints (resume={resume})')
 
         # First-lap start point:
         #  • explicit start_index (from the "from pt" input) wins, clamped to range
@@ -416,10 +416,10 @@ class AutonomousController(Node):
                 logger.info(f'Recording started: {rec_dir}')
 
             self.socketio.emit('robot_status',
-                               {'status': f'Navigating — {len(waypoints)} waypoints'},
+                               {'status': f'Navigating -- {len(waypoints)} waypoints'},
                                namespace='/')
 
-            # Require RTK Fixed (cm) before moving — refuse to drive on a Float
+            # Require RTK Fixed (cm) before moving -- refuse to drive on a Float
             # solution that wanders by decimetres. Waits up to rtk_fixed_wait_s.
             if not self._wait_initial_rtk(logger):
                 return
@@ -432,7 +432,7 @@ class AutonomousController(Node):
                     self._establish_heading_nudge(logger)
 
             # Stuck watchdog state: last position where real progress was seen,
-            # and when. Only "active driving" time counts — safety pauses and RTK
+            # and when. Only "active driving" time counts -- safety pauses and RTK
             # holds reset it so a legitimate wait is never mistaken for a stall.
             last_progress_xy = None
             last_progress_t  = time.time()
